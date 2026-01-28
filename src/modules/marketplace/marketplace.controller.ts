@@ -1,0 +1,520 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  ParseUUIDPipe,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiParam,
+  ApiQuery,
+} from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { MinTier } from '../../common/decorators/min-tier.decorator';
+import { User, VerificationTier } from '../../database/entities/user.entity';
+import { ListingStatus } from '../../database/entities/listing.entity';
+import { MarketplaceService } from './marketplace.service';
+import {
+  CreateListingDto,
+  UpdateListingDto,
+  ListingQueryDto,
+} from './dto';
+
+@ApiTags('Marketplace')
+@Controller('marketplace')
+export class MarketplaceController {
+  constructor(private readonly marketplaceService: MarketplaceService) {}
+
+  @Post('listings')
+  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @MinTier(VerificationTier.TIER_1)
+  @TierAmountLimit('price', {
+    [VerificationTier.TIER_1]: 50000,
+    [VerificationTier.TIER_2]: null, // unlimited
+  })
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Create a new listing',
+    description: 'Creates a new marketplace listing. Requires Tier 1 verification. Tier 1 users limited to ₦50,000.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Listing created successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          title: 'iPhone 13 Pro Max - 256GB - Like New',
+          description: 'Selling my iPhone 13 Pro Max...',
+          category: 'electronics',
+          condition: 'like_new',
+          price: 450000,
+          isNegotiable: true,
+          status: 'active',
+          imageUrls: ['https://storage.example.com/listings/img1.jpg'],
+          seller: {
+            id: '550e8400-e29b-41d4-a716-446655440001',
+            fullName: 'John Doe',
+            avatarUrl: 'https://storage.example.com/avatars/user1.jpg',
+          },
+          createdAt: '2024-01-15T10:30:00Z',
+        },
+        message: 'Listing created successfully',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async createListing(
+    @CurrentUser() user: User,
+    @Body() dto: CreateListingDto,
+  ) {
+    const listing = await this.marketplaceService.createListing(user.id, dto);
+    return {
+      success: true,
+      data: listing,
+      message: 'Listing created successfully',
+    };
+  }
+
+  @Get('listings')
+  @ApiOperation({
+    summary: 'Search listings',
+    description: 'Search and filter marketplace listings. Public endpoint with optional authentication for personalized results.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Listings retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          listings: [
+            {
+              id: '550e8400-e29b-41d4-a716-446655440000',
+              title: 'iPhone 13 Pro Max - 256GB',
+              price: 450000,
+              condition: 'like_new',
+              imageUrls: ['https://storage.example.com/listings/img1.jpg'],
+              seller: {
+                id: '550e8400-e29b-41d4-a716-446655440001',
+                fullName: 'John Doe',
+                isIdVerified: true,
+              },
+              createdAt: '2024-01-15T10:30:00Z',
+            },
+          ],
+          total: 150,
+          page: 1,
+          limit: 20,
+          totalPages: 8,
+          hasNextPage: true,
+          hasPrevPage: false,
+        },
+      },
+    },
+  })
+  async searchListings(
+    @Query() query: ListingQueryDto,
+    @CurrentUser() user?: User,
+  ) {
+    const result = await this.marketplaceService.searchListings(query, user);
+    return {
+      success: true,
+      data: result,
+    };
+  }
+
+  @Get('listings/:id')
+  @ApiOperation({
+    summary: 'Get listing by ID',
+    description: 'Retrieves a single listing by its ID. Increments view count.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Listing UUID',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Listing retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          title: 'iPhone 13 Pro Max - 256GB - Like New',
+          description: 'Selling my iPhone 13 Pro Max, 256GB storage...',
+          category: 'electronics',
+          condition: 'like_new',
+          price: 450000,
+          isNegotiable: true,
+          status: 'active',
+          viewCount: 125,
+          favoriteCount: 15,
+          deliveryOption: 'meetup',
+          meetupLocation: 'Faculty of Science Building',
+          imageUrls: [
+            'https://storage.example.com/listings/img1.jpg',
+            'https://storage.example.com/listings/img2.jpg',
+          ],
+          seller: {
+            id: '550e8400-e29b-41d4-a716-446655440001',
+            fullName: 'John Doe',
+            avatarUrl: 'https://storage.example.com/avatars/user1.jpg',
+            isIdVerified: true,
+            trustScore: 92,
+          },
+          createdAt: '2024-01-15T10:30:00Z',
+          updatedAt: '2024-01-16T08:00:00Z',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Listing not found' })
+  async getListingById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user?: User,
+  ) {
+    const listing = await this.marketplaceService.getListingByIdAndIncrementViews(
+      id,
+      user?.id,
+    );
+    return {
+      success: true,
+      data: listing,
+    };
+  }
+
+  @Patch('listings/:id')
+  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @MinTier(VerificationTier.TIER_1)
+  @TierAmountLimit('price', {
+    [VerificationTier.TIER_1]: 50000,
+    [VerificationTier.TIER_2]: null, // unlimited
+  })
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Update a listing',
+    description: 'Partially updates an existing listing. Only the owner can update their listing. Tier 1 users limited to ₦50,000 price.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Listing UUID',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Listing updated successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          title: 'iPhone 13 Pro Max - 256GB - Price Reduced!',
+          price: 400000,
+          updatedAt: '2024-01-16T14:00:00Z',
+        },
+        message: 'Listing updated successfully',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not the owner of this listing' })
+  @ApiResponse({ status: 404, description: 'Listing not found' })
+  async updateListing(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Body() dto: UpdateListingDto,
+  ) {
+    const listing = await this.marketplaceService.updateListing(
+      id,
+      user.id,
+      dto,
+    );
+    return {
+      success: true,
+      data: listing,
+      message: 'Listing updated successfully',
+    };
+  }
+
+  @Delete('listings/:id')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @MinTier(VerificationTier.TIER_1)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete a listing',
+    description: 'Soft deletes a listing. Only the owner can delete their listing. Requires Tier 1 verification.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Listing UUID',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Listing deleted successfully',
+    schema: {
+      example: {
+        success: true,
+        message: 'Listing deleted successfully',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not the owner of this listing' })
+  @ApiResponse({ status: 404, description: 'Listing not found' })
+  async deleteListing(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.marketplaceService.deleteListing(id, user.id);
+    return {
+      success: true,
+      message: 'Listing deleted successfully',
+    };
+  }
+
+  @Patch('listings/:id/sold')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @MinTier(VerificationTier.TIER_1)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Mark listing as sold',
+    description: 'Marks a listing as sold. Only the owner can mark their listing as sold. Requires Tier 1 verification.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Listing UUID',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Listing marked as sold',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          status: 'sold',
+          soldAt: '2024-01-16T15:00:00Z',
+        },
+        message: 'Listing marked as sold',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not the owner of this listing' })
+  @ApiResponse({ status: 404, description: 'Listing not found' })
+  async markAsSold(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    const listing = await this.marketplaceService.markAsSold(id, user.id);
+    return {
+      success: true,
+      data: listing,
+      message: 'Listing marked as sold',
+    };
+  }
+
+  @Post('favorites/:listingId')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @MinTier(VerificationTier.TIER_0)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Add listing to favorites',
+    description: 'Adds a listing to the user\'s favorites. Requires Tier 0 verification.',
+  })
+  @ApiParam({
+    name: 'listingId',
+    description: 'Listing UUID to favorite',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Added to favorites',
+    schema: {
+      example: {
+        success: true,
+        message: 'Added to favorites',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Listing not found' })
+  async addToFavorites(
+    @Param('listingId', ParseUUIDPipe) listingId: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.marketplaceService.addToFavorites(user.id, listingId);
+    return {
+      success: true,
+      message: 'Added to favorites',
+    };
+  }
+
+  @Delete('favorites/:listingId')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @MinTier(VerificationTier.TIER_0)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Remove listing from favorites',
+    description: 'Removes a listing from the user\'s favorites. Requires Tier 0 verification.',
+  })
+  @ApiParam({
+    name: 'listingId',
+    description: 'Listing UUID to unfavorite',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Removed from favorites',
+    schema: {
+      example: {
+        success: true,
+        message: 'Removed from favorites',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async removeFromFavorites(
+    @Param('listingId', ParseUUIDPipe) listingId: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.marketplaceService.removeFromFavorites(user.id, listingId);
+    return {
+      success: true,
+      message: 'Removed from favorites',
+    };
+  }
+
+  @Get('favorites')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @MinTier(VerificationTier.TIER_0)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get user favorites',
+    description: 'Retrieves all listings favorited by the current user. Requires Tier 0 verification.',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  @ApiResponse({
+    status: 200,
+    description: 'Favorites retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          listings: [
+            {
+              id: '550e8400-e29b-41d4-a716-446655440000',
+              title: 'iPhone 13 Pro Max',
+              price: 450000,
+              status: 'active',
+              favoritedAt: '2024-01-15T10:30:00Z',
+            },
+          ],
+          total: 5,
+          page: 1,
+          limit: 20,
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getUserFavorites(
+    @CurrentUser() user: User,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    const result = await this.marketplaceService.getUserFavorites(
+      user.id,
+      page || 1,
+      limit || 20,
+    );
+    return {
+      success: true,
+      data: result,
+    };
+  }
+
+  @Get('my-listings')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @MinTier(VerificationTier.TIER_1)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get current user listings',
+    description: 'Retrieves all listings created by the current user. Requires Tier 1 verification.',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ListingStatus,
+    example: ListingStatus.ACTIVE,
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  @ApiResponse({
+    status: 200,
+    description: 'User listings retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          listings: [
+            {
+              id: '550e8400-e29b-41d4-a716-446655440000',
+              title: 'iPhone 13 Pro Max',
+              price: 450000,
+              status: 'active',
+              viewCount: 125,
+              favoriteCount: 15,
+              createdAt: '2024-01-15T10:30:00Z',
+            },
+          ],
+          total: 10,
+          page: 1,
+          limit: 20,
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getUserListings(
+    @CurrentUser() user: User,
+    @Query('status') status?: ListingStatus,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    const result = await this.marketplaceService.getUserListings(
+      user.id,
+      status,
+      page || 1,
+      limit || 20,
+    );
+    return {
+      success: true,
+      data: result,
+    };
+  }
+}

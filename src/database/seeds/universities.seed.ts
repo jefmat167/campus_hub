@@ -1,0 +1,866 @@
+interface DepartmentSeed {
+  name: string;
+  code?: string;
+}
+
+interface FacultySeed {
+  name: string;
+  code?: string;
+  departments: DepartmentSeed[];
+}
+
+interface UniversitySeed {
+  name: string;
+  code: string;
+  state: string;
+  city: string;
+  type: 'federal' | 'state' | 'private';
+  website?: string;
+  faculties: FacultySeed[];
+}
+
+// Common faculties and departments used across multiple universities
+const commonFaculties: FacultySeed[] = [
+  {
+    name: 'Faculty of Engineering',
+    code: 'ENG',
+    departments: [
+      { name: 'Civil Engineering', code: 'CVE' },
+      { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+      { name: 'Mechanical Engineering', code: 'MEE' },
+      { name: 'Chemical Engineering', code: 'CHE' },
+      { name: 'Computer Engineering', code: 'CPE' },
+      { name: 'Petroleum Engineering', code: 'PTE' },
+    ],
+  },
+  {
+    name: 'Faculty of Science',
+    code: 'SCI',
+    departments: [
+      { name: 'Mathematics', code: 'MTH' },
+      { name: 'Physics', code: 'PHY' },
+      { name: 'Chemistry', code: 'CHM' },
+      { name: 'Computer Science', code: 'CSC' },
+      { name: 'Biology', code: 'BIO' },
+      { name: 'Microbiology', code: 'MCB' },
+      { name: 'Biochemistry', code: 'BCH' },
+      { name: 'Statistics', code: 'STA' },
+    ],
+  },
+  {
+    name: 'Faculty of Arts',
+    code: 'ART',
+    departments: [
+      { name: 'English', code: 'ENG' },
+      { name: 'History', code: 'HIS' },
+      { name: 'Philosophy', code: 'PHL' },
+      { name: 'Linguistics', code: 'LIN' },
+      { name: 'Theatre Arts', code: 'THA' },
+      { name: 'Music', code: 'MUS' },
+      { name: 'Religious Studies', code: 'REL' },
+    ],
+  },
+  {
+    name: 'Faculty of Social Sciences',
+    code: 'SOC',
+    departments: [
+      { name: 'Economics', code: 'ECO' },
+      { name: 'Political Science', code: 'POL' },
+      { name: 'Sociology', code: 'SOC' },
+      { name: 'Psychology', code: 'PSY' },
+      { name: 'Geography', code: 'GEO' },
+      { name: 'Mass Communication', code: 'MAC' },
+    ],
+  },
+  {
+    name: 'Faculty of Law',
+    code: 'LAW',
+    departments: [
+      { name: 'Private and Property Law', code: 'PPL' },
+      { name: 'Public and International Law', code: 'PIL' },
+      { name: 'Commercial and Industrial Law', code: 'CIL' },
+      { name: 'Jurisprudence and International Law', code: 'JIL' },
+    ],
+  },
+  {
+    name: 'Faculty of Education',
+    code: 'EDU',
+    departments: [
+      { name: 'Educational Administration', code: 'EDA' },
+      { name: 'Curriculum and Instruction', code: 'CUI' },
+      { name: 'Educational Psychology', code: 'EDP' },
+      { name: 'Science Education', code: 'SCE' },
+      { name: 'Arts Education', code: 'AED' },
+    ],
+  },
+  {
+    name: 'Faculty of Agriculture',
+    code: 'AGR',
+    departments: [
+      { name: 'Agricultural Economics', code: 'AEC' },
+      { name: 'Crop Science', code: 'CRS' },
+      { name: 'Animal Science', code: 'ANS' },
+      { name: 'Soil Science', code: 'SOS' },
+      { name: 'Agricultural Extension', code: 'AEX' },
+    ],
+  },
+  {
+    name: 'Faculty of Management Sciences',
+    code: 'MGT',
+    departments: [
+      { name: 'Accounting', code: 'ACC' },
+      { name: 'Business Administration', code: 'BUS' },
+      { name: 'Banking and Finance', code: 'BFN' },
+      { name: 'Marketing', code: 'MKT' },
+      { name: 'Public Administration', code: 'PAD' },
+    ],
+  },
+  {
+    name: 'Faculty of Medicine',
+    code: 'MED',
+    departments: [
+      { name: 'Medicine and Surgery', code: 'MBS' },
+      { name: 'Anatomy', code: 'ANA' },
+      { name: 'Physiology', code: 'PHS' },
+      { name: 'Pharmacology', code: 'PCL' },
+      { name: 'Medical Laboratory Science', code: 'MLS' },
+      { name: 'Nursing', code: 'NUR' },
+    ],
+  },
+  {
+    name: 'Faculty of Pharmacy',
+    code: 'PHM',
+    departments: [
+      { name: 'Pharmaceutical Chemistry', code: 'PCH' },
+      { name: 'Pharmacognosy', code: 'PCG' },
+      { name: 'Pharmaceutics', code: 'PCT' },
+      { name: 'Clinical Pharmacy', code: 'CLP' },
+    ],
+  },
+  {
+    name: 'Faculty of Environmental Sciences',
+    code: 'ENV',
+    departments: [
+      { name: 'Architecture', code: 'ARC' },
+      { name: 'Urban and Regional Planning', code: 'URP' },
+      { name: 'Estate Management', code: 'ESM' },
+      { name: 'Building Technology', code: 'BLD' },
+      { name: 'Quantity Surveying', code: 'QSV' },
+    ],
+  },
+];
+
+export const universitiesSeedData: UniversitySeed[] = [
+  // Federal Universities
+  {
+    name: 'University of Lagos',
+    code: 'UNILAG',
+    state: 'Lagos',
+    city: 'Lagos',
+    type: 'federal',
+    website: 'https://unilag.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Ibadan',
+    code: 'UI',
+    state: 'Oyo',
+    city: 'Ibadan',
+    type: 'federal',
+    website: 'https://ui.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Obafemi Awolowo University',
+    code: 'OAU',
+    state: 'Osun',
+    city: 'Ile-Ife',
+    type: 'federal',
+    website: 'https://oauife.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Ahmadu Bello University',
+    code: 'ABU',
+    state: 'Kaduna',
+    city: 'Zaria',
+    type: 'federal',
+    website: 'https://abu.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Nigeria, Nsukka',
+    code: 'UNN',
+    state: 'Enugu',
+    city: 'Nsukka',
+    type: 'federal',
+    website: 'https://unn.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Benin',
+    code: 'UNIBEN',
+    state: 'Edo',
+    city: 'Benin City',
+    type: 'federal',
+    website: 'https://uniben.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Port Harcourt',
+    code: 'UNIPORT',
+    state: 'Rivers',
+    city: 'Port Harcourt',
+    type: 'federal',
+    website: 'https://uniport.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Federal University of Technology, Akure',
+    code: 'FUTA',
+    state: 'Ondo',
+    city: 'Akure',
+    type: 'federal',
+    website: 'https://futa.edu.ng',
+    faculties: [
+      {
+        name: 'School of Engineering and Engineering Technology',
+        code: 'SEET',
+        departments: [
+          { name: 'Civil Engineering', code: 'CVE' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+          { name: 'Mechanical Engineering', code: 'MEE' },
+          { name: 'Computer Engineering', code: 'CPE' },
+          { name: 'Mining Engineering', code: 'MNE' },
+          { name: 'Metallurgical and Materials Engineering', code: 'MME' },
+        ],
+      },
+      {
+        name: 'School of Sciences',
+        code: 'SOS',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Mathematics', code: 'MTH' },
+          { name: 'Physics', code: 'PHY' },
+          { name: 'Chemistry', code: 'CHM' },
+          { name: 'Biology', code: 'BIO' },
+          { name: 'Biochemistry', code: 'BCH' },
+        ],
+      },
+      {
+        name: 'School of Environmental Technology',
+        code: 'SET',
+        departments: [
+          { name: 'Architecture', code: 'ARC' },
+          { name: 'Urban and Regional Planning', code: 'URP' },
+          { name: 'Estate Management', code: 'ESM' },
+          { name: 'Building Technology', code: 'BLD' },
+        ],
+      },
+      {
+        name: 'School of Agriculture and Agricultural Technology',
+        code: 'SAAT',
+        departments: [
+          { name: 'Agricultural Economics', code: 'AEC' },
+          { name: 'Crop Production', code: 'CPD' },
+          { name: 'Animal Production', code: 'APD' },
+          { name: 'Fisheries and Aquaculture', code: 'FAQ' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'Federal University of Technology, Minna',
+    code: 'FUTMINNA',
+    state: 'Niger',
+    city: 'Minna',
+    type: 'federal',
+    website: 'https://futminna.edu.ng',
+    faculties: [
+      {
+        name: 'School of Engineering and Engineering Technology',
+        code: 'SEET',
+        departments: [
+          { name: 'Civil Engineering', code: 'CVE' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+          { name: 'Mechanical Engineering', code: 'MEE' },
+          { name: 'Chemical Engineering', code: 'CHE' },
+          { name: 'Computer Engineering', code: 'CPE' },
+        ],
+      },
+      {
+        name: 'School of Information and Communication Technology',
+        code: 'SICT',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Cyber Security', code: 'CYB' },
+          { name: 'Information Technology', code: 'IFT' },
+        ],
+      },
+      {
+        name: 'School of Physical Sciences',
+        code: 'SPS',
+        departments: [
+          { name: 'Mathematics', code: 'MTH' },
+          { name: 'Physics', code: 'PHY' },
+          { name: 'Chemistry', code: 'CHM' },
+          { name: 'Statistics', code: 'STA' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'Federal University of Technology, Owerri',
+    code: 'FUTO',
+    state: 'Imo',
+    city: 'Owerri',
+    type: 'federal',
+    website: 'https://futo.edu.ng',
+    faculties: [
+      {
+        name: 'School of Engineering and Engineering Technology',
+        code: 'SEET',
+        departments: [
+          { name: 'Civil Engineering', code: 'CVE' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+          { name: 'Mechanical Engineering', code: 'MEE' },
+          { name: 'Petroleum Engineering', code: 'PTE' },
+          { name: 'Polymer and Textile Engineering', code: 'PTE' },
+        ],
+      },
+      {
+        name: 'School of Information and Communication Technology',
+        code: 'SICT',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Information Technology', code: 'IFT' },
+          { name: 'Software Engineering', code: 'SWE' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'University of Ilorin',
+    code: 'UNILORIN',
+    state: 'Kwara',
+    city: 'Ilorin',
+    type: 'federal',
+    website: 'https://unilorin.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Bayero University Kano',
+    code: 'BUK',
+    state: 'Kano',
+    city: 'Kano',
+    type: 'federal',
+    website: 'https://buk.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Calabar',
+    code: 'UNICAL',
+    state: 'Cross River',
+    city: 'Calabar',
+    type: 'federal',
+    website: 'https://unical.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Jos',
+    code: 'UNIJOS',
+    state: 'Plateau',
+    city: 'Jos',
+    type: 'federal',
+    website: 'https://unijos.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Maiduguri',
+    code: 'UNIMAID',
+    state: 'Borno',
+    city: 'Maiduguri',
+    type: 'federal',
+    website: 'https://unimaid.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Nnamdi Azikiwe University',
+    code: 'UNIZIK',
+    state: 'Anambra',
+    city: 'Awka',
+    type: 'federal',
+    website: 'https://unizik.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'University of Uyo',
+    code: 'UNIUYO',
+    state: 'Akwa Ibom',
+    city: 'Uyo',
+    type: 'federal',
+    website: 'https://uniuyo.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Federal University Oye-Ekiti',
+    code: 'FUOYE',
+    state: 'Ekiti',
+    city: 'Oye-Ekiti',
+    type: 'federal',
+    website: 'https://fuoye.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Federal University Lokoja',
+    code: 'FULOKOJA',
+    state: 'Kogi',
+    city: 'Lokoja',
+    type: 'federal',
+    website: 'https://fulokoja.edu.ng',
+    faculties: commonFaculties,
+  },
+
+  // State Universities
+  {
+    name: 'Lagos State University',
+    code: 'LASU',
+    state: 'Lagos',
+    city: 'Lagos',
+    type: 'state',
+    website: 'https://lasu.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Rivers State University',
+    code: 'RSU',
+    state: 'Rivers',
+    city: 'Port Harcourt',
+    type: 'state',
+    website: 'https://rsu.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Ekiti State University',
+    code: 'EKSU',
+    state: 'Ekiti',
+    city: 'Ado-Ekiti',
+    type: 'state',
+    website: 'https://eksu.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Osun State University',
+    code: 'UNIOSUN',
+    state: 'Osun',
+    city: 'Osogbo',
+    type: 'state',
+    website: 'https://uniosun.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Imo State University',
+    code: 'IMSU',
+    state: 'Imo',
+    city: 'Owerri',
+    type: 'state',
+    website: 'https://imsu.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Enugu State University of Science and Technology',
+    code: 'ESUT',
+    state: 'Enugu',
+    city: 'Enugu',
+    type: 'state',
+    website: 'https://esut.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Abia State University',
+    code: 'ABSU',
+    state: 'Abia',
+    city: 'Uturu',
+    type: 'state',
+    website: 'https://abiastateuniversity.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Delta State University',
+    code: 'DELSU',
+    state: 'Delta',
+    city: 'Abraka',
+    type: 'state',
+    website: 'https://delsu.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Ambrose Alli University',
+    code: 'AAU',
+    state: 'Edo',
+    city: 'Ekpoma',
+    type: 'state',
+    website: 'https://aauekpoma.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Olabisi Onabanjo University',
+    code: 'OOU',
+    state: 'Ogun',
+    city: 'Ago-Iwoye',
+    type: 'state',
+    website: 'https://oouagoiwoye.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Ladoke Akintola University of Technology',
+    code: 'LAUTECH',
+    state: 'Oyo',
+    city: 'Ogbomoso',
+    type: 'state',
+    website: 'https://lautech.edu.ng',
+    faculties: [
+      {
+        name: 'Faculty of Engineering and Technology',
+        code: 'FET',
+        departments: [
+          { name: 'Civil Engineering', code: 'CVE' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+          { name: 'Mechanical Engineering', code: 'MEE' },
+          { name: 'Computer Engineering', code: 'CPE' },
+          { name: 'Agricultural Engineering', code: 'AGE' },
+        ],
+      },
+      {
+        name: 'Faculty of Pure and Applied Sciences',
+        code: 'FPAS',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Mathematics', code: 'MTH' },
+          { name: 'Physics', code: 'PHY' },
+          { name: 'Chemistry', code: 'CHM' },
+          { name: 'Statistics', code: 'STA' },
+        ],
+      },
+      {
+        name: 'Faculty of Medical Sciences',
+        code: 'FMS',
+        departments: [
+          { name: 'Medicine and Surgery', code: 'MBS' },
+          { name: 'Nursing', code: 'NUR' },
+          { name: 'Medical Laboratory Science', code: 'MLS' },
+        ],
+      },
+    ],
+  },
+
+  // Private Universities
+  {
+    name: 'Covenant University',
+    code: 'CU',
+    state: 'Ogun',
+    city: 'Ota',
+    type: 'private',
+    website: 'https://covenantuniversity.edu.ng',
+    faculties: [
+      {
+        name: 'College of Engineering',
+        code: 'COE',
+        departments: [
+          { name: 'Civil Engineering', code: 'CVE' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+          { name: 'Mechanical Engineering', code: 'MEE' },
+          { name: 'Computer Engineering', code: 'CPE' },
+          { name: 'Chemical Engineering', code: 'CHE' },
+          { name: 'Petroleum Engineering', code: 'PTE' },
+          { name: 'Information and Communication Engineering', code: 'ICE' },
+        ],
+      },
+      {
+        name: 'College of Science and Technology',
+        code: 'CST',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Mathematics', code: 'MTH' },
+          { name: 'Physics', code: 'PHY' },
+          { name: 'Chemistry', code: 'CHM' },
+          { name: 'Biochemistry', code: 'BCH' },
+          { name: 'Microbiology', code: 'MCB' },
+          { name: 'Architecture', code: 'ARC' },
+        ],
+      },
+      {
+        name: 'College of Business and Social Sciences',
+        code: 'CBSS',
+        departments: [
+          { name: 'Accounting', code: 'ACC' },
+          { name: 'Banking and Finance', code: 'BFN' },
+          { name: 'Business Administration', code: 'BUS' },
+          { name: 'Economics', code: 'ECO' },
+          { name: 'Mass Communication', code: 'MAC' },
+          { name: 'Political Science', code: 'POL' },
+          { name: 'Psychology', code: 'PSY' },
+          { name: 'Sociology', code: 'SOC' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'Babcock University',
+    code: 'BU',
+    state: 'Ogun',
+    city: 'Ilishan-Remo',
+    type: 'private',
+    website: 'https://babcock.edu.ng',
+    faculties: [
+      {
+        name: 'School of Computing and Engineering Sciences',
+        code: 'SCES',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Software Engineering', code: 'SWE' },
+          { name: 'Information Technology', code: 'IFT' },
+        ],
+      },
+      {
+        name: 'School of Science and Technology',
+        code: 'SST',
+        departments: [
+          { name: 'Biochemistry', code: 'BCH' },
+          { name: 'Microbiology', code: 'MCB' },
+          { name: 'Physics', code: 'PHY' },
+          { name: 'Chemistry', code: 'CHM' },
+        ],
+      },
+      {
+        name: 'School of Management Sciences',
+        code: 'SMS',
+        departments: [
+          { name: 'Accounting', code: 'ACC' },
+          { name: 'Business Administration', code: 'BUS' },
+          { name: 'Banking and Finance', code: 'BFN' },
+          { name: 'Marketing', code: 'MKT' },
+        ],
+      },
+      {
+        name: 'Benjamin Carson School of Medicine',
+        code: 'BCSM',
+        departments: [
+          { name: 'Medicine and Surgery', code: 'MBS' },
+          { name: 'Nursing Science', code: 'NUR' },
+          { name: 'Medical Laboratory Science', code: 'MLS' },
+        ],
+      },
+      {
+        name: 'School of Law and Security Studies',
+        code: 'SLSS',
+        departments: [
+          { name: 'Law', code: 'LAW' },
+          { name: 'Criminology and Security Studies', code: 'CSS' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'Pan-Atlantic University',
+    code: 'PAU',
+    state: 'Lagos',
+    city: 'Lagos',
+    type: 'private',
+    website: 'https://pau.edu.ng',
+    faculties: [
+      {
+        name: 'Lagos Business School',
+        code: 'LBS',
+        departments: [
+          { name: 'Business Administration', code: 'BUS' },
+          { name: 'Finance', code: 'FIN' },
+        ],
+      },
+      {
+        name: 'School of Media and Communication',
+        code: 'SMC',
+        departments: [
+          { name: 'Mass Communication', code: 'MAC' },
+          { name: 'Film and Media Studies', code: 'FMS' },
+        ],
+      },
+      {
+        name: 'School of Science and Technology',
+        code: 'SST',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Information Technology', code: 'IFT' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'Landmark University',
+    code: 'LMU',
+    state: 'Kwara',
+    city: 'Omu-Aran',
+    type: 'private',
+    website: 'https://lmu.edu.ng',
+    faculties: [
+      {
+        name: 'College of Engineering',
+        code: 'COE',
+        departments: [
+          { name: 'Civil Engineering', code: 'CVE' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+          { name: 'Mechanical Engineering', code: 'MEE' },
+          { name: 'Chemical Engineering', code: 'CHE' },
+          { name: 'Agricultural Engineering', code: 'AGE' },
+        ],
+      },
+      {
+        name: 'College of Science',
+        code: 'COS',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Biochemistry', code: 'BCH' },
+          { name: 'Microbiology', code: 'MCB' },
+          { name: 'Industrial Chemistry', code: 'ICH' },
+        ],
+      },
+      {
+        name: 'College of Business and Social Sciences',
+        code: 'CBSS',
+        departments: [
+          { name: 'Accounting', code: 'ACC' },
+          { name: 'Business Administration', code: 'BUS' },
+          { name: 'Economics', code: 'ECO' },
+          { name: 'Political Science', code: 'POL' },
+        ],
+      },
+      {
+        name: 'College of Agricultural Sciences',
+        code: 'CAS',
+        departments: [
+          { name: 'Agricultural Economics', code: 'AEC' },
+          { name: 'Crop Science', code: 'CRS' },
+          { name: 'Animal Science', code: 'ANS' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'American University of Nigeria',
+    code: 'AUN',
+    state: 'Adamawa',
+    city: 'Yola',
+    type: 'private',
+    website: 'https://aun.edu.ng',
+    faculties: [
+      {
+        name: 'School of Engineering',
+        code: 'SOE',
+        departments: [
+          { name: 'Computer Engineering', code: 'CPE' },
+          { name: 'Electrical Engineering', code: 'ELE' },
+          { name: 'Petroleum Chemistry', code: 'PCH' },
+          { name: 'Software Engineering', code: 'SWE' },
+        ],
+      },
+      {
+        name: 'School of Business and Entrepreneurship',
+        code: 'SBE',
+        departments: [
+          { name: 'Accounting', code: 'ACC' },
+          { name: 'Business Administration', code: 'BUS' },
+          { name: 'Economics', code: 'ECO' },
+        ],
+      },
+      {
+        name: 'School of Arts and Sciences',
+        code: 'SAS',
+        departments: [
+          { name: 'English', code: 'ENG' },
+          { name: 'Communication and Multimedia Design', code: 'CMD' },
+          { name: 'Information Systems', code: 'INS' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'Afe Babalola University',
+    code: 'ABUAD',
+    state: 'Ekiti',
+    city: 'Ado-Ekiti',
+    type: 'private',
+    website: 'https://abuad.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Bells University of Technology',
+    code: 'BUT',
+    state: 'Ogun',
+    city: 'Ota',
+    type: 'private',
+    website: 'https://bellsuniversity.edu.ng',
+    faculties: [
+      {
+        name: 'College of Engineering',
+        code: 'COE',
+        departments: [
+          { name: 'Civil Engineering', code: 'CVE' },
+          { name: 'Electrical and Electronics Engineering', code: 'EEE' },
+          { name: 'Mechanical Engineering', code: 'MEE' },
+          { name: 'Computer Engineering', code: 'CPE' },
+          { name: 'Mechatronics Engineering', code: 'MCE' },
+        ],
+      },
+      {
+        name: 'College of Natural and Applied Sciences',
+        code: 'CNAS',
+        departments: [
+          { name: 'Computer Science', code: 'CSC' },
+          { name: 'Cyber Security', code: 'CYB' },
+          { name: 'Physics', code: 'PHY' },
+          { name: 'Chemistry', code: 'CHM' },
+          { name: 'Biochemistry', code: 'BCH' },
+        ],
+      },
+      {
+        name: 'College of Management Sciences',
+        code: 'CMS',
+        departments: [
+          { name: 'Accounting', code: 'ACC' },
+          { name: 'Business Administration', code: 'BUS' },
+          { name: 'Economics', code: 'ECO' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'Lead City University',
+    code: 'LCU',
+    state: 'Oyo',
+    city: 'Ibadan',
+    type: 'private',
+    website: 'https://lcu.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Redeemers University',
+    code: 'RUN',
+    state: 'Osun',
+    city: 'Ede',
+    type: 'private',
+    website: 'https://run.edu.ng',
+    faculties: commonFaculties,
+  },
+  {
+    name: 'Bowen University',
+    code: 'BOWEN',
+    state: 'Osun',
+    city: 'Iwo',
+    type: 'private',
+    website: 'https://bowen.edu.ng',
+    faculties: commonFaculties,
+  },
+];
+
+export default universitiesSeedData;

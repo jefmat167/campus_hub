@@ -1,0 +1,193 @@
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+  Index,
+} from 'typeorm';
+import { User } from './user.entity';
+import { University } from './university.entity';
+
+export enum HousingType {
+  APARTMENT = 'apartment',
+  ROOM = 'room',
+  SHARED_ROOM = 'shared_room',
+  HOSTEL = 'hostel',
+  SELF_CONTAIN = 'self_contain',
+  FLAT = 'flat',
+}
+
+export enum HousingStatus {
+  AVAILABLE = 'available',
+  RENTED = 'rented',
+  RESERVED = 'reserved',
+  PAUSED = 'paused',
+  DELETED = 'deleted',
+}
+
+export enum FurnishingStatus {
+  FURNISHED = 'furnished',
+  SEMI_FURNISHED = 'semi_furnished',
+  UNFURNISHED = 'unfurnished',
+}
+
+export enum GenderPreference {
+  MALE_ONLY = 'male_only',
+  FEMALE_ONLY = 'female_only',
+  ANY = 'any',
+}
+
+@Entity('housing_listings')
+@Index(['universityId', 'status', 'createdAt'])
+@Index(['universityId', 'type', 'status'])
+@Index(['landlordId', 'status'])
+@Index(['pricePerMonth', 'status'])
+export class HousingListing {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'landlord_id' })
+  @Index()
+  landlordId: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'landlord_id' })
+  landlord: User;
+
+  @Column({ name: 'university_id' })
+  @Index()
+  universityId: string;
+
+  @ManyToOne(() => University, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'university_id' })
+  university: University;
+
+  @Column({ length: 255 })
+  title: string;
+
+  @Column({ type: 'text' })
+  description: string;
+
+  @Column({
+    type: 'enum',
+    enum: HousingType,
+  })
+  @Index()
+  type: HousingType;
+
+  @Column({
+    type: 'enum',
+    enum: HousingStatus,
+    default: HousingStatus.AVAILABLE,
+  })
+  @Index()
+  status: HousingStatus;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  pricePerMonth: number;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  pricePerYear: number | null;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  cautionFee: number | null; // Security deposit
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  agentFee: number | null;
+
+  @Column({ length: 500 })
+  address: string;
+
+  @Column({ length: 255 })
+  area: string; // Neighborhood/Area name
+
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  latitude: number | null;
+
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  longitude: number | null;
+
+  @Column({ default: 1 })
+  bedrooms: number;
+
+  @Column({ default: 1 })
+  bathrooms: number;
+
+  @Column({
+    type: 'enum',
+    enum: FurnishingStatus,
+    default: FurnishingStatus.UNFURNISHED,
+  })
+  furnishing: FurnishingStatus;
+
+  @Column({
+    type: 'enum',
+    enum: GenderPreference,
+    default: GenderPreference.ANY,
+  })
+  genderPreference: GenderPreference;
+
+  // Amenities
+  @Column({ default: false })
+  hasWater: boolean;
+
+  @Column({ default: false })
+  hasElectricity: boolean;
+
+  @Column({ default: false })
+  hasInternet: boolean;
+
+  @Column({ default: false })
+  hasParking: boolean;
+
+  @Column({ default: false })
+  hasSecurityGuard: boolean;
+
+  @Column({ default: false })
+  hasGenerator: boolean;
+
+  @Column({ default: false })
+  hasPrepaidMeter: boolean;
+
+  @Column({ default: false })
+  isGated: boolean;
+
+  @Column({ default: false })
+  allowsPets: boolean;
+
+  @Column({ type: 'jsonb', nullable: true })
+  otherAmenities: string[] | null;
+
+  @Column({ type: 'jsonb', default: [] })
+  imageUrls: string[];
+
+  @Column({ type: 'jsonb', nullable: true })
+  videoUrl: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  rules: string | null; // House rules
+
+  @Column({ type: 'date', nullable: true })
+  availableFrom: Date | null;
+
+  @Column({ default: 0 })
+  viewCount: number;
+
+  @Column({ default: 0 })
+  inquiryCount: number;
+
+  @Column({ default: false })
+  isVerified: boolean; // Verified by admin/agent
+
+  @Column({ type: 'timestamp', nullable: true })
+  verifiedAt: Date | null;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+}
