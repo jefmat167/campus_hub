@@ -8,12 +8,29 @@ export const envValidationSchema = Joi.object({
   PORT: Joi.number().default(3000),
   CORS_ORIGIN: Joi.string().default('*'),
 
-  // Database
-  DB_HOST: Joi.string().required(),
+  // Database - Either DATABASE_URL or individual params required
+  DATABASE_URL: Joi.string().uri({ scheme: ['postgres', 'postgresql'] }).optional(),
+  DB_HOST: Joi.string().when('DATABASE_URL', {
+    is: Joi.exist(),
+    then: Joi.optional(),
+    otherwise: Joi.required(),
+  }),
   DB_PORT: Joi.number().default(5432),
-  DB_USERNAME: Joi.string().required(),
-  DB_PASSWORD: Joi.string().required(),
-  DB_NAME: Joi.string().required(),
+  DB_USERNAME: Joi.string().when('DATABASE_URL', {
+    is: Joi.exist(),
+    then: Joi.optional(),
+    otherwise: Joi.required(),
+  }),
+  DB_PASSWORD: Joi.string().when('DATABASE_URL', {
+    is: Joi.exist(),
+    then: Joi.optional().allow(''),
+    otherwise: Joi.required(),
+  }),
+  DB_NAME: Joi.string().when('DATABASE_URL', {
+    is: Joi.exist(),
+    then: Joi.optional(),
+    otherwise: Joi.required(),
+  }),
 
   // Redis
   REDIS_HOST: Joi.string().default('localhost'),
