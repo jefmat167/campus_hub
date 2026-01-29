@@ -4,18 +4,32 @@ import { Faculty } from '../entities/faculty.entity';
 import { Department } from '../entities/department.entity';
 import universitiesSeedData from './universities.seed';
 import * as dotenv from 'dotenv';
+import * as path from 'path';
 
-dotenv.config();
+// Load environment variables
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
+
+const databaseUrl = process.env.DATABASE_URL;
 
 const dataSource = new DataSource({
   type: 'postgres',
-  host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT || '5432', 10),
-  username: process.env.DB_USERNAME,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  // Use connection URL if provided, otherwise fall back to individual params
+  ...(databaseUrl
+    ? { url: databaseUrl }
+    : {
+        host: process.env.DB_HOST || 'localhost',
+        port: parseInt(process.env.DB_PORT || '5432', 10),
+        username: process.env.DB_USERNAME || 'postgres',
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_NAME || 'campus_hub',
+      }),
   entities: [University, Faculty, Department],
   synchronize: true,
+  ssl:
+    process.env.NODE_ENV === 'production'
+      ? { rejectUnauthorized: false }
+      : false,
 });
 
 async function seed() {
