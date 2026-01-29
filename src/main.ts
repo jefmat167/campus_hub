@@ -103,7 +103,7 @@ All responses follow this structure:
     .addTag('Verification', 'User verification and document submission')
     .addTag('Moderation', 'Content moderation and reports')
     .addTag('Health', 'Health check endpoints')
-    .addServer('http://localhost:3000', 'Local Development')
+    .addServer('https://campus-hub-xhrt.onrender.com', 'Staging')
     .addServer('https://api.campushub.ng', 'Production')
     .build();
 
