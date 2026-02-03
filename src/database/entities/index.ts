@@ -15,3 +15,4 @@ export * from './escrow.entity';
 export * from './dispute.entity';
 export * from './housing.entity';
 export * from './roommate.entity';
+export * from './password-reset.entity';

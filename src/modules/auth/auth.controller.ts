@@ -10,20 +10,24 @@ import {
   Headers,
   Res,
   UnauthorizedException,
-  Req,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
-import { Throttle, SkipThrottle } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
-  ApiQuery,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { RegisterDto, LoginDto, RefreshTokenDto, VerifyPhoneDto } from './dto';
+import {
+  RegisterDto,
+  LoginDto,
+  RefreshTokenDto,
+  VerifyPhoneDto,
+  ForgotPasswordDto,
+} from './dto';
 import { LoginPlatform } from './dto/login.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -99,9 +103,6 @@ export class AuthController {
     return this.authService.register(dto);
   }
 
-  /**
-   * Verify phone number with OTP
-   */
   @Post('verify-phone')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
@@ -133,9 +134,6 @@ export class AuthController {
     return this.authService.verifyPhone(userId, dto);
   }
 
-  /**
-   * Resend phone OTP
-   */
   @Post('resend-phone-otp')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
@@ -162,9 +160,6 @@ export class AuthController {
     return this.authService.resendPhoneOtp(userId);
   }
 
-  /**
-   * Resend email verification
-   */
   @Post('resend-email-verification')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
@@ -191,48 +186,33 @@ export class AuthController {
     return this.authService.resendEmailVerification(userId);
   }
 
-  /**
-   * Verify email via token (from clicked link)
-   */
   @Public()
   @Get('verify-email')
-  @SkipThrottle()
-  @ApiOperation({
-    summary: 'Verify email address',
-    description: 'Verifies the email address using the token from the verification link. Redirects to frontend.',
-  })
-  @ApiQuery({ name: 'token', description: 'Verification token from email link' })
-  @ApiResponse({ status: 302, description: 'Redirects to frontend with result' })
   async verifyEmail(
     @Query('token') token: string,
     @Res() res: Response,
   ) {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-
     try {
       const result = await this.emailService.verifyEmailToken(token);
 
-      const redirectUrl = new URL(`${frontendUrl}/auth/email-verified`);
-      redirectUrl.searchParams.set('success', 'true');
-      redirectUrl.searchParams.set('type', result.type);
-      if (result.tierUpdated) {
-        redirectUrl.searchParams.set('tierUpdated', 'true');
-        redirectUrl.searchParams.set('newTier', result.newTier || '');
-      }
-
-      return res.redirect(redirectUrl.toString());
+      return res.render('email-verified', {
+        success: true,
+        type: result.type,
+        tierUpdated: result.tierUpdated,
+        newTier: result.newTier,
+        error: null,
+      });
     } catch (error) {
-      const redirectUrl = new URL(`${frontendUrl}/auth/email-verified`);
-      redirectUrl.searchParams.set('success', 'false');
-      redirectUrl.searchParams.set('error', error.message || 'Verification failed');
-
-      return res.redirect(redirectUrl.toString());
+      return res.render('email-verified', {
+        success: false,
+        type: null,
+        tierUpdated: false,
+        newTier: null,
+        error: error.message || 'Verification failed',
+      });
     }
   }
 
-  /**
-   * Get verification status
-   */
   @Get('verification-status')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -341,6 +321,146 @@ export class AuthController {
 
     // For mobile platform, return tokens in response body
     return result;
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ short: { limit: 3, ttl: 600000 } }) // 3 per 10 minutes
+  @ApiOperation({
+    summary: 'Request password reset',
+    description:
+      'Sends a password reset email if the account exists. Always returns success to prevent email enumeration.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Password reset email sent (if account exists)',
+    schema: {
+      example: {
+        message:
+          'If an account exists with this email, you will receive a password reset link shortly.',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
+  }
+
+  @Public()
+  @Get('reset-password')
+  async showResetPasswordForm(
+    @Query('token') token: string,
+    @Res() res: Response,
+  ) {
+    // Validate token exists
+    if (!token) {
+      return res.render('reset-password', {
+        success: false,
+        showForm: false,
+        error: 'No reset token provided',
+        token: null,
+      });
+    }
+
+    // Validate token is valid
+    const validation = await this.authService.validateResetToken(token);
+
+    if (!validation.valid) {
+      return res.render('reset-password', {
+        success: false,
+        showForm: false,
+        error: validation.error,
+        token: null,
+      });
+    }
+
+    // Show the reset form
+    return res.render('reset-password', {
+      success: false,
+      showForm: true,
+      error: null,
+      token,
+    });
+  }
+
+  /**
+   * Handle password reset form submission
+   */
+  @Public()
+  @Post('reset-password')
+  @Throttle({ short: { limit: 5, ttl: 600000 } }) // 5 per 10 minutes
+  async resetPassword(
+    @Body('token') token: string,
+    @Body('newPassword') newPassword: string,
+    @Body('confirmPassword') confirmPassword: string,
+    @Res() res: Response,
+  ) {
+    // Server-side validation
+    const errors: string[] = [];
+
+    // Validate token
+    if (!token || typeof token !== 'string') {
+      return res.render('reset-password', {
+        success: false,
+        showForm: false,
+        error: 'Invalid reset token',
+        token: null,
+      });
+    }
+
+    // Sanitize and validate password
+    if (!newPassword || typeof newPassword !== 'string') {
+      errors.push('Password is required');
+    } else {
+      // Check length
+      if (newPassword.length < 8) {
+        errors.push('Password must be at least 8 characters');
+      }
+      if (newPassword.length > 50) {
+        errors.push('Password must be less than 100 characters');
+      }
+      // Check complexity
+      if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(newPassword)) {
+        errors.push('Password must contain uppercase, lowercase, and a number');
+      }
+    }
+
+    // Validate confirm password
+    if (!confirmPassword || confirmPassword !== newPassword) {
+      errors.push('Passwords do not match');
+    }
+
+    // If validation errors, show form with error
+    if (errors.length > 0) {
+      return res.render('reset-password', {
+        success: false,
+        showForm: true,
+        error: errors[0],
+        token,
+      });
+    }
+
+    // Attempt to reset password
+    const result = await this.authService.resetPassword(token, newPassword);
+
+    if (!result.success) {
+      return res.render('reset-password', {
+        success: false,
+        showForm: !result.error?.includes('expired') && !result.error?.includes('Invalid') && !result.error?.includes('already been used'),
+        error: result.error,
+        token: result.error?.includes('expired') || result.error?.includes('Invalid') || result.error?.includes('already been used') ? null : token,
+      });
+    }
+
+    // Success
+    return res.render('reset-password', {
+      success: true,
+      showForm: false,
+      error: null,
+      token: null,
+    });
   }
 
   @Public()
@@ -486,41 +606,4 @@ export class AuthController {
 
     return this.authService.logout(userId, accessToken);
   }
-
-  // Commented out: Use GET /users/me instead for full profile with relations
-  // @Post('me')
-  // @HttpCode(HttpStatus.OK)
-  // @UseGuards(JwtAuthGuard)
-  // @ApiBearerAuth()
-  // @ApiOperation({
-  //   summary: 'Get current user',
-  //   description: 'Returns the currently authenticated user\'s profile.',
-  // })
-  // @ApiResponse({
-  //   status: 200,
-  //   description: 'Current user data',
-  //   schema: {
-  //     example: {
-  //       user: {
-  //         id: '550e8400-e29b-41d4-a716-446655440000',
-  //         email: 'john.doe@university.edu.ng',
-  //         fullName: 'John Doe',
-  //         phone: '+2348012345678',
-  //         avatarUrl: 'https://example.com/avatar.jpg',
-  //         bio: 'Computer Science student',
-  //         isPhoneVerified: true,
-  //         isEmailVerified: true,
-  //         isIdVerified: false,
-  //         createdAt: '2024-01-15T10:30:00Z',
-  //       },
-  //     },
-  //   },
-  // })
-  // @ApiResponse({
-  //   status: 401,
-  //   description: 'Unauthorized',
-  // })
-  // async me(@CurrentUser() user: User) {
-  //   return { user };
-  // }
 }

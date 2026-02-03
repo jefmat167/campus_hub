@@ -1,16 +1,22 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { join } from 'path';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: new ConsoleLogger({ prefix: 'CampusHub', timestamp: true })
   });
 
   const configService = app.get(ConfigService);
+
+  // Configure view engine (EJS)
+  app.setBaseViewsDir(join(__dirname, 'views'));
+  app.setViewEngine('ejs');
 
   // Global prefix
   app.setGlobalPrefix('api/v1');
@@ -104,7 +110,6 @@ All responses follow this structure:
     .addTag('Moderation', 'Content moderation and reports')
     .addTag('Health', 'Health check endpoints')
     .addServer('https://campus-hub-xhrt.onrender.com', 'Staging')
-    .addServer('https://api.campushub.ng', 'Production')
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

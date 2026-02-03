@@ -9,7 +9,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, IsNull } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import * as bcrypt from 'bcrypt';
@@ -17,11 +17,18 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { PasswordReset } from '../../database/entities/password-reset.entity';
 import { SmsService } from '../sms/sms.service';
 import { UniversitiesService } from '../universities/universities.service';
 import { EmailService } from '../email/email.service';
 import { EmailVerificationType } from '../../database/entities/email-verification.entity';
-import { RegisterDto, LoginDto, VerifyPhoneDto } from './dto';
+import {
+  RegisterDto,
+  LoginDto,
+  VerifyPhoneDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto';
 
 export interface TokenPair {
   accessToken: string;
@@ -43,6 +50,8 @@ export class AuthService {
     private userRepo: Repository<User>,
     @InjectRepository(Wallet)
     private walletRepo: Repository<Wallet>,
+    @InjectRepository(PasswordReset)
+    private passwordResetRepo: Repository<PasswordReset>,
     private jwtService: JwtService,
     private configService: ConfigService,
     private smsService: SmsService,
@@ -50,7 +59,7 @@ export class AuthService {
     private emailService: EmailService,
     private dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
-  ) {}
+  ) { }
 
   /**
    * Register a new user
@@ -184,10 +193,6 @@ export class AuthService {
     return response;
   }
 
-  /**
-   * Verify phone number with OTP
-   * Called after registration to verify phone
-   */
   async verifyPhone(userId: string, dto: VerifyPhoneDto): Promise<{
     verified: boolean;
     phoneVerified: boolean;
@@ -240,9 +245,6 @@ export class AuthService {
     };
   }
 
-  /**
-   * Resend phone OTP
-   */
   async resendPhoneOtp(userId: string): Promise<{ sent: boolean; message: string; otp?: string }> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
 
@@ -266,9 +268,6 @@ export class AuthService {
     };
   }
 
-  /**
-   * Resend email verification
-   */
   async resendEmailVerification(userId: string): Promise<{
     sent: boolean;
     message: string;
@@ -299,9 +298,6 @@ export class AuthService {
     };
   }
 
-  /**
-   * Get verification status for current user
-   */
   async getVerificationStatus(userId: string): Promise<{
     verificationTier: VerificationTier;
     phoneVerified: boolean;
@@ -322,9 +318,6 @@ export class AuthService {
     };
   }
 
-  /**
-   * Login with email and password
-   */
   async login(dto: LoginDto): Promise<AuthResponse> {
     const user = await this.userRepo.findOne({
       where: { email: dto.email.toLowerCase() },
@@ -365,9 +358,6 @@ export class AuthService {
     };
   }
 
-  /**
-   * Refresh access token using refresh token
-   */
   async refreshTokens(userId: string, refreshToken: string): Promise<TokenPair> {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -394,9 +384,6 @@ export class AuthService {
     return tokens;
   }
 
-  /**
-   * Logout user - invalidates refresh token and blacklists access token
-   */
   async logout(userId: string, accessToken?: string): Promise<{ message: string }> {
     // Invalidate refresh token
     await this.userRepo.update(userId, {
@@ -411,9 +398,6 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
-  /**
-   * Blacklist a token until it expires
-   */
   async blacklistToken(token: string): Promise<void> {
     try {
       const decoded = this.jwtService.decode(token) as { jti?: string; exp?: number };
@@ -431,17 +415,120 @@ export class AuthService {
     }
   }
 
-  /**
-   * Check if a token is blacklisted
-   */
   async isTokenBlacklisted(jti: string): Promise<boolean> {
     const blacklisted = await this.cacheManager.get(`blacklist:${jti}`);
     return !!blacklisted;
   }
 
+  async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
+    const email = dto.email.toLowerCase();
+
+    const user = await this.userRepo.findOne({ where: { email } });
+
+    // Always return same message to prevent email enumeration
+    const successMessage =
+      'If an account exists with this email, you will receive a password reset link shortly.';
+
+    if (!user) {
+      this.logger.log(`Password reset requested for non-existent email: ${email}`);
+      return { message: successMessage };
+    }
+
+    // Invalidate any existing unused reset tokens for this user
+    await this.passwordResetRepo.update(
+      { userId: user.id, usedAt: IsNull() },
+      { usedAt: new Date() },
+    );
+
+    // Create new password reset record
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const passwordReset = this.passwordResetRepo.create({
+      userId: user.id,
+      email: user.email,
+      token: uuidv4(),
+      expiresAt,
+    });
+
+    await this.passwordResetRepo.save(passwordReset);
+
+    // Send reset email
+    try {
+      await this.emailService.sendPasswordResetEmail(
+        user.email,
+        passwordReset.token,
+        user.fullName,
+      );
+    } catch (error) {
+      this.logger.error(`Failed to send password reset email: ${error}`);
+      // Still return success message to not reveal email existence
+    }
+
+    return { message: successMessage };
+  }
+
   /**
-   * Generate access and refresh tokens
+   * Validate a password reset token without using it
+   * Used to check if token is valid before showing the reset form
    */
+  async validateResetToken(token: string): Promise<{ valid: boolean; error?: string }> {
+    const passwordReset = await this.passwordResetRepo.findOne({
+      where: { token },
+    });
+
+    if (!passwordReset) {
+      return { valid: false, error: 'Invalid or expired reset token' };
+    }
+
+    if (passwordReset.isUsed) {
+      return { valid: false, error: 'This reset link has already been used' };
+    }
+
+    if (passwordReset.isExpired) {
+      return { valid: false, error: 'This reset link has expired. Please request a new one.' };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Reset password using token (for form submission)
+   */
+  async resetPassword(token: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
+    const passwordReset = await this.passwordResetRepo.findOne({
+      where: { token },
+      relations: ['user'],
+    });
+
+    if (!passwordReset) {
+      return { success: false, error: 'Invalid or expired reset token' };
+    }
+
+    if (passwordReset.isUsed) {
+      return { success: false, error: 'This reset link has already been used' };
+    }
+
+    if (passwordReset.isExpired) {
+      return { success: false, error: 'This reset link has expired. Please request a new one.' };
+    }
+
+    // Hash new password
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+
+    // Update user's password and invalidate all sessions
+    await this.userRepo.update(passwordReset.userId, {
+      passwordHash,
+      refreshTokenHash: undefined,
+    });
+
+    // Mark token as used
+    passwordReset.usedAt = new Date();
+    await this.passwordResetRepo.save(passwordReset);
+
+    this.logger.log(`Password reset successful for user: ${passwordReset.userId}`);
+
+    return { success: true };
+  }
+
   private async generateTokens(user: User): Promise<TokenPair> {
     const basePayload = {
       sub: user.id,
@@ -473,9 +560,6 @@ export class AuthService {
     };
   }
 
-  /**
-   * Format phone number to standard format
-   */
   private formatPhone(phone: string): string {
     let cleaned = phone.replace(/\D/g, '');
 
@@ -490,9 +574,6 @@ export class AuthService {
     return cleaned;
   }
 
-  /**
-   * Remove sensitive fields from user object
-   */
   private sanitizeUser(user: User): Partial<User> {
     const { passwordHash, refreshTokenHash, ...sanitized } = user;
     return sanitized;

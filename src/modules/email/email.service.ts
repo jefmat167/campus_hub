@@ -8,6 +8,7 @@ import {
   EmailVerificationType,
 } from '../../database/entities/email-verification.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
+import { MailerService } from '@nestjs-modules/mailer';
 
 export interface SendVerificationEmailResult {
   sent: boolean;
@@ -28,12 +29,10 @@ export class EmailService {
     private emailVerificationRepo: Repository<EmailVerification>,
     @InjectRepository(User)
     private userRepo: Repository<User>,
+    private readonly mailerService: MailerService,
     private configService: ConfigService,
   ) {
-    this.frontendUrl = this.configService.get<string>(
-      'FRONTEND_URL',
-      'http://localhost:3000',
-    );
+    this.frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
     this.fromEmail = this.configService.get<string>(
       'FROM_EMAIL',
       'noreply@campushub.ng',
@@ -42,9 +41,6 @@ export class EmailService {
       this.configService.get<string>('NODE_ENV') === 'development';
   }
 
-  /**
-   * Send verification email (personal or school)
-   */
   async sendVerificationEmail(
     userId: string,
     email: string,
@@ -95,7 +91,6 @@ export class EmailService {
 
     await this.emailVerificationRepo.save(verification);
 
-    // Send the email
     await this.sendEmail(email, type, verification.token, user.fullName);
 
     return {
@@ -106,9 +101,6 @@ export class EmailService {
     };
   }
 
-  /**
-   * Verify email token
-   */
   async verifyEmailToken(token: string): Promise<{
     verified: boolean;
     type: EmailVerificationType;
@@ -182,9 +174,6 @@ export class EmailService {
     };
   }
 
-  /**
-   * Resend verification email
-   */
   async resendVerificationEmail(
     userId: string,
     type: EmailVerificationType,
@@ -236,9 +225,6 @@ export class EmailService {
     };
   }
 
-  /**
-   * Check if email is verified
-   */
   async isEmailVerified(
     userId: string,
     type: EmailVerificationType,
@@ -250,9 +236,6 @@ export class EmailService {
     return verification?.isVerified ?? false;
   }
 
-  /**
-   * Get verification status
-   */
   async getVerificationStatus(
     userId: string,
     type: EmailVerificationType,
@@ -282,119 +265,66 @@ export class EmailService {
     };
   }
 
-  /**
-   * Calculate expiry based on type
-   * Personal: 1 hour, School: 2 hours
-   */
+
   private calculateExpiry(type: EmailVerificationType): Date {
     const now = new Date();
     const hours = type === EmailVerificationType.PERSONAL ? 1 : 2;
     return new Date(now.getTime() + hours * 60 * 60 * 1000);
   }
 
-  /**
-   * Send the actual email
-   * In development, logs to console. In production, uses email provider.
-   */
   private async sendEmail(
     email: string,
     type: EmailVerificationType,
     token: string,
     userName: string,
   ): Promise<void> {
-    const verificationUrl = `${this.frontendUrl}/auth/verify-email?token=${token}`;
+    const verificationUrl = `${this.frontendUrl}/auth/verify-email?token=${encodeURIComponent(token)}`;
     const subject =
       type === EmailVerificationType.PERSONAL
         ? 'Verify your CampusHub email'
         : 'Verify your school email - CampusHub';
 
-    const emailContent = this.generateEmailContent(
-      type,
-      userName,
-      verificationUrl,
-    );
-
-    if (this.isDevelopment) {
-      // In development, log to console
-      this.logger.log('═══════════════════════════════════════════');
-      this.logger.log(`📧 EMAIL VERIFICATION (${type.toUpperCase()})`);
-      this.logger.log(`To: ${email}`);
-      this.logger.log(`Subject: ${subject}`);
-      this.logger.log(`Verification URL: ${verificationUrl}`);
-      this.logger.log(`Token: ${token}`);
-      this.logger.log('═══════════════════════════════════════════');
-      return;
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: "verifyEmail",
+        context: {
+          verifyUrl: verificationUrl,
+          name: userName ?? null,
+        },
+      })
+    } catch (error) {
+      this.logger.error(
+        `Failed to send verification email to ${email}: ${error.message}`,
+        error.stack,
+      );
     }
-
-    // TODO: Integrate with email provider (SendGrid, Mailgun, AWS SES, etc.)
-    // For now, just log a warning
-    this.logger.warn(
-      `Email sending not configured. Would send to: ${email}, Subject: ${subject}`,
-    );
-
-    // Example SendGrid integration:
-    // const sgMail = require('@sendgrid/mail');
-    // sgMail.setApiKey(this.configService.get('SENDGRID_API_KEY'));
-    // await sgMail.send({
-    //   to: email,
-    //   from: this.fromEmail,
-    //   subject,
-    //   html: emailContent,
-    // });
   }
 
-  /**
-   * Generate email HTML content
-   */
-  private generateEmailContent(
-    type: EmailVerificationType,
+  async sendPasswordResetEmail(
+    email: string,
+    token: string,
     userName: string,
-    verificationUrl: string,
-  ): string {
-    const expiryText =
-      type === EmailVerificationType.PERSONAL ? '1 hour' : '2 hours';
+  ): Promise<void> {
+    const resetUrl = `${this.frontendUrl}/auth/reset-password?token=${encodeURIComponent(token)}`;
+    const subject = 'Reset your CampusHub password';
 
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Email Verification - CampusHub</title>
-      </head>
-      <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h1 style="color: #333;">Hello ${userName},</h1>
-
-        <p>
-          ${
-            type === EmailVerificationType.PERSONAL
-              ? 'Thank you for registering on CampusHub! Please verify your email address to continue.'
-              : 'Please verify your school email address to complete your student verification.'
-          }
-        </p>
-
-        <p style="margin: 30px 0;">
-          <a href="${verificationUrl}"
-             style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
-            Verify Email
-          </a>
-        </p>
-
-        <p style="color: #666; font-size: 14px;">
-          This link will expire in ${expiryText}. If you didn't request this verification, please ignore this email.
-        </p>
-
-        <p style="color: #666; font-size: 14px;">
-          If the button doesn't work, copy and paste this link into your browser:<br>
-          <a href="${verificationUrl}" style="color: #4CAF50;">${verificationUrl}</a>
-        </p>
-
-        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-
-        <p style="color: #999; font-size: 12px;">
-          CampusHub - Your University Marketplace
-        </p>
-      </body>
-      </html>
-    `;
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: 'resetPassword',
+        context: {
+          resetUrl,
+          name: userName ?? null,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send password reset email to ${email}: ${error.message}`,
+        error.stack,
+      );
+    }
   }
 }
