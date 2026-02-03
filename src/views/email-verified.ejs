@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= success ? 'Email Verified' : 'Verification Failed' %> - CampusHub</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+      padding: 48px;
+      max-width: 450px;
+      width: 100%;
+      text-align: center;
+    }
+
+    .icon {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 40px;
+    }
+
+    .icon.success {
+      background: #d1fae5;
+      color: #059669;
+    }
+
+    .icon.error {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+
+    h1 {
+      color: #1f2937;
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .message {
+      color: #6b7280;
+      font-size: 16px;
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+
+    .badge.tier {
+      background: #dbeafe;
+      color: #1d4ed8;
+    }
+
+    .badge.type {
+      background: #f3f4f6;
+      color: #4b5563;
+    }
+
+    .divider {
+      height: 1px;
+      background: #e5e7eb;
+      margin: 24px 0;
+    }
+
+    .footer-text {
+      color: #9ca3af;
+      font-size: 14px;
+    }
+
+    .logo {
+      font-size: 28px;
+      font-weight: 800;
+      color: #667eea;
+      margin-bottom: 32px;
+    }
+
+    .checkmark {
+      animation: checkmark 0.5s ease-in-out;
+    }
+
+    @keyframes checkmark {
+      0% {
+        transform: scale(0);
+        opacity: 0;
+      }
+      50% {
+        transform: scale(1.2);
+      }
+      100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">CampusHub</div>
+
+    <% if (success) { %>
+      <div class="icon success checkmark">
+        ✓
+      </div>
+      <h1>Email Verified!</h1>
+      <p class="message">
+        Your <%= type === 'school' ? 'school' : '' %> email has been successfully verified.
+        You can now close this page and return to the app.
+      </p>
+
+      <% if (type) { %>
+        <span class="badge type">
+          <%= type === 'school' ? 'School Email' : 'Personal Email' %>
+        </span>
+      <% } %>
+
+      <% if (tierUpdated && newTier) { %>
+        <div style="margin-top: 16px;">
+          <span class="badge tier">
+            🎉 Upgraded to <%= newTier.replace('_', ' ').toUpperCase() %>
+          </span>
+        </div>
+        <p class="message" style="margin-top: 16px; margin-bottom: 0;">
+          You now have access to more features on CampusHub!
+        </p>
+      <% } %>
+    <% } else { %>
+      <div class="icon error">
+        ✕
+      </div>
+      <h1>Verification Failed</h1>
+      <p class="message">
+        <%= error || 'We couldn\'t verify your email. The link may have expired or already been used.' %>
+      </p>
+      <p class="message" style="margin-bottom: 0;">
+        Please request a new verification email from the app.
+      </p>
+    <% } %>
+
+    <div class="divider"></div>
+
+    <p class="footer-text">
+      CampusHub - Your University fun place
+    </p>
+  </div>
+</body>
+</html>

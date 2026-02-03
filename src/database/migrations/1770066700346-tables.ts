@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class NewTables1769714527625 implements MigrationInterface {
-    name = 'NewTables1769714527625'
+export class Tables1770066700346 implements MigrationInterface {
+    name = 'Tables1770066700346'
 
     public async up(queryRunner: QueryRunner): Promise<void> {
         await queryRunner.query(`CREATE TABLE "departments" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "name" character varying(255) NOT NULL, "code" character varying(50), "faculty_id" uuid NOT NULL, "isActive" boolean NOT NULL DEFAULT true, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_839517a681a86bb84cbcc6a1e9d" PRIMARY KEY ("id"))`);
@@ -91,6 +91,9 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_b9874034d37e2110f9c85646cb" ON "posts" ("university_id", "engagement_score") `);
         await queryRunner.query(`CREATE INDEX "IDX_e31abbf251ed95100dc5bc396a" ON "posts" ("university_id", "visibility", "created_at") `);
         await queryRunner.query(`CREATE INDEX "IDX_b932cf676feea1e77b00cdaa01" ON "posts" ("university_id", "created_at") `);
+        await queryRunner.query(`CREATE TABLE "password_resets" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "email" character varying(255) NOT NULL, "token" character varying(255) NOT NULL, "expiresAt" TIMESTAMP NOT NULL, "usedAt" TIMESTAMP, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "UQ_9b34edd5264effbbc875c266a9e" UNIQUE ("token"), CONSTRAINT "PK_4816377aa98211c1de34469e742" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_f7a4c3bc48f24df007936d217b" ON "password_resets" ("user_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_9b34edd5264effbbc875c266a9" ON "password_resets" ("token") `);
         await queryRunner.query(`CREATE TYPE "public"."listings_type_enum" AS ENUM('sell', 'buy_request')`);
         await queryRunner.query(`CREATE TYPE "public"."listings_category_enum" AS ENUM('electronics', 'furniture', 'books', 'clothing', 'appliances', 'phones', 'laptops', 'accessories', 'sports', 'beauty', 'food', 'services', 'other')`);
         await queryRunner.query(`CREATE TYPE "public"."listings_condition_enum" AS ENUM('new', 'like_new', 'used_good', 'used_fair')`);
@@ -115,15 +118,6 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_434239966cb60e2dbc6178f993" ON "offers" ("status") `);
         await queryRunner.query(`CREATE INDEX "IDX_11983781f9ceeb7392de6e38b0" ON "offers" ("buyer_id", "status") `);
         await queryRunner.query(`CREATE INDEX "IDX_d23465c5503e88e9076bab9f43" ON "offers" ("listing_id", "status", "createdAt") `);
-        await queryRunner.query(`CREATE TYPE "public"."notifications_type_enum" AS ENUM('new_message', 'offer_received', 'offer_accepted', 'offer_rejected', 'offer_countered', 'offer_expired', 'escrow_initiated', 'escrow_confirmed', 'escrow_released', 'escrow_cancelled', 'escrow_disputed', 'review_received', 'listing_favorited', 'listing_sold', 'post_reaction', 'post_comment', 'comment_reply', 'roommate_interest', 'roommate_match', 'verification_approved', 'verification_rejected', 'warning_issued', 'account_banned', 'announcement')`);
-        await queryRunner.query(`CREATE TABLE "notifications" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "type" "public"."notifications_type_enum" NOT NULL, "title" character varying(255) NOT NULL, "body" text NOT NULL, "data" jsonb, "imageUrl" character varying(500), "isRead" boolean NOT NULL DEFAULT false, "readAt" TIMESTAMP, "pushSent" boolean NOT NULL DEFAULT false, "pushSentAt" TIMESTAMP, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_6a72c3c0f683f6462415e653c3a" PRIMARY KEY ("id"))`);
-        await queryRunner.query(`CREATE INDEX "IDX_9a8a82462cab47c73d25f49261" ON "notifications" ("user_id") `);
-        await queryRunner.query(`CREATE INDEX "IDX_aef1c7aef3725068e5540f8f00" ON "notifications" ("type") `);
-        await queryRunner.query(`CREATE INDEX "IDX_8ba28344602d583583b9ea1a50" ON "notifications" ("isRead") `);
-        await queryRunner.query(`CREATE INDEX "IDX_f8119e95a07eeea356486ed134" ON "notifications" ("user_id", "createdAt") `);
-        await queryRunner.query(`CREATE INDEX "IDX_c24be561656e7219e2566f6774" ON "notifications" ("user_id", "isRead", "createdAt") `);
-        await queryRunner.query(`CREATE TABLE "notification_preferences" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "pushEnabled" boolean NOT NULL DEFAULT true, "emailEnabled" boolean NOT NULL DEFAULT true, "messagesEnabled" boolean NOT NULL DEFAULT true, "offersEnabled" boolean NOT NULL DEFAULT true, "escrowEnabled" boolean NOT NULL DEFAULT true, "reviewsEnabled" boolean NOT NULL DEFAULT true, "socialEnabled" boolean NOT NULL DEFAULT true, "housingEnabled" boolean NOT NULL DEFAULT true, "announcementsEnabled" boolean NOT NULL DEFAULT true, "quietHoursEnabled" boolean NOT NULL DEFAULT false, "quietHoursStart" TIME, "quietHoursEnd" TIME, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "UQ_64c90edc7310c6be7c10c96f675" UNIQUE ("user_id"), CONSTRAINT "REL_64c90edc7310c6be7c10c96f67" UNIQUE ("user_id"), CONSTRAINT "PK_e94e2b543f2f218ee68e4f4fad2" PRIMARY KEY ("id"))`);
-        await queryRunner.query(`CREATE INDEX "IDX_64c90edc7310c6be7c10c96f67" ON "notification_preferences" ("user_id") `);
         await queryRunner.query(`CREATE TYPE "public"."moderation_queue_contenttype_enum" AS ENUM('post', 'comment', 'listing', 'message', 'profile', 'housing')`);
         await queryRunner.query(`CREATE TYPE "public"."moderation_queue_source_enum" AS ENUM('ai_flag', 'keyword_flag', 'user_report', 'manual')`);
         await queryRunner.query(`CREATE TYPE "public"."moderation_queue_category_enum" AS ENUM('spam', 'hate_speech', 'harassment', 'violence', 'adult_content', 'scam', 'misinformation', 'personal_info', 'other')`);
@@ -135,6 +129,13 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_cabed68486a35b43cb6b75ac3b" ON "moderation_queue" ("priority") `);
         await queryRunner.query(`CREATE INDEX "IDX_6b01d4bf3f7efc7a0925f2d897" ON "moderation_queue" ("contentType", "content_id") `);
         await queryRunner.query(`CREATE INDEX "IDX_324f74dc5a9d60462b68c851b8" ON "moderation_queue" ("status", "priority", "createdAt") `);
+        await queryRunner.query(`CREATE TYPE "public"."notifications_type_enum" AS ENUM('new_message', 'offer_received', 'offer_accepted', 'offer_rejected', 'offer_countered', 'offer_expired', 'escrow_initiated', 'escrow_confirmed', 'escrow_released', 'escrow_cancelled', 'escrow_disputed', 'review_received', 'listing_favorited', 'listing_sold', 'post_reaction', 'post_comment', 'comment_reply', 'roommate_interest', 'roommate_match', 'verification_approved', 'verification_rejected', 'warning_issued', 'account_banned', 'announcement')`);
+        await queryRunner.query(`CREATE TABLE "notifications" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "type" "public"."notifications_type_enum" NOT NULL, "title" character varying(255) NOT NULL, "body" text NOT NULL, "data" jsonb, "imageUrl" character varying(500), "isRead" boolean NOT NULL DEFAULT false, "readAt" TIMESTAMP, "pushSent" boolean NOT NULL DEFAULT false, "pushSentAt" TIMESTAMP, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_6a72c3c0f683f6462415e653c3a" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_9a8a82462cab47c73d25f49261" ON "notifications" ("user_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_aef1c7aef3725068e5540f8f00" ON "notifications" ("type") `);
+        await queryRunner.query(`CREATE INDEX "IDX_8ba28344602d583583b9ea1a50" ON "notifications" ("isRead") `);
+        await queryRunner.query(`CREATE INDEX "IDX_f8119e95a07eeea356486ed134" ON "notifications" ("user_id", "createdAt") `);
+        await queryRunner.query(`CREATE INDEX "IDX_c24be561656e7219e2566f6774" ON "notifications" ("user_id", "isRead", "createdAt") `);
         await queryRunner.query(`CREATE TYPE "public"."kyc_verifications_type_enum" AS ENUM('bvn', 'nin')`);
         await queryRunner.query(`CREATE TYPE "public"."kyc_verifications_status_enum" AS ENUM('pending', 'success', 'failed')`);
         await queryRunner.query(`CREATE TABLE "kyc_verifications" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "type" "public"."kyc_verifications_type_enum" NOT NULL, "status" "public"."kyc_verifications_status_enum" NOT NULL DEFAULT 'pending', "youverifyReference" character varying(255), "attemptNumber" integer NOT NULL DEFAULT '1', "failureReason" text, "verifiedAt" TIMESTAMP, "metadata" jsonb, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_57b7c6b141dd225ce5dc95d7fb0" PRIMARY KEY ("id"))`);
@@ -154,16 +155,18 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_e692a68ff79c7a9565136900f4" ON "housing_listings" ("landlord_id", "status") `);
         await queryRunner.query(`CREATE INDEX "IDX_cd5bee82c48856af657ea218d7" ON "housing_listings" ("university_id", "type", "status") `);
         await queryRunner.query(`CREATE INDEX "IDX_26f8044313a9f7d2063c4ed7f7" ON "housing_listings" ("university_id", "status", "createdAt") `);
+        await queryRunner.query(`CREATE TABLE "favorites" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "listing_id" uuid NOT NULL, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "UQ_0f8db9b83a100398d2611a8c9d0" UNIQUE ("user_id", "listing_id"), CONSTRAINT "PK_890818d27523748dd36a4d1bdc8" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_35a6b05ee3b624d0de01ee5059" ON "favorites" ("user_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_74e0699c35d78e39b229d64f34" ON "favorites" ("listing_id") `);
+        await queryRunner.query(`CREATE INDEX "IDX_a0d13eb4f397f2e41f34d1d6b4" ON "favorites" ("user_id", "createdAt") `);
+        await queryRunner.query(`CREATE TABLE "notification_preferences" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "pushEnabled" boolean NOT NULL DEFAULT true, "emailEnabled" boolean NOT NULL DEFAULT true, "messagesEnabled" boolean NOT NULL DEFAULT true, "offersEnabled" boolean NOT NULL DEFAULT true, "escrowEnabled" boolean NOT NULL DEFAULT true, "reviewsEnabled" boolean NOT NULL DEFAULT true, "socialEnabled" boolean NOT NULL DEFAULT true, "housingEnabled" boolean NOT NULL DEFAULT true, "announcementsEnabled" boolean NOT NULL DEFAULT true, "quietHoursEnabled" boolean NOT NULL DEFAULT false, "quietHoursStart" TIME, "quietHoursEnd" TIME, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "UQ_64c90edc7310c6be7c10c96f675" UNIQUE ("user_id"), CONSTRAINT "REL_64c90edc7310c6be7c10c96f67" UNIQUE ("user_id"), CONSTRAINT "PK_e94e2b543f2f218ee68e4f4fad2" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_64c90edc7310c6be7c10c96f67" ON "notification_preferences" ("user_id") `);
         await queryRunner.query(`CREATE TYPE "public"."fcm_tokens_platform_enum" AS ENUM('ios', 'android', 'web')`);
         await queryRunner.query(`CREATE TABLE "fcm_tokens" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "token" character varying(500) NOT NULL, "platform" "public"."fcm_tokens_platform_enum" NOT NULL, "deviceId" character varying(255), "deviceName" character varying(100), "isActive" boolean NOT NULL DEFAULT true, "lastUsedAt" TIMESTAMP, "failureCount" integer NOT NULL DEFAULT '0', "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "UQ_639c0f1d38d97d778122d4f2998" UNIQUE ("token"), CONSTRAINT "PK_0802a779d616597e9330bb9a7cc" PRIMARY KEY ("id"))`);
         await queryRunner.query(`CREATE INDEX "IDX_9fd867cabc75028a5625ce7b24" ON "fcm_tokens" ("user_id") `);
         await queryRunner.query(`CREATE INDEX "IDX_639c0f1d38d97d778122d4f299" ON "fcm_tokens" ("token") `);
         await queryRunner.query(`CREATE INDEX "IDX_c5678152794bb6ada963377ab7" ON "fcm_tokens" ("isActive") `);
         await queryRunner.query(`CREATE INDEX "IDX_3093d5ec2df919064f062c4ee2" ON "fcm_tokens" ("user_id", "isActive") `);
-        await queryRunner.query(`CREATE TABLE "favorites" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "user_id" uuid NOT NULL, "listing_id" uuid NOT NULL, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "UQ_0f8db9b83a100398d2611a8c9d0" UNIQUE ("user_id", "listing_id"), CONSTRAINT "PK_890818d27523748dd36a4d1bdc8" PRIMARY KEY ("id"))`);
-        await queryRunner.query(`CREATE INDEX "IDX_35a6b05ee3b624d0de01ee5059" ON "favorites" ("user_id") `);
-        await queryRunner.query(`CREATE INDEX "IDX_74e0699c35d78e39b229d64f34" ON "favorites" ("listing_id") `);
-        await queryRunner.query(`CREATE INDEX "IDX_a0d13eb4f397f2e41f34d1d6b4" ON "favorites" ("user_id", "createdAt") `);
         await queryRunner.query(`CREATE TYPE "public"."escrow_transactions_status_enum" AS ENUM('pending', 'buyer_confirmed', 'seller_confirmed', 'completed', 'disputed', 'refunded', 'cancelled', 'expired')`);
         await queryRunner.query(`CREATE TABLE "escrow_transactions" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "buyer_id" uuid NOT NULL, "seller_id" uuid NOT NULL, "listing_id" uuid NOT NULL, "offer_id" uuid, "amount" numeric(12,2) NOT NULL, "fee" numeric(12,2) NOT NULL, "totalAmount" numeric(12,2) NOT NULL, "status" "public"."escrow_transactions_status_enum" NOT NULL DEFAULT 'pending', "buyerConfirmedAt" TIMESTAMP, "sellerConfirmedAt" TIMESTAMP, "releasedAt" TIMESTAMP, "refundedAt" TIMESTAMP, "expiresAt" TIMESTAMP NOT NULL, "notes" text, "metadata" jsonb, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_529d3ac2fa1b343b7beb59bd945" PRIMARY KEY ("id"))`);
         await queryRunner.query(`CREATE INDEX "IDX_d87d346e2538d3f6468adc8810" ON "escrow_transactions" ("buyer_id") `);
@@ -240,6 +243,7 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`ALTER TABLE "roommate_interests" ADD CONSTRAINT "FK_cc272f97e3c975d305d0f429d5c" FOREIGN KEY ("to_user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "reviews" ADD CONSTRAINT "FK_92e950a2513a79bb3fab273c92e" FOREIGN KEY ("reviewer_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "reviews" ADD CONSTRAINT "FK_a7b3e1afadd6b52f3b6864745e3" FOREIGN KEY ("reviewee_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "password_resets" ADD CONSTRAINT "FK_f7a4c3bc48f24df007936d217be" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "listings" ADD CONSTRAINT "FK_6d2846ee6b337ce5225c8c7286b" FOREIGN KEY ("seller_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "listings" ADD CONSTRAINT "FK_4dee06aa17d4eb85e2f2f56732a" FOREIGN KEY ("university_id") REFERENCES "universities"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "listings" ADD CONSTRAINT "FK_43a6dd5bf51bf13bb4b77d78e74" FOREIGN KEY ("faculty_id") REFERENCES "faculties"("id") ON DELETE SET NULL ON UPDATE NO ACTION`);
@@ -248,16 +252,16 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`ALTER TABLE "offers" ADD CONSTRAINT "FK_ff1371fdb408ba33d5d08a61629" FOREIGN KEY ("listing_id") REFERENCES "listings"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "offers" ADD CONSTRAINT "FK_8d62085256bc739c02d49a3c20e" FOREIGN KEY ("buyer_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "offers" ADD CONSTRAINT "FK_7fc60d9f105c297d03d857ffb0a" FOREIGN KEY ("seller_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
-        await queryRunner.query(`ALTER TABLE "notifications" ADD CONSTRAINT "FK_9a8a82462cab47c73d25f49261f" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
-        await queryRunner.query(`ALTER TABLE "notification_preferences" ADD CONSTRAINT "FK_64c90edc7310c6be7c10c96f675" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "moderation_queue" ADD CONSTRAINT "FK_f49756b8897a7b3c22f652a8052" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "moderation_queue" ADD CONSTRAINT "FK_8f310c8d15ce19c51d22057ecfa" FOREIGN KEY ("reviewed_by_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "notifications" ADD CONSTRAINT "FK_9a8a82462cab47c73d25f49261f" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "kyc_verifications" ADD CONSTRAINT "FK_1e23c7821d740b4881f773c39aa" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "housing_listings" ADD CONSTRAINT "FK_aa7cafc0e8f660f2669abdc03a0" FOREIGN KEY ("landlord_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "housing_listings" ADD CONSTRAINT "FK_1f5f4cdb66f7a9470d4d2790b88" FOREIGN KEY ("university_id") REFERENCES "universities"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
-        await queryRunner.query(`ALTER TABLE "fcm_tokens" ADD CONSTRAINT "FK_9fd867cabc75028a5625ce7b24c" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "favorites" ADD CONSTRAINT "FK_35a6b05ee3b624d0de01ee50593" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "favorites" ADD CONSTRAINT "FK_74e0699c35d78e39b229d64f34f" FOREIGN KEY ("listing_id") REFERENCES "listings"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "notification_preferences" ADD CONSTRAINT "FK_64c90edc7310c6be7c10c96f675" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "fcm_tokens" ADD CONSTRAINT "FK_9fd867cabc75028a5625ce7b24c" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "escrow_transactions" ADD CONSTRAINT "FK_d87d346e2538d3f6468adc88108" FOREIGN KEY ("buyer_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "escrow_transactions" ADD CONSTRAINT "FK_cfd9e57bc930b41520be3b61abd" FOREIGN KEY ("seller_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
         await queryRunner.query(`ALTER TABLE "escrow_transactions" ADD CONSTRAINT "FK_af409dc455ad23c30662d4cd7f8" FOREIGN KEY ("listing_id") REFERENCES "listings"("id") ON DELETE SET NULL ON UPDATE NO ACTION`);
@@ -301,16 +305,16 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`ALTER TABLE "escrow_transactions" DROP CONSTRAINT "FK_af409dc455ad23c30662d4cd7f8"`);
         await queryRunner.query(`ALTER TABLE "escrow_transactions" DROP CONSTRAINT "FK_cfd9e57bc930b41520be3b61abd"`);
         await queryRunner.query(`ALTER TABLE "escrow_transactions" DROP CONSTRAINT "FK_d87d346e2538d3f6468adc88108"`);
+        await queryRunner.query(`ALTER TABLE "fcm_tokens" DROP CONSTRAINT "FK_9fd867cabc75028a5625ce7b24c"`);
+        await queryRunner.query(`ALTER TABLE "notification_preferences" DROP CONSTRAINT "FK_64c90edc7310c6be7c10c96f675"`);
         await queryRunner.query(`ALTER TABLE "favorites" DROP CONSTRAINT "FK_74e0699c35d78e39b229d64f34f"`);
         await queryRunner.query(`ALTER TABLE "favorites" DROP CONSTRAINT "FK_35a6b05ee3b624d0de01ee50593"`);
-        await queryRunner.query(`ALTER TABLE "fcm_tokens" DROP CONSTRAINT "FK_9fd867cabc75028a5625ce7b24c"`);
         await queryRunner.query(`ALTER TABLE "housing_listings" DROP CONSTRAINT "FK_1f5f4cdb66f7a9470d4d2790b88"`);
         await queryRunner.query(`ALTER TABLE "housing_listings" DROP CONSTRAINT "FK_aa7cafc0e8f660f2669abdc03a0"`);
         await queryRunner.query(`ALTER TABLE "kyc_verifications" DROP CONSTRAINT "FK_1e23c7821d740b4881f773c39aa"`);
+        await queryRunner.query(`ALTER TABLE "notifications" DROP CONSTRAINT "FK_9a8a82462cab47c73d25f49261f"`);
         await queryRunner.query(`ALTER TABLE "moderation_queue" DROP CONSTRAINT "FK_8f310c8d15ce19c51d22057ecfa"`);
         await queryRunner.query(`ALTER TABLE "moderation_queue" DROP CONSTRAINT "FK_f49756b8897a7b3c22f652a8052"`);
-        await queryRunner.query(`ALTER TABLE "notification_preferences" DROP CONSTRAINT "FK_64c90edc7310c6be7c10c96f675"`);
-        await queryRunner.query(`ALTER TABLE "notifications" DROP CONSTRAINT "FK_9a8a82462cab47c73d25f49261f"`);
         await queryRunner.query(`ALTER TABLE "offers" DROP CONSTRAINT "FK_7fc60d9f105c297d03d857ffb0a"`);
         await queryRunner.query(`ALTER TABLE "offers" DROP CONSTRAINT "FK_8d62085256bc739c02d49a3c20e"`);
         await queryRunner.query(`ALTER TABLE "offers" DROP CONSTRAINT "FK_ff1371fdb408ba33d5d08a61629"`);
@@ -319,6 +323,7 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`ALTER TABLE "listings" DROP CONSTRAINT "FK_43a6dd5bf51bf13bb4b77d78e74"`);
         await queryRunner.query(`ALTER TABLE "listings" DROP CONSTRAINT "FK_4dee06aa17d4eb85e2f2f56732a"`);
         await queryRunner.query(`ALTER TABLE "listings" DROP CONSTRAINT "FK_6d2846ee6b337ce5225c8c7286b"`);
+        await queryRunner.query(`ALTER TABLE "password_resets" DROP CONSTRAINT "FK_f7a4c3bc48f24df007936d217be"`);
         await queryRunner.query(`ALTER TABLE "reviews" DROP CONSTRAINT "FK_a7b3e1afadd6b52f3b6864745e3"`);
         await queryRunner.query(`ALTER TABLE "reviews" DROP CONSTRAINT "FK_92e950a2513a79bb3fab273c92e"`);
         await queryRunner.query(`ALTER TABLE "roommate_interests" DROP CONSTRAINT "FK_cc272f97e3c975d305d0f429d5c"`);
@@ -395,16 +400,18 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`DROP INDEX "public"."IDX_d87d346e2538d3f6468adc8810"`);
         await queryRunner.query(`DROP TABLE "escrow_transactions"`);
         await queryRunner.query(`DROP TYPE "public"."escrow_transactions_status_enum"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_a0d13eb4f397f2e41f34d1d6b4"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_74e0699c35d78e39b229d64f34"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_35a6b05ee3b624d0de01ee5059"`);
-        await queryRunner.query(`DROP TABLE "favorites"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_3093d5ec2df919064f062c4ee2"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_c5678152794bb6ada963377ab7"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_639c0f1d38d97d778122d4f299"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_9fd867cabc75028a5625ce7b24"`);
         await queryRunner.query(`DROP TABLE "fcm_tokens"`);
         await queryRunner.query(`DROP TYPE "public"."fcm_tokens_platform_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_64c90edc7310c6be7c10c96f67"`);
+        await queryRunner.query(`DROP TABLE "notification_preferences"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_a0d13eb4f397f2e41f34d1d6b4"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_74e0699c35d78e39b229d64f34"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_35a6b05ee3b624d0de01ee5059"`);
+        await queryRunner.query(`DROP TABLE "favorites"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_26f8044313a9f7d2063c4ed7f7"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_cd5bee82c48856af657ea218d7"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_e692a68ff79c7a9565136900f4"`);
@@ -424,6 +431,13 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`DROP TABLE "kyc_verifications"`);
         await queryRunner.query(`DROP TYPE "public"."kyc_verifications_status_enum"`);
         await queryRunner.query(`DROP TYPE "public"."kyc_verifications_type_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_c24be561656e7219e2566f6774"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_f8119e95a07eeea356486ed134"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_8ba28344602d583583b9ea1a50"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_aef1c7aef3725068e5540f8f00"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_9a8a82462cab47c73d25f49261"`);
+        await queryRunner.query(`DROP TABLE "notifications"`);
+        await queryRunner.query(`DROP TYPE "public"."notifications_type_enum"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_324f74dc5a9d60462b68c851b8"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_6b01d4bf3f7efc7a0925f2d897"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_cabed68486a35b43cb6b75ac3b"`);
@@ -435,15 +449,6 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`DROP TYPE "public"."moderation_queue_category_enum"`);
         await queryRunner.query(`DROP TYPE "public"."moderation_queue_source_enum"`);
         await queryRunner.query(`DROP TYPE "public"."moderation_queue_contenttype_enum"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_64c90edc7310c6be7c10c96f67"`);
-        await queryRunner.query(`DROP TABLE "notification_preferences"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_c24be561656e7219e2566f6774"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_f8119e95a07eeea356486ed134"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_8ba28344602d583583b9ea1a50"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_aef1c7aef3725068e5540f8f00"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_9a8a82462cab47c73d25f49261"`);
-        await queryRunner.query(`DROP TABLE "notifications"`);
-        await queryRunner.query(`DROP TYPE "public"."notifications_type_enum"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_d23465c5503e88e9076bab9f43"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_11983781f9ceeb7392de6e38b0"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_434239966cb60e2dbc6178f993"`);
@@ -468,6 +473,9 @@ export class NewTables1769714527625 implements MigrationInterface {
         await queryRunner.query(`DROP TYPE "public"."listings_condition_enum"`);
         await queryRunner.query(`DROP TYPE "public"."listings_category_enum"`);
         await queryRunner.query(`DROP TYPE "public"."listings_type_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_9b34edd5264effbbc875c266a9"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_f7a4c3bc48f24df007936d217b"`);
+        await queryRunner.query(`DROP TABLE "password_resets"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_b932cf676feea1e77b00cdaa01"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_e31abbf251ed95100dc5bc396a"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_b9874034d37e2110f9c85646cb"`);
