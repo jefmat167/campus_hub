@@ -19,6 +19,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiExcludeEndpoint,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import {
@@ -350,6 +351,7 @@ export class AuthController {
 
   @Public()
   @Get('reset-password')
+  @ApiExcludeEndpoint()
   async showResetPasswordForm(
     @Query('token') token: string,
     @Res() res: Response,
@@ -390,6 +392,7 @@ export class AuthController {
    */
   @Public()
   @Post('reset-password')
+  @ApiExcludeEndpoint()
   @Throttle({ short: { limit: 5, ttl: 600000 } }) // 5 per 10 minutes
   async resetPassword(
     @Body('token') token: string,

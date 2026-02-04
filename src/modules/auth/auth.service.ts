@@ -178,8 +178,14 @@ export class AuthService {
     user.lastLoginAt = new Date();
     await this.userRepo.save(user);
 
+    // Reload user with relations for response
+    const userWithRelations = await this.userRepo.findOne({
+      where: { id: user.id },
+      relations: ['university', 'faculty', 'department'],
+    });
+
     const response: AuthResponse & { otpSent: boolean; emailSent: boolean; otp?: string } = {
-      user: this.sanitizeUser(user),
+      user: this.sanitizeUser(userWithRelations!),
       tokens,
       otpSent: !!otpResult.message,
       emailSent,
@@ -321,6 +327,7 @@ export class AuthService {
   async login(dto: LoginDto): Promise<AuthResponse> {
     const user = await this.userRepo.findOne({
       where: { email: dto.email.toLowerCase() },
+      relations: ['university', 'faculty', 'department'],
     });
 
     if (!user) {
@@ -574,8 +581,14 @@ export class AuthService {
     return cleaned;
   }
 
-  private sanitizeUser(user: User): Partial<User> {
-    const { passwordHash, refreshTokenHash, ...sanitized } = user;
-    return sanitized;
+  private sanitizeUser(user: User): Record<string, any> {
+    const { passwordHash, refreshTokenHash, university, faculty, department, ...sanitized } = user;
+
+    return {
+      ...sanitized,
+      university: university ? { id: university.id, name: university.name, code: university.code } : undefined,
+      faculty: faculty ? { id: faculty.id, name: faculty.name, code: faculty.code } : undefined,
+      department: department ? { id: department.id, name: department.name, code: department.code } : undefined,
+    };
   }
 }
