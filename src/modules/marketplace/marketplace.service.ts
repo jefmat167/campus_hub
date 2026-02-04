@@ -41,6 +41,47 @@ export class MarketplaceService {
     private readonly departmentRepository: Repository<Department>,
   ) { }
 
+  /**
+   * Sanitize seller object to remove sensitive data
+   */
+  private sanitizeSeller(seller: User): Record<string, any> {
+    if (!seller) return seller;
+
+    return {
+      id: seller.id,
+      fullName: seller.fullName,
+      email: seller.email,
+      phone: seller.phone,
+      profilePhotoUrl: seller.profilePhotoUrl,
+      verificationTier: seller.verificationTier,
+      sellerRating: seller.sellerRating,
+      sellerRatingCount: seller.sellerRatingCount,
+      faculty: seller.faculty
+        ? { id: seller.faculty.id, name: seller.faculty.name, code: seller.faculty.code }
+        : null,
+      department: seller.department
+        ? { id: seller.department.id, name: seller.department.name, code: seller.department.code }
+        : null,
+    };
+  }
+
+  /**
+   * Sanitize seller in a listing object
+   */
+  private sanitizeListingSeller(listing: Listing): Listing {
+    if (listing.seller) {
+      (listing as any).seller = this.sanitizeSeller(listing.seller);
+    }
+    return listing;
+  }
+
+  /**
+   * Sanitize sellers in an array of listings
+   */
+  private sanitizeListingsSellers(listings: Listing[]): Listing[] {
+    return listings.map((listing) => this.sanitizeListingSeller(listing));
+  }
+
   async createListing(userId: string, dto: CreateListingDto): Promise<Listing> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -176,7 +217,7 @@ export class MarketplaceService {
   async getListingById(listingId: string, userId?: string): Promise<Listing> {
     const listing = await this.listingRepository.findOne({
       where: { id: listingId },
-      relations: ['seller', 'images', 'university', 'faculty', 'department'],
+      relations: ['seller', 'seller.faculty', 'seller.department', 'images', 'university', 'faculty', 'department'],
     });
 
     if (!listing) {
@@ -191,7 +232,7 @@ export class MarketplaceService {
       (listing as any).isFavorited = !!favorite;
     }
 
-    return listing;
+    return this.sanitizeListingSeller(listing);
   }
 
   async getListingByIdAndIncrementViews(listingId: string, userId?: string): Promise<Listing> {
@@ -208,6 +249,8 @@ export class MarketplaceService {
     const qb = this.listingRepository
       .createQueryBuilder('listing')
       .leftJoinAndSelect('listing.seller', 'seller')
+      .leftJoinAndSelect('seller.faculty', 'sellerFaculty')
+      .leftJoinAndSelect('seller.department', 'sellerDepartment')
       .leftJoinAndSelect('listing.images', 'images')
       .leftJoinAndSelect('listing.university', 'university');
 
@@ -354,10 +397,13 @@ export class MarketplaceService {
       });
     }
 
+    // Sanitize seller data in all listings
+    const sanitizedListings = this.sanitizeListingsSellers(listings);
+
     const totalPages = Math.ceil(total / limit);
 
     return {
-      listings,
+      listings: sanitizedListings,
       total,
       page,
       limit,
@@ -548,7 +594,7 @@ export class MarketplaceService {
 
     const [favorites, total] = await this.favoriteRepository.findAndCount({
       where: { userId },
-      relations: ['listing', 'listing.seller', 'listing.images'],
+      relations: ['listing', 'listing.seller', 'listing.seller.faculty', 'listing.seller.department', 'listing.images'],
       order: { createdAt: 'DESC' },
       skip: offset,
       take: limit,
@@ -559,10 +605,13 @@ export class MarketplaceService {
       return f.listing;
     });
 
+    // Sanitize seller data in all listings
+    const sanitizedListings = this.sanitizeListingsSellers(listings);
+
     const totalPages = Math.ceil(total / limit);
 
     return {
-      listings,
+      listings: sanitizedListings,
       total,
       page,
       limit,

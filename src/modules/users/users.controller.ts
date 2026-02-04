@@ -27,7 +27,7 @@ import { User, VerificationTier } from '../../database/entities/user.entity';
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Get('me')
   @ApiOperation({
@@ -103,8 +103,7 @@ export class UsersController {
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard, TierGuard)
-  @MinTier(VerificationTier.TIER_0)
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Get public profile of another user',
     description: 'Returns the public profile of another user. Only accessible if the viewer is from the same university. Requires Tier 0 verification.',
