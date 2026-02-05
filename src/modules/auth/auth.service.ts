@@ -12,6 +12,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -22,6 +24,10 @@ import { SmsService } from '../sms/sms.service';
 import { UniversitiesService } from '../universities/universities.service';
 import { EmailService } from '../email/email.service';
 import { EmailVerificationType } from '../../database/entities/email-verification.entity';
+import {
+  AUTH_QUEUE_NAME,
+  AuthJobName,
+} from './interfaces/auth-jobs.interface';
 import {
   RegisterDto,
   LoginDto,
@@ -59,15 +65,22 @@ export class AuthService {
     private emailService: EmailService,
     private dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    @InjectQueue(AUTH_QUEUE_NAME) private authQueue: Queue,
   ) { }
 
   /**
-   * Register a new user
+   * Register a new user (Optimized)
    *
-   * New flow:
+   * Optimizations applied:
+   * 1. Parallelize bcrypt operations (password + refresh token hash)
+   * 2. Single user save with refresh token hash in transaction
+   * 3. No post-transaction reload - construct response from cached entity data
+   * 4. SMS and email moved to background queue (except dev mode SMS for mock OTP)
+   *
+   * Flow:
    * 1. Creates user with verificationTier = NONE
-   * 2. Sends OTP to phone
-   * 3. Sends verification email
+   * 2. Queues OTP to phone (sync in dev mode for mock OTP)
+   * 3. Queues verification email
    * 4. Returns tokens (user can browse but has limited access)
    */
   async register(dto: RegisterDto): Promise<AuthResponse & { otpSent: boolean; emailSent: boolean; otp?: string }> {
@@ -86,12 +99,13 @@ export class AuthService {
       throw new ConflictException('Email is already registered');
     }
 
-    // Validate university hierarchy
-    await this.universitiesService.validateUniversityHierarchy(
-      dto.universityId,
-      dto.facultyId,
-      dto.departmentId,
-    );
+    // Validate university hierarchy AND get entity data for response
+    const { university, faculty, department } =
+      await this.universitiesService.validateAndGetHierarchy(
+        dto.universityId,
+        dto.facultyId,
+        dto.departmentId,
+      );
 
     // Check for banned device
     if (dto.deviceId) {
@@ -104,8 +118,12 @@ export class AuthService {
       }
     }
 
-    // Hash password
-    const passwordHash = await bcrypt.hash(dto.password, 12);
+    // OPTIMIZATION: Parallelize password hash and refresh token hash
+    const refreshTokenJti = uuidv4();
+    const [passwordHash, refreshTokenHash] = await Promise.all([
+      bcrypt.hash(dto.password, 12),
+      bcrypt.hash(refreshTokenJti, 10),
+    ]);
 
     // Use transaction for user and wallet creation
     const queryRunner = this.dataSource.createQueryRunner();
@@ -115,7 +133,7 @@ export class AuthService {
     let user: User;
 
     try {
-      // Create user with verificationTier = NONE
+      // OPTIMIZATION: Create user WITH refresh token hash (single save)
       user = this.userRepo.create({
         phone: formattedPhone,
         phoneVerified: false,
@@ -130,6 +148,8 @@ export class AuthService {
         bio: dto.bio,
         deviceId: dto.deviceId,
         verificationTier: VerificationTier.NONE,
+        refreshTokenHash,
+        lastLoginAt: new Date(),
       });
 
       await queryRunner.manager.save(user);
@@ -149,51 +169,61 @@ export class AuthService {
       await queryRunner.release();
     }
 
-    // Send OTP to phone (outside transaction)
-    let otpResult: { message: string; otp?: string } = { message: '' };
-    try {
-      otpResult = await this.smsService.sendOtp(formattedPhone, 'registration');
-    } catch (error) {
-      this.logger.error(`Failed to send OTP during registration: ${error}`);
+    // Generate tokens using the pre-hashed refresh token JTI
+    const tokens = await this.generateTokensWithJti(user, refreshTokenJti);
+
+    // OPTIMIZATION: Queue SMS and email jobs (non-blocking)
+    let otpQueued = false;
+    let emailQueued = false;
+    let mockOtp: string | undefined;
+
+    const isDevelopment = this.configService.get<string>('NODE_ENV') === 'development';
+
+    // In development, call SMS synchronously to get mock OTP for response
+    if (isDevelopment) {
+      try {
+        const otpResult = await this.smsService.sendOtp(formattedPhone, 'registration');
+        otpQueued = true;
+        mockOtp = otpResult.otp;
+      } catch (error) {
+        this.logger.error(`Failed to send OTP during registration: ${error}`);
+      }
+    } else {
+      // In production, queue the SMS job
+      try {
+        await this.authQueue.add(
+          AuthJobName.SEND_OTP,
+          { phoneNumber: formattedPhone, purpose: 'registration' },
+          { attempts: 3, backoff: { type: 'exponential', delay: 1000 } },
+        );
+        otpQueued = true;
+      } catch (error) {
+        this.logger.error(`Failed to queue OTP job: ${error}`);
+      }
     }
 
-    // Send verification email (outside transaction)
-    let emailSent = false;
+    // Queue email job (always async, no data needed in response)
     try {
-      await this.emailService.sendVerificationEmail(
-        user.id,
-        email,
-        EmailVerificationType.PERSONAL,
+      await this.authQueue.add(
+        AuthJobName.SEND_VERIFICATION_EMAIL,
+        { userId: user.id, email, type: EmailVerificationType.PERSONAL },
+        { attempts: 3, backoff: { type: 'exponential', delay: 1000 } },
       );
-      emailSent = true;
+      emailQueued = true;
     } catch (error) {
-      this.logger.error(`Failed to send verification email during registration: ${error}`);
+      this.logger.error(`Failed to queue email job: ${error}`);
     }
 
-    // Generate tokens
-    const tokens = await this.generateTokens(user);
-
-    // Update user with refresh token hash
-    user.refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 10);
-    user.lastLoginAt = new Date();
-    await this.userRepo.save(user);
-
-    // Reload user with relations for response
-    const userWithRelations = await this.userRepo.findOne({
-      where: { id: user.id },
-      relations: ['university', 'faculty', 'department'],
-    });
-
+    // OPTIMIZATION: Build response without DB reload using cached entity data
     const response: AuthResponse & { otpSent: boolean; emailSent: boolean; otp?: string } = {
-      user: this.sanitizeUser(userWithRelations!),
+      user: this.sanitizeUserWithRelations(user, university, faculty, department),
       tokens,
-      otpSent: !!otpResult.message,
-      emailSent,
+      otpSent: otpQueued,
+      emailSent: emailQueued,
     };
 
-    // Include OTP in response only in development mode
-    if (otpResult.otp) {
-      response.otp = otpResult.otp;
+    if (mockOtp) {
+      response.otp = mockOtp;
     }
 
     return response;
@@ -567,6 +597,42 @@ export class AuthService {
     };
   }
 
+  /**
+   * Generate tokens using a pre-determined JTI for the refresh token.
+   * This allows us to hash the refresh token value before user creation
+   * for parallel bcrypt operations.
+   */
+  private async generateTokensWithJti(user: User, refreshTokenJti: string): Promise<TokenPair> {
+    const basePayload = {
+      sub: user.id,
+      email: user.email,
+      universityId: user.universityId,
+    };
+
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(
+        { ...basePayload, jti: uuidv4() },
+        {
+          secret: this.configService.get<string>('JWT_SECRET'),
+          expiresIn: this.configService.get('JWT_EXPIRES_IN', '15m') as string,
+        } as any,
+      ),
+      this.jwtService.signAsync(
+        { ...basePayload, jti: refreshTokenJti },
+        {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+          expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN', '7d') as string,
+        } as any,
+      ),
+    ]);
+
+    return {
+      accessToken,
+      refreshToken,
+      expiresIn: 900,
+    };
+  }
+
   private formatPhone(phone: string): string {
     let cleaned = phone.replace(/\D/g, '');
 
@@ -589,6 +655,26 @@ export class AuthService {
       university: university ? { id: university.id, name: university.name, code: university.code } : undefined,
       faculty: faculty ? { id: faculty.id, name: faculty.name, code: faculty.code } : undefined,
       department: department ? { id: department.id, name: department.name, code: department.code } : undefined,
+    };
+  }
+
+  /**
+   * Sanitize user with manually attached relation data.
+   * This avoids needing to reload user with JOINs after creation.
+   */
+  private sanitizeUserWithRelations(
+    user: User,
+    university: { id: string; name: string; code: string },
+    faculty: { id: string; name: string; code: string },
+    department: { id: string; name: string; code: string },
+  ): Record<string, any> {
+    const { passwordHash, refreshTokenHash, ...sanitized } = user;
+
+    return {
+      ...sanitized,
+      university: { id: university.id, name: university.name, code: university.code },
+      faculty: { id: faculty.id, name: faculty.name, code: faculty.code },
+      department: { id: department.id, name: department.name, code: department.code },
     };
   }
 }
