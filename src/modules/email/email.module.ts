@@ -32,7 +32,7 @@ import { join } from 'path';
           },
         },
         defaults: {
-          from: `"no_Reply" <${config.getOrThrow<string>('MAIL_FROM')}>`,
+          from: `"no_Reply" <onboarding@resend.dev>`,
         },
       }),
     })

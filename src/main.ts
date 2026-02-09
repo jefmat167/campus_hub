@@ -109,7 +109,7 @@ All responses follow this structure:
     .addTag('Verification', 'User verification and document submission')
     .addTag('Moderation', 'Content moderation and reports')
     .addTag('Health', 'Health check endpoints')
-    .addServer(`${configService.getOrThrow("API_SERVER")}`, 'Staging')
+    .addServer(`${configService.getOrThrow("API_SERVER")}`, 'test')
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
