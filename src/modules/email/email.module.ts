@@ -18,7 +18,7 @@ import { join } from 'path';
         transport: {
           host: config.getOrThrow<string>('MAIL_HOST'),
           port: config.getOrThrow<number>('MAIL_PORT'),
-          secure: config.getOrThrow<boolean>('MAIL_SECURE') ?? false,
+          secure: config.getOrThrow('MAIL_SECURE') === "true" ? true : false,
           auth: {
             user: config.getOrThrow<string>('MAIL_USER'),
             pass: config.getOrThrow<string>('MAIL_PASS'),
