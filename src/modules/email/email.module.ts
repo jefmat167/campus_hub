@@ -16,10 +16,9 @@ import { join } from 'path';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         transport: {
-          // host: config.getOrThrow<string>('MAIL_HOST'),
-          // port: config.getOrThrow<number>('MAIL_PORT'),
-          // secure: config.getOrThrow<boolean>('MAIL_SECURE') ?? false,
-          service: 'gmail',
+          host: config.getOrThrow<string>('MAIL_HOST'),
+          port: config.getOrThrow<number>('MAIL_PORT'),
+          secure: config.getOrThrow<boolean>('MAIL_SECURE') ?? false,
           auth: {
             user: config.getOrThrow<string>('MAIL_USER'),
             pass: config.getOrThrow<string>('MAIL_PASS'),
