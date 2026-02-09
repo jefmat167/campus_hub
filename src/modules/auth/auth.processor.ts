@@ -77,6 +77,8 @@ export class AuthProcessor extends WorkerHost {
         type,
       );
       this.logger.log(`Verification email sent successfully to ${email}`);
+      this.logger.log(`Verification email result`);
+      console.dir(result, { depth: null });
       return { sent: result.sent, message: result.message };
     } catch (error) {
       this.logger.error(
