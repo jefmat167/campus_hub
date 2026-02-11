@@ -3,8 +3,15 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { Request, Response, NextFunction } from 'express';
 import { join } from 'path';
+import { getQueueToken } from '@nestjs/bullmq';
+import { createBullBoard } from '@bull-board/api';
+import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
+import { ExpressAdapter } from '@bull-board/express';
+import { Queue } from 'bullmq';
 import { AppModule } from './app.module';
+import { QUEUE_NAMES } from './modules/bull-board/bull-board.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
@@ -128,11 +135,55 @@ All responses follow this structure:
     },
   });
 
+  // Bull Board - Queue Monitoring Dashboard
+  const serverAdapter = new ExpressAdapter();
+  serverAdapter.setBasePath('/admin/queues');
+
+  const queues = QUEUE_NAMES.map((name) => {
+    const queue = app.get<Queue>(getQueueToken(name));
+    return new BullMQAdapter(queue);
+  });
+
+  createBullBoard({
+    queues,
+    serverAdapter,
+  });
+
+  // Basic auth for queue dashboard in production
+  const isProduction = configService.get<string>('NODE_ENV') === 'production';
+  const bullBoardUser = configService.get<string>('BULL_BOARD_USER');
+  const bullBoardPassword = configService.get<string>('BULL_BOARD_PASSWORD');
+
+  if (isProduction && bullBoardUser && bullBoardPassword) {
+    app.use('/admin/queues', (req: Request, res: Response, next: NextFunction) => {
+      const authHeader = req.headers.authorization;
+
+      if (!authHeader || !authHeader.startsWith('Basic ')) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="Queue Dashboard"');
+        return res.status(401).send('Authentication required');
+      }
+
+      const base64Credentials = authHeader.split(' ')[1];
+      const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+      const [username, password] = credentials.split(':');
+
+      if (username === bullBoardUser && password === bullBoardPassword) {
+        return next();
+      }
+
+      res.setHeader('WWW-Authenticate', 'Basic realm="Queue Dashboard"');
+      return res.status(401).send('Invalid credentials');
+    });
+  }
+
+  app.use('/admin/queues', serverAdapter.getRouter());
+
   const port = configService.get<number>('PORT', 3000);
   await app.listen(port);
 
   console.log(`Application is running on: http://localhost:${port}/api/v1`);
   console.log(`API Documentation available at: http://localhost:${port}/docs`);
+  console.log(`Queue Dashboard available at: http://localhost:${port}/admin/queues`);
 }
 
 bootstrap();
