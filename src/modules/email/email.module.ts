@@ -1,43 +1,17 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
 import { EmailService } from './email.service';
+import { ResendService } from './resend.service';
 import { EmailVerification } from '../../database/entities/email-verification.entity';
 import { User } from '../../database/entities/user.entity';
-import { MailerModule } from '@nestjs-modules/mailer';
-import { EjsAdapter } from '@nestjs-modules/mailer/dist/adapters/ejs.adapter';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { join } from 'path';
 
 @Module({
   imports: [
+    ConfigModule,
     TypeOrmModule.forFeature([EmailVerification, User]),
-    MailerModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        transport: {
-          host: config.getOrThrow<string>('MAIL_HOST'),
-          port: config.getOrThrow<number>('MAIL_PORT'),
-          secure: config.getOrThrow('MAIL_SECURE') === "true" ? true : false,
-          auth: {
-            user: config.getOrThrow<string>('MAIL_USER'),
-            pass: config.getOrThrow<string>('MAIL_PASS'),
-          },
-        },
-        template: {
-          dir: join(__dirname, 'templates'),
-          adapter: new EjsAdapter(),
-          options: {
-            // strict: false
-          },
-        },
-        defaults: {
-          from: `"no_Reply" <onboarding@resend.dev>`,
-        },
-      }),
-    })
   ],
-  providers: [EmailService],
-  exports: [EmailService],
+  providers: [EmailService, ResendService],
+  exports: [EmailService, ResendService],
 })
-export class EmailModule { }
+export class EmailModule {}
