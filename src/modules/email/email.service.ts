@@ -8,7 +8,7 @@ import {
   EmailVerificationType,
 } from '../../database/entities/email-verification.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
-import { MailerService } from '@nestjs-modules/mailer';
+import { ResendService } from './resend.service';
 
 export interface SendVerificationEmailResult {
   sent: boolean;
@@ -21,24 +21,16 @@ export interface SendVerificationEmailResult {
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private readonly frontendUrl: string;
-  private readonly fromEmail: string;
-  private readonly isDevelopment: boolean;
 
   constructor(
     @InjectRepository(EmailVerification)
     private emailVerificationRepo: Repository<EmailVerification>,
     @InjectRepository(User)
     private userRepo: Repository<User>,
-    private readonly mailerService: MailerService,
+    private readonly resendService: ResendService,
     private configService: ConfigService,
   ) {
-    this.frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-    this.fromEmail = this.configService.get<string>(
-      'FROM_EMAIL',
-      'noreply@campushub.ng',
-    );
-    this.isDevelopment =
-      this.configService.get<string>('NODE_ENV') === 'development';
+    this.frontendUrl = this.configService.getOrThrow('FRONTEND_URL');
   }
 
   async sendVerificationEmail(
@@ -91,11 +83,22 @@ export class EmailService {
 
     await this.emailVerificationRepo.save(verification);
 
-    await this.sendEmail(email, type, verification.token, user.fullName);
+    const result = await this.sendVerificationEmailInternal(
+      email,
+      type,
+      verification.token,
+      user.fullName,
+    );
+
+    if (!result.success) {
+      this.logger.error(`Failed to send verification email: ${result.error}`);
+    }
 
     return {
-      sent: true,
-      message: `Verification email sent to ${email}`,
+      sent: result.success,
+      message: result.success
+        ? `Verification email sent to ${email}`
+        : `Failed to send email: ${result.error}`,
       remainingAttempts: verification.remainingResendAttempts,
       expiresAt: verification.expiresAt,
     };
@@ -210,7 +213,7 @@ export class EmailService {
     const user = await this.userRepo.findOne({ where: { id: userId } });
 
     // Send the email
-    await this.sendEmail(
+    const result = await this.sendVerificationEmailInternal(
       verification.email,
       type,
       verification.token,
@@ -218,8 +221,10 @@ export class EmailService {
     );
 
     return {
-      sent: true,
-      message: `Verification email resent to ${verification.email}`,
+      sent: result.success,
+      message: result.success
+        ? `Verification email resent to ${verification.email}`
+        : `Failed to send email: ${result.error}`,
       remainingAttempts: verification.remainingResendAttempts,
       expiresAt: verification.expiresAt,
     };
@@ -265,6 +270,29 @@ export class EmailService {
     };
   }
 
+  async sendPasswordResetEmail(
+    email: string,
+    token: string,
+    userName: string,
+  ): Promise<void> {
+    const resetUrl = `${this.frontendUrl}/auth/reset-password?token=${encodeURIComponent(token)}`;
+
+    const result = await this.resendService.sendEmail({
+      to: email,
+      subject: 'Reset your CampusHub password',
+      template: 'resetPassword',
+      context: {
+        resetUrl,
+        name: userName ?? null,
+      },
+    });
+
+    if (!result.success) {
+      this.logger.error(
+        `Failed to send password reset email to ${email}: ${result.error}`,
+      );
+    }
+  }
 
   private calculateExpiry(type: EmailVerificationType): Date {
     const now = new Date();
@@ -272,59 +300,26 @@ export class EmailService {
     return new Date(now.getTime() + hours * 60 * 60 * 1000);
   }
 
-  private async sendEmail(
+  private async sendVerificationEmailInternal(
     email: string,
     type: EmailVerificationType,
     token: string,
     userName: string,
-  ): Promise<void> {
+  ) {
     const verificationUrl = `${this.frontendUrl}/auth/verify-email?token=${encodeURIComponent(token)}`;
     const subject =
       type === EmailVerificationType.PERSONAL
         ? 'Verify your CampusHub email'
         : 'Verify your school email - CampusHub';
 
-    try {
-      await this.mailerService.sendMail({
-        to: email,
-        subject,
-        template: "verifyEmail",
-        context: {
-          verifyUrl: verificationUrl,
-          name: userName ?? null,
-        },
-      })
-    } catch (error) {
-      this.logger.error(
-        `Failed to send verification email to ${email}: ${error.message}`,
-        error.stack,
-      );
-    }
-  }
-
-  async sendPasswordResetEmail(
-    email: string,
-    token: string,
-    userName: string,
-  ): Promise<void> {
-    const resetUrl = `${this.frontendUrl}/auth/reset-password?token=${encodeURIComponent(token)}`;
-    const subject = 'Reset your CampusHub password';
-
-    try {
-      await this.mailerService.sendMail({
-        to: email,
-        subject,
-        template: 'resetPassword',
-        context: {
-          resetUrl,
-          name: userName ?? null,
-        },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to send password reset email to ${email}: ${error.message}`,
-        error.stack,
-      );
-    }
+    return this.resendService.sendEmail({
+      to: email,
+      subject,
+      template: 'verifyEmail',
+      context: {
+        verifyUrl: verificationUrl,
+        name: userName ?? null,
+      },
+    });
   }
 }
