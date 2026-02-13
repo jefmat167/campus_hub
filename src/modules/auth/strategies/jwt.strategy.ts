@@ -57,6 +57,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         'banExpiresAt',
         'profilePhotoUrl',
         'yearOfStudy',
+        'role'
       ],
     });
 

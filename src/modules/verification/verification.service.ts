@@ -31,7 +31,7 @@ export class VerificationService {
     @InjectRepository(VerificationDocument)
     private documentRepo: Repository<VerificationDocument>,
     private emailService: EmailService,
-  ) {}
+  ) { }
 
   // ============ Tier 1 Document Verification ============
 
@@ -130,7 +130,7 @@ export class VerificationService {
 
     return {
       message: schoolEmailVerificationSent
-        ? 'Documents submitted. Please verify your school email, then your documents will be reviewed.'
+        ? 'Documents submitted. A verification email has been sent to your school email address. Please verify your school email, then your documents will be reviewed.'
         : 'Documents submitted for review. You will be notified once reviewed.',
       documents,
       schoolEmailVerificationSent,

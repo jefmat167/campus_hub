@@ -155,8 +155,11 @@ export class AuthService {
       await queryRunner.manager.save(user);
 
       // Create wallet for user
+      // In development, seed wallet with ₦1,000,000 for testing
+      const isDev = this.configService.get<string>('NODE_ENV') === 'development';
       const wallet = this.walletRepo.create({
         userId: user.id,
+        balance: isDev ? 1000000 : 0,
       });
 
       await queryRunner.manager.save(wallet);
