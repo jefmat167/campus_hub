@@ -42,14 +42,12 @@ export class TierGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest();
     const user = request.user;
-    console.log("user => ", user);
 
     if (!user) {
       throw new ForbiddenException('User not authenticated');
     }
 
     const userTier = user.verificationTier || VerificationTier.NONE;
-    console.log("user tier here => ", userTier)
 
     if (!tierMeetsRequirement(userTier, requiredTier)) {
       const tierMessages: Record<VerificationTier, string> = {

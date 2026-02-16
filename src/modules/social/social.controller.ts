@@ -53,11 +53,16 @@ export class SocialController {
    * Get posts feed
    */
   @Get('posts')
+  @ApiQuery({ name: 'cursor', required: false, description: 'Pagination cursor' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Number of posts to return (default: 20)' })
+  @ApiQuery({ name: 'sort', required: false, enum: ['recent', 'trending'], description: 'Sort order (default: recent)' })
+  @ApiQuery({ name: 'filter', required: false, enum: ['polls'], description: 'Filter posts by type' })
   async getFeed(
     @CurrentUser() user: User,
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
     @Query('sort') sort?: 'recent' | 'trending',
+    @Query('filter') filter?: 'polls',
   ) {
     const { posts, nextCursor } = await this.socialService.getFeed(
       user.universityId,
@@ -67,6 +72,7 @@ export class SocialController {
         cursor,
         limit: Number(limit) || 20,
         sort: sort || 'recent',
+        pollsOnly: filter === 'polls',
       },
     );
 
@@ -281,7 +287,7 @@ export class SocialController {
     const isMyPost = post.authorId === currentUserId;
 
     return {
-      id: post._id,
+      id: post.id,
       anonymousId: post.anonymousId,
       isOP: isMyPost,
       visibility: post.visibility,
@@ -338,7 +344,7 @@ export class SocialController {
     const isMyComment = comment.authorId === currentUserId;
 
     return {
-      id: comment._id,
+      id: comment.id,
       postId: comment.postId,
       parentId: comment.parentId,
       anonymousId: comment.anonymousId,
