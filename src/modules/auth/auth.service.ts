@@ -399,6 +399,15 @@ export class AuthService {
   }
 
   async refreshTokens(userId: string, refreshToken: string): Promise<TokenPair> {
+    // Verify refresh token JWT (checks signature + expiration)
+    try {
+      this.jwtService.verify(refreshToken, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      });
+    } catch {
+      throw new UnauthorizedException('Refresh token expired or invalid');
+    }
+
     const user = await this.userRepo.findOne({
       where: { id: userId },
     });
@@ -407,7 +416,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    // Verify refresh token
+    // Verify refresh token matches stored hash
     const isRefreshTokenValid = await bcrypt.compare(refreshToken, user.refreshTokenHash);
 
     if (!isRefreshTokenValid) {

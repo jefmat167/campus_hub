@@ -28,28 +28,19 @@ export class UsersService {
   }
 
   /**
-   * Get user profile (sanitized for public view)
+   * Get user profile (sanitized, same format as auth/register response)
    */
-  async getProfile(userId: string): Promise<Partial<User> & { isVerifiedSeller: boolean }> {
+  async getProfile(userId: string): Promise<Record<string, any>> {
     const user = await this.findById(userId);
 
+    // Exclude sensitive fields and format relations (same as auth register response)
+    const { passwordHash, refreshTokenHash, university, faculty, department, ...sanitized } = user;
+
     return {
-      id: user.id,
-      fullName: user.fullName,
-      profilePhotoUrl: user.profilePhotoUrl,
-      bio: user.bio,
-      yearOfStudy: user.yearOfStudy,
-      university: user.university,
-      faculty: user.faculty,
-      department: user.department,
-      verificationTier: user.verificationTier,
-      sellerRating: user.sellerRating,
-      sellerRatingCount: user.sellerRatingCount,
-      buyerRating: user.buyerRating,
-      buyerRatingCount: user.buyerRatingCount,
-      completedTransactions: user.completedTransactions,
-      isVerifiedSeller: user.isVerifiedSeller,
-      createdAt: user.createdAt,
+      ...sanitized,
+      university: university ? { id: university.id, name: university.name, code: university.code } : undefined,
+      faculty: faculty ? { id: faculty.id, name: faculty.name, code: faculty.code } : undefined,
+      department: department ? { id: department.id, name: department.name, code: department.code } : undefined,
     };
   }
 
