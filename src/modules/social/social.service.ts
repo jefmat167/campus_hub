@@ -95,9 +95,10 @@ export class SocialService {
       cursor?: string;
       limit?: number;
       sort?: 'recent' | 'trending';
+      pollsOnly?: boolean;
     } = {},
   ): Promise<{ posts: Post[]; nextCursor: string | null }> {
-    const { cursor, limit = 20, sort = 'recent' } = options;
+    const { cursor, limit = 20, sort = 'recent', pollsOnly = false } = options;
 
     const queryBuilder = this.postRepository
       .createQueryBuilder('post')
@@ -126,6 +127,11 @@ export class SocialService {
     }
 
     queryBuilder.andWhere(`(${visibilityConditions.join(' OR ')})`, params);
+
+    // Filter for polls only
+    if (pollsOnly) {
+      queryBuilder.andWhere('post.poll IS NOT NULL');
+    }
 
     // Add cursor for pagination
     if (cursor) {
