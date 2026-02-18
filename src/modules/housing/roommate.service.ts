@@ -15,6 +15,7 @@ import {
   NoiseLevel,
   SleepSchedule,
 } from '../../database/entities/roommate.entity';
+import { User } from '../../database/entities/user.entity';
 import { CreateRoommateProfileDto, ExpressInterestDto } from './dto';
 
 @Injectable()
@@ -27,6 +28,59 @@ export class RoommateService {
     @InjectRepository(RoommateInterest)
     private interestRepo: Repository<RoommateInterest>,
   ) {}
+
+  /**
+   * Sanitize user object to remove sensitive data
+   */
+  private sanitizeUser(user: User): Record<string, any> {
+    if (!user) return user;
+
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      profilePhotoUrl: user.profilePhotoUrl,
+      verificationTier: user.verificationTier,
+    };
+  }
+
+  /**
+   * Sanitize user in a roommate profile
+   */
+  private sanitizeProfileUser(profile: RoommateProfile): RoommateProfile {
+    if (profile.user) {
+      (profile as any).user = this.sanitizeUser(profile.user);
+    }
+    return profile;
+  }
+
+  /**
+   * Sanitize users in an array of profiles
+   */
+  private sanitizeProfilesUsers(profiles: RoommateProfile[]): RoommateProfile[] {
+    return profiles.map((profile) => this.sanitizeProfileUser(profile));
+  }
+
+  /**
+   * Sanitize user in a roommate interest
+   */
+  private sanitizeInterestUsers(interest: RoommateInterest): RoommateInterest {
+    if ((interest as any).fromUser) {
+      (interest as any).fromUser = this.sanitizeUser((interest as any).fromUser);
+    }
+    if ((interest as any).toUser) {
+      (interest as any).toUser = this.sanitizeUser((interest as any).toUser);
+    }
+    return interest;
+  }
+
+  /**
+   * Sanitize users in an array of interests
+   */
+  private sanitizeInterestsUsers(interests: RoommateInterest[]): RoommateInterest[] {
+    return interests.map((interest) => this.sanitizeInterestUsers(interest));
+  }
 
   /**
    * Create or update roommate profile
@@ -75,7 +129,7 @@ export class RoommateService {
       throw new NotFoundException('Roommate profile not found. Please create one.');
     }
 
-    return profile;
+    return this.sanitizeProfileUser(profile);
   }
 
   /**
@@ -94,7 +148,7 @@ export class RoommateService {
     // Increment view count
     await this.profileRepo.increment({ id: profileId }, 'viewCount', 1);
 
-    return profile;
+    return this.sanitizeProfileUser(profile);
   }
 
   /**
@@ -164,7 +218,7 @@ export class RoommateService {
 
     // Calculate compatibility scores
     const matches = profiles.map((profile) => ({
-      profile,
+      profile: this.sanitizeProfileUser(profile),
       score: this.calculateCompatibility(myProfile, profile),
     }));
 
@@ -497,22 +551,26 @@ export class RoommateService {
     const where: Record<string, unknown> = { toUserId: userId };
     if (status) where.status = status;
 
-    return this.interestRepo.find({
+    const interests = await this.interestRepo.find({
       where,
       relations: ['fromUser'],
       order: { createdAt: 'DESC' },
     });
+
+    return this.sanitizeInterestsUsers(interests);
   }
 
   /**
    * Get sent interests
    */
   async getSentInterests(userId: string): Promise<RoommateInterest[]> {
-    return this.interestRepo.find({
+    const interests = await this.interestRepo.find({
       where: { fromUserId: userId },
       relations: ['toUser'],
       order: { createdAt: 'DESC' },
     });
+
+    return this.sanitizeInterestsUsers(interests);
   }
 
   /**

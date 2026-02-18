@@ -39,6 +39,106 @@ export class ModerationService {
     private readonly listingRepository: Repository<Listing>,
   ) {}
 
+  /**
+   * Sanitize user object to remove sensitive data
+   */
+  private sanitizeUser(user: User): Record<string, any> {
+    if (!user) return user;
+
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      profilePhotoUrl: user.profilePhotoUrl,
+      verificationTier: user.verificationTier,
+      isBanned: user.isBanned,
+      banReason: user.banReason,
+      bannedAt: user.bannedAt,
+      banExpiresAt: user.banExpiresAt,
+    };
+  }
+
+  /**
+   * Sanitize user relations in a report
+   */
+  private sanitizeReportUsers(report: Report): Report {
+    if ((report as any).reporter) {
+      (report as any).reporter = this.sanitizeUser((report as any).reporter);
+    }
+    if ((report as any).reportedUser) {
+      (report as any).reportedUser = this.sanitizeUser((report as any).reportedUser);
+    }
+    if ((report as any).reviewedBy) {
+      (report as any).reviewedBy = this.sanitizeUser((report as any).reviewedBy);
+    }
+    return report;
+  }
+
+  /**
+   * Sanitize user relations in an array of reports
+   */
+  private sanitizeReportsUsers(reports: Report[]): Report[] {
+    return reports.map((report) => this.sanitizeReportUsers(report));
+  }
+
+  /**
+   * Sanitize user relations in a ban appeal
+   */
+  private sanitizeAppealUsers(appeal: BanAppeal): BanAppeal {
+    if ((appeal as any).user) {
+      (appeal as any).user = this.sanitizeUser((appeal as any).user);
+    }
+    if ((appeal as any).reviewedBy) {
+      (appeal as any).reviewedBy = this.sanitizeUser((appeal as any).reviewedBy);
+    }
+    return appeal;
+  }
+
+  /**
+   * Sanitize user relations in an array of appeals
+   */
+  private sanitizeAppealsUsers(appeals: BanAppeal[]): BanAppeal[] {
+    return appeals.map((appeal) => this.sanitizeAppealUsers(appeal));
+  }
+
+  /**
+   * Sanitize user relations in a moderation queue item
+   */
+  private sanitizeQueueItemUsers(item: ModerationQueue): ModerationQueue {
+    if ((item as any).user) {
+      (item as any).user = this.sanitizeUser((item as any).user);
+    }
+    if ((item as any).reviewedBy) {
+      (item as any).reviewedBy = this.sanitizeUser((item as any).reviewedBy);
+    }
+    return item;
+  }
+
+  /**
+   * Sanitize user relations in an array of queue items
+   */
+  private sanitizeQueueItemsUsers(items: ModerationQueue[]): ModerationQueue[] {
+    return items.map((item) => this.sanitizeQueueItemUsers(item));
+  }
+
+  /**
+   * Sanitize user in a warning
+   */
+  private sanitizeWarningUsers(warning: Warning): Warning {
+    if ((warning as any).issuedBy) {
+      (warning as any).issuedBy = this.sanitizeUser((warning as any).issuedBy);
+    }
+    return warning;
+  }
+
+  /**
+   * Sanitize users in an array of warnings
+   */
+  private sanitizeWarningsUsers(warnings: Warning[]): Warning[] {
+    return warnings.map((warning) => this.sanitizeWarningUsers(warning));
+  }
+
   // ============ REPORTS ============
 
   async createReport(reporterId: string, dto: CreateReportDto): Promise<Report> {
@@ -125,7 +225,7 @@ export class ModerationService {
       .take(limit)
       .getManyAndCount();
 
-    return { reports, total };
+    return { reports: this.sanitizeReportsUsers(reports), total };
   }
 
   async getReport(id: string): Promise<Report> {
@@ -138,7 +238,7 @@ export class ModerationService {
       throw new NotFoundException('Report not found');
     }
 
-    return report;
+    return this.sanitizeReportUsers(report);
   }
 
   async reviewReport(
@@ -336,7 +436,7 @@ export class ModerationService {
       .take(limit)
       .getManyAndCount();
 
-    return { appeals, total };
+    return { appeals: this.sanitizeAppealsUsers(appeals), total };
   }
 
   async reviewBanAppeal(
@@ -398,11 +498,13 @@ export class ModerationService {
   }
 
   async getUserWarnings(userId: string): Promise<Warning[]> {
-    return this.warningRepository.find({
+    const warnings = await this.warningRepository.find({
       where: { userId, isActive: true },
       relations: ['issuedBy'],
       order: { createdAt: 'DESC' },
     });
+
+    return this.sanitizeWarningsUsers(warnings);
   }
 
   async acknowledgeWarning(warningId: string, userId: string): Promise<Warning> {
@@ -456,7 +558,7 @@ export class ModerationService {
       .take(limit)
       .getManyAndCount();
 
-    return { items, total };
+    return { items: this.sanitizeQueueItemsUsers(items), total };
   }
 
   async getQueueItem(id: string): Promise<ModerationQueue> {
@@ -469,7 +571,7 @@ export class ModerationService {
       throw new NotFoundException('Queue item not found');
     }
 
-    return item;
+    return this.sanitizeQueueItemUsers(item);
   }
 
   async reviewQueueItem(

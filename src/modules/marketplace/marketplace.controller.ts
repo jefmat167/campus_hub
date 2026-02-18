@@ -92,6 +92,8 @@ export class MarketplaceController {
   }
 
   @Get('listings')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({
     summary: 'Search listings',
     description: 'Search and filter marketplace listings. Public endpoint with optional authentication for personalized results.',
@@ -110,6 +112,7 @@ export class MarketplaceController {
               price: 450000,
               condition: 'like_new',
               imageUrls: ['https://storage.example.com/listings/img1.jpg'],
+              isFavorited: true,
               seller: {
                 id: '550e8400-e29b-41d4-a716-446655440001',
                 fullName: 'John Doe',
@@ -140,6 +143,8 @@ export class MarketplaceController {
   }
 
   @Get('listings/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get listing by ID',
     description: 'Retrieves a single listing by its ID. Increments view count.',
@@ -166,6 +171,7 @@ export class MarketplaceController {
           status: 'active',
           viewCount: 125,
           favoriteCount: 15,
+          isFavorited: true,
           deliveryOption: 'meetup',
           meetupLocation: 'Faculty of Science Building',
           imageUrls: [
