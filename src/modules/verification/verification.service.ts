@@ -33,6 +33,31 @@ export class VerificationService {
     private emailService: EmailService,
   ) { }
 
+  /**
+   * Sanitize user object to remove sensitive data
+   */
+  private sanitizeUser(user: User): Record<string, any> {
+    if (!user) return user;
+
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      profilePhotoUrl: user.profilePhotoUrl,
+      verificationTier: user.verificationTier,
+      tier1ReviewStatus: user.tier1ReviewStatus,
+      schoolEmail: user.schoolEmail,
+      schoolEmailVerified: user.schoolEmailVerified,
+      tier1RejectionCount: user.tier1RejectionCount,
+      tier1RejectionReason: user.tier1RejectionReason,
+      university: user.university,
+      faculty: user.faculty,
+      department: user.department,
+      createdAt: user.createdAt,
+    };
+  }
+
   // ============ Tier 1 Document Verification ============
 
   /**
@@ -255,7 +280,7 @@ export class VerificationService {
           where: { userId: user.id, status: DocumentStatus.PENDING },
           order: { type: 'ASC' },
         });
-        return { ...user, documents };
+        return { ...this.sanitizeUser(user), documents };
       }),
     );
 
@@ -266,7 +291,7 @@ export class VerificationService {
    * Get verification details for admin
    */
   async getVerificationDetails(userId: string): Promise<{
-    user: User;
+    user: Record<string, any>;
     documents: VerificationDocument[];
     schoolEmailStatus: {
       email: string | null;
@@ -288,7 +313,7 @@ export class VerificationService {
     });
 
     return {
-      user,
+      user: this.sanitizeUser(user),
       documents,
       schoolEmailStatus: {
         email: user.schoolEmail,
@@ -300,7 +325,7 @@ export class VerificationService {
   /**
    * Approve Tier 1 verification (Admin)
    */
-  async approveVerification(userId: string, adminId: string): Promise<User> {
+  async approveVerification(userId: string, adminId: string): Promise<Record<string, any>> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
 
     if (!user) {
@@ -341,9 +366,9 @@ export class VerificationService {
     user.tier1ApprovedBy = adminId;
     user.tier1RejectionReason = null;
 
-    await this.userRepo.save(user);
+    const savedUser = await this.userRepo.save(user);
 
-    return user;
+    return this.sanitizeUser(savedUser);
   }
 
   /**
@@ -353,7 +378,7 @@ export class VerificationService {
     userId: string,
     adminId: string,
     reason: string,
-  ): Promise<User> {
+  ): Promise<Record<string, any>> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
 
     if (!user) {
@@ -385,9 +410,9 @@ export class VerificationService {
     user.tier1RejectionCount += 1;
     user.tier1RejectionReason = reason;
 
-    await this.userRepo.save(user);
+    const savedUser = await this.userRepo.save(user);
 
-    return user;
+    return this.sanitizeUser(savedUser);
   }
 
   // ============ Legacy Methods (for backwards compatibility) ============

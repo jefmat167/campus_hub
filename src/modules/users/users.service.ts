@@ -83,7 +83,7 @@ export class UsersService {
   /**
    * Update user profile
    */
-  async updateProfile(userId: string, dto: UpdateUserDto): Promise<User> {
+  async updateProfile(userId: string, dto: UpdateUserDto): Promise<Record<string, any>> {
     const user = await this.findById(userId);
 
     // Update only provided fields
@@ -102,7 +102,8 @@ export class UsersService {
 
     await this.userRepo.save(user);
 
-    return user;
+    // Return sanitized profile
+    return this.getProfile(userId);
   }
 
   /**

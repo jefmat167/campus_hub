@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Brackets } from 'typeorm';
 import { Article, ArticleStatus } from '../../database/entities/article.entity';
 import { ArticleBookmark } from '../../database/entities/article-bookmark.entity';
+import { User } from '../../database/entities/user.entity';
 import {
   CreateArticleDto,
   UpdateArticleDto,
@@ -23,6 +24,37 @@ export class NewsService {
     @InjectRepository(ArticleBookmark)
     private readonly bookmarkRepository: Repository<ArticleBookmark>,
   ) {}
+
+  /**
+   * Sanitize author object to remove sensitive data
+   */
+  private sanitizeAuthor(author: User): Record<string, any> {
+    if (!author) return author;
+
+    return {
+      id: author.id,
+      fullName: author.fullName,
+      profilePhotoUrl: author.profilePhotoUrl,
+      verificationTier: author.verificationTier,
+    };
+  }
+
+  /**
+   * Sanitize author in an article
+   */
+  private sanitizeArticleAuthor(article: Article): Article {
+    if ((article as any).author) {
+      (article as any).author = this.sanitizeAuthor((article as any).author);
+    }
+    return article;
+  }
+
+  /**
+   * Sanitize authors in an array of articles
+   */
+  private sanitizeArticlesAuthors(articles: Article[]): Article[] {
+    return articles.map((article) => this.sanitizeArticleAuthor(article));
+  }
 
   // ============ ARTICLE CRUD ============
 
@@ -126,7 +158,7 @@ export class NewsService {
       (article as any).isBookmarked = !!bookmark;
     }
 
-    return article;
+    return this.sanitizeArticleAuthor(article);
   }
 
   async getArticleBySlug(slug: string, userId?: string): Promise<Article & { isBookmarked?: boolean }> {
@@ -151,7 +183,7 @@ export class NewsService {
       (article as any).isBookmarked = !!bookmark;
     }
 
-    return article;
+    return this.sanitizeArticleAuthor(article);
   }
 
   async getArticles(
@@ -228,7 +260,7 @@ export class NewsService {
     const totalPages = Math.ceil(total / limit);
 
     return {
-      articles,
+      articles: this.sanitizeArticlesAuthors(articles),
       total,
       page,
       limit,
@@ -239,7 +271,7 @@ export class NewsService {
   }
 
   async getFeaturedArticles(limit: number = 5): Promise<Article[]> {
-    return this.articleRepository.find({
+    const articles = await this.articleRepository.find({
       where: {
         status: ArticleStatus.PUBLISHED,
         isFeatured: true,
@@ -248,6 +280,8 @@ export class NewsService {
       order: { publishedAt: 'DESC' },
       take: limit,
     });
+
+    return this.sanitizeArticlesAuthors(articles);
   }
 
   async getArticlesByCategory(
@@ -319,7 +353,7 @@ export class NewsService {
     const totalPages = Math.ceil(total / limit);
 
     return {
-      articles,
+      articles: this.sanitizeArticlesAuthors(articles),
       total,
       page,
       limit,

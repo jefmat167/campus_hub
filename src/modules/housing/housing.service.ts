@@ -10,6 +10,7 @@ import {
   HousingListing,
   HousingStatus,
 } from '../../database/entities/housing.entity';
+import { User } from '../../database/entities/user.entity';
 import { CreateHousingDto, SearchHousingDto } from './dto';
 
 @Injectable()
@@ -20,6 +21,39 @@ export class HousingService {
     @InjectRepository(HousingListing)
     private housingRepo: Repository<HousingListing>,
   ) {}
+
+  /**
+   * Sanitize landlord object to remove sensitive data
+   */
+  private sanitizeLandlord(landlord: User): Record<string, any> {
+    if (!landlord) return landlord;
+
+    return {
+      id: landlord.id,
+      fullName: landlord.fullName,
+      email: landlord.email,
+      phone: landlord.phone,
+      profilePhotoUrl: landlord.profilePhotoUrl,
+      verificationTier: landlord.verificationTier,
+    };
+  }
+
+  /**
+   * Sanitize landlord in a housing listing
+   */
+  private sanitizeListingLandlord(listing: HousingListing): HousingListing {
+    if (listing.landlord) {
+      (listing as any).landlord = this.sanitizeLandlord(listing.landlord);
+    }
+    return listing;
+  }
+
+  /**
+   * Sanitize landlords in an array of listings
+   */
+  private sanitizeListingsLandlords(listings: HousingListing[]): HousingListing[] {
+    return listings.map((listing) => this.sanitizeListingLandlord(listing));
+  }
 
   /**
    * Create a new housing listing
@@ -87,7 +121,7 @@ export class HousingService {
     // Increment view count
     await this.housingRepo.increment({ id: listingId }, 'viewCount', 1);
 
-    return listing;
+    return this.sanitizeListingLandlord(listing);
   }
 
   /**
@@ -212,7 +246,7 @@ export class HousingService {
 
     const [listings, total] = await queryBuilder.getManyAndCount();
 
-    return { listings, total };
+    return { listings: this.sanitizeListingsLandlords(listings), total };
   }
 
   /**

@@ -23,6 +23,44 @@ export class ReviewsService {
     private readonly userRepository: Repository<User>,
   ) {}
 
+  /**
+   * Sanitize user object to remove sensitive data
+   */
+  private sanitizeUser(user: User): Record<string, any> {
+    if (!user) return user;
+
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      profilePhotoUrl: user.profilePhotoUrl,
+      verificationTier: user.verificationTier,
+      sellerRating: user.sellerRating,
+      sellerRatingCount: user.sellerRatingCount,
+      buyerRating: user.buyerRating,
+      buyerRatingCount: user.buyerRatingCount,
+    };
+  }
+
+  /**
+   * Sanitize user relations in a review
+   */
+  private sanitizeReviewUsers(review: Review): Review {
+    if ((review as any).reviewer) {
+      (review as any).reviewer = this.sanitizeUser((review as any).reviewer);
+    }
+    if ((review as any).reviewee) {
+      (review as any).reviewee = this.sanitizeUser((review as any).reviewee);
+    }
+    return review;
+  }
+
+  /**
+   * Sanitize user relations in an array of reviews
+   */
+  private sanitizeReviewsUsers(reviews: Review[]): Review[] {
+    return reviews.map((review) => this.sanitizeReviewUsers(review));
+  }
+
   async createReview(userId: string, dto: CreateReviewDto): Promise<Review> {
     // In this system, transactionId refers to an accepted offer
     // which represents a completed transaction
@@ -151,7 +189,7 @@ export class ReviewsService {
       throw new NotFoundException('Review not found');
     }
 
-    return review;
+    return this.sanitizeReviewUsers(review);
   }
 
   async getUserReviews(
@@ -208,7 +246,7 @@ export class ReviewsService {
     });
 
     return {
-      reviews,
+      reviews: this.sanitizeReviewsUsers(reviews),
       total,
       averageRating: avgResult.average ? parseFloat(avgResult.average) : 0,
       ratingDistribution,
@@ -230,16 +268,18 @@ export class ReviewsService {
       take: limit,
     });
 
-    return { reviews, total };
+    return { reviews: this.sanitizeReviewsUsers(reviews), total };
   }
 
   async getTransactionReviews(
     transactionId: string,
   ): Promise<Review[]> {
-    return this.reviewRepository.find({
+    const reviews = await this.reviewRepository.find({
       where: { transactionId },
       relations: ['reviewer', 'reviewee'],
     });
+
+    return this.sanitizeReviewsUsers(reviews);
   }
 
   async canReviewTransaction(
