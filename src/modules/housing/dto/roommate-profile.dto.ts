@@ -10,6 +10,7 @@ import {
   Min,
   Max,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   Gender,
@@ -276,4 +277,69 @@ export class ExpressInterestDto {
   @MaxLength(500)
   @IsOptional()
   message?: string;
+}
+
+export class SearchRoommateProfilesDto {
+  @ApiPropertyOptional({
+    description: 'Filter by gender',
+    enum: Gender,
+    example: Gender.MALE,
+  })
+  @IsEnum(Gender)
+  @IsOptional()
+  gender?: Gender;
+
+  @ApiPropertyOptional({
+    description: 'Minimum budget in Naira (filters profiles with budgetMax >= this value)',
+    example: 20000,
+    minimum: 0,
+  })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  @Transform(({ value }) => (value ? Number(value) : undefined))
+  minBudget?: number;
+
+  @ApiPropertyOptional({
+    description: 'Maximum budget in Naira (filters profiles with budgetMin <= this value)',
+    example: 50000,
+    minimum: 0,
+  })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  @Transform(({ value }) => (value ? Number(value) : undefined))
+  maxBudget?: number;
+
+  @ApiPropertyOptional({
+    description: 'Filter by preferred area (matches against preferredAreas array)',
+    example: 'Akoka',
+  })
+  @IsString()
+  @IsOptional()
+  area?: string;
+
+  @ApiPropertyOptional({
+    description: 'Page number for pagination',
+    example: 1,
+    minimum: 1,
+    default: 1,
+  })
+  @IsNumber()
+  @Min(1)
+  @IsOptional()
+  @Transform(({ value }) => (value ? Number(value) : 1))
+  page?: number;
+
+  @ApiPropertyOptional({
+    description: 'Number of items per page',
+    example: 20,
+    minimum: 1,
+    default: 20,
+  })
+  @IsNumber()
+  @Min(1)
+  @IsOptional()
+  @Transform(({ value }) => (value ? Number(value) : 20))
+  limit?: number;
 }

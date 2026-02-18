@@ -25,7 +25,11 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { RoommateService } from './roommate.service';
-import { CreateRoommateProfileDto, ExpressInterestDto } from './dto';
+import {
+  CreateRoommateProfileDto,
+  ExpressInterestDto,
+  SearchRoommateProfilesDto,
+} from './dto';
 
 @ApiTags('Roommates')
 @Controller('roommates')
@@ -112,6 +116,165 @@ export class RoommateController {
       success: true,
       data: profile,
       message: 'Roommate profile saved',
+    };
+  }
+
+  @Get()
+  @ApiOperation({
+    summary: 'Browse all roommate profiles',
+    description:
+      'Returns a paginated list of all active roommate profiles within the user\'s university. ' +
+      'Excludes the requesting user\'s profile. Supports filtering by gender, budget range, and area. ' +
+      'Results are sorted by newest first. Requires TIER_1 verification.',
+  })
+  @ApiQuery({
+    name: 'gender',
+    required: false,
+    description: 'Filter by gender',
+    enum: ['male', 'female'],
+    example: 'male',
+  })
+  @ApiQuery({
+    name: 'minBudget',
+    required: false,
+    description: 'Minimum budget in Naira (finds profiles with budgetMax >= this value)',
+    example: 20000,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'maxBudget',
+    required: false,
+    description: 'Maximum budget in Naira (finds profiles with budgetMin <= this value)',
+    example: 50000,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'area',
+    required: false,
+    description: 'Filter by preferred area (e.g., Akoka, Yaba)',
+    example: 'Akoka',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    description: 'Page number (default: 1)',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: 'Number of results per page (default: 20)',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Roommate profiles retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            userId: 'f1e2d3c4-b5a6-7890-abcd-ef1234567890',
+            status: 'active',
+            gender: 'male',
+            age: 22,
+            bio: '300 level Engineering student. Loves football and FIFA.',
+            budgetMin: 25000,
+            budgetMax: 40000,
+            preferredAreas: ['Akoka', 'Bariga'],
+            cleanliness: 'clean',
+            noiseLevel: 'moderate',
+            sleepSchedule: 'night_owl',
+            studyHabit: 'background_noise',
+            smokes: false,
+            drinks: false,
+            hasPets: false,
+            allowsVisitors: true,
+            interests: ['Football', 'Gaming', 'Movies'],
+            languages: ['English', 'Yoruba'],
+            viewCount: 45,
+            interestReceivedCount: 5,
+            createdAt: '2024-01-20T10:30:00.000Z',
+            updatedAt: '2024-01-20T10:30:00.000Z',
+            user: {
+              id: 'f1e2d3c4-b5a6-7890-abcd-ef1234567890',
+              fullName: 'Chinedu Okonkwo',
+              profilePhotoUrl: 'https://storage.example.com/avatars/chinedu.jpg',
+            },
+          },
+          {
+            id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+            userId: 'e2d3c4b5-a6f7-8901-bcde-f12345678901',
+            status: 'active',
+            gender: 'male',
+            age: 21,
+            bio: 'Final year Computer Science student. Quiet and studious.',
+            budgetMin: 20000,
+            budgetMax: 35000,
+            preferredAreas: ['Yaba', 'Akoka'],
+            cleanliness: 'very_clean',
+            noiseLevel: 'quiet',
+            sleepSchedule: 'normal',
+            studyHabit: 'quiet_studier',
+            smokes: false,
+            drinks: false,
+            hasPets: false,
+            allowsVisitors: false,
+            interests: ['Reading', 'Chess', 'Coding'],
+            languages: ['English'],
+            viewCount: 32,
+            interestReceivedCount: 3,
+            createdAt: '2024-01-18T14:20:00.000Z',
+            updatedAt: '2024-01-19T09:15:00.000Z',
+            user: {
+              id: 'e2d3c4b5-a6f7-8901-bcde-f12345678901',
+              fullName: 'Emeka Nwosu',
+              profilePhotoUrl: null,
+            },
+          },
+        ],
+        meta: {
+          total: 25,
+          page: 1,
+          limit: 20,
+          pages: 2,
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - JWT token missing or invalid',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - User does not meet TIER_1 verification requirement',
+  })
+  async getAllProfiles(
+    @CurrentUser() user: User,
+    @Query() dto: SearchRoommateProfilesDto,
+  ) {
+    const { profiles, total } = await this.roommateService.getAllProfiles(
+      user.id,
+      user.universityId,
+      dto,
+    );
+
+    const page = dto.page || 1;
+    const limit = dto.limit || 20;
+
+    return {
+      success: true,
+      data: profiles,
+      meta: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+      },
     };
   }
 
