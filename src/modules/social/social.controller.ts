@@ -17,7 +17,14 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { SocialService } from './social.service';
-import { CreatePostDto, CreateCommentDto, ReactToPostDto, VotePollDto } from './dto';
+import {
+  CreatePostDto,
+  CreateCommentDto,
+  ReactToPostDto,
+  VotePollDto,
+  FeedQueryDto,
+  FeedFilterType,
+} from './dto';
 
 @ApiTags('Social (Anonymous Forum)')
 @Controller('social')
@@ -53,26 +60,112 @@ export class SocialController {
    * Get posts feed
    */
   @Get('posts')
-  @ApiQuery({ name: 'cursor', required: false, description: 'Pagination cursor' })
-  @ApiQuery({ name: 'limit', required: false, description: 'Number of posts to return (default: 20)' })
-  @ApiQuery({ name: 'sort', required: false, enum: ['recent', 'trending'], description: 'Sort order (default: recent)' })
-  @ApiQuery({ name: 'filter', required: false, enum: ['polls'], description: 'Filter posts by type' })
-  async getFeed(
-    @CurrentUser() user: User,
-    @Query('cursor') cursor?: string,
-    @Query('limit') limit?: string,
-    @Query('sort') sort?: 'recent' | 'trending',
-    @Query('filter') filter?: 'polls',
-  ) {
+  @ApiOperation({
+    summary: 'Get posts feed',
+    description:
+      'Returns a paginated feed of anonymous posts within the user\'s university scope. ' +
+      'Posts are filtered based on visibility (university/faculty/department) and can be ' +
+      'sorted by recent or trending. Supports filtering by polls, images, visibility scope, and time period.',
+  })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    description: 'Pagination cursor (timestamp for recent sort, score for trending)',
+    example: '2024-01-20T10:30:00.000Z',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: 'Number of posts to return (default: 20)',
+    example: 20,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'sort',
+    required: false,
+    enum: ['recent', 'trending'],
+    description: 'Sort order - recent (newest first) or trending (by engagement score)',
+  })
+  @ApiQuery({
+    name: 'filter',
+    required: false,
+    enum: ['polls'],
+    description: 'Filter by post type (polls = only posts with polls)',
+  })
+  @ApiQuery({
+    name: 'visibility',
+    required: false,
+    enum: ['university', 'faculty', 'department'],
+    description: 'Filter by visibility scope (e.g., show only university-wide posts)',
+  })
+  @ApiQuery({
+    name: 'hasImages',
+    required: false,
+    type: Boolean,
+    description: 'Filter to show only posts with images (true) or without images (false)',
+    example: true,
+  })
+  @ApiQuery({
+    name: 'since',
+    required: false,
+    enum: ['24h', '7d', '30d'],
+    description: 'Filter posts by time period (24h = last day, 7d = last week, 30d = last month)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Posts retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            anonymousId: 'Anon-7F3A',
+            isOP: false,
+            visibility: 'university',
+            content: 'Does anyone know when the library closes during exam week?',
+            imageUrls: [],
+            poll: null,
+            reactions: [
+              { type: 'like', count: 12, hasReacted: false },
+              { type: 'love', count: 3, hasReacted: true },
+            ],
+            totalReactions: 15,
+            commentCount: 8,
+            viewCount: 124,
+            isEdited: false,
+            createdAt: '2024-01-20T10:30:00.000Z',
+            updatedAt: '2024-01-20T10:30:00.000Z',
+          },
+        ],
+        meta: {
+          nextCursor: '2024-01-19T15:20:00.000Z',
+          hasMore: true,
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - JWT token missing or invalid',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - User does not meet TIER_0 verification requirement',
+  })
+  async getFeed(@CurrentUser() user: User, @Query() query: FeedQueryDto) {
     const { posts, nextCursor } = await this.socialService.getFeed(
       user.universityId,
       user.facultyId,
       user.departmentId,
       {
-        cursor,
-        limit: Number(limit) || 20,
-        sort: sort || 'recent',
-        pollsOnly: filter === 'polls',
+        cursor: query.cursor,
+        limit: query.limit || 20,
+        sort: query.sort || 'recent',
+        pollsOnly: query.filter === FeedFilterType.POLLS,
+        visibility: query.visibility,
+        hasImages: query.hasImages,
+        since: query.since,
       },
     );
 

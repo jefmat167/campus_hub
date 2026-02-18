@@ -20,7 +20,13 @@ import {
   generateAnonymousId,
   generatePostContextId,
 } from '../../common/utils/anonymous-id.util';
-import { CreatePostDto, CreateCommentDto, ReactToPostDto, VotePollDto } from './dto';
+import {
+  CreatePostDto,
+  CreateCommentDto,
+  ReactToPostDto,
+  VotePollDto,
+  FeedTimePeriod,
+} from './dto';
 
 @Injectable()
 export class SocialService {
@@ -96,9 +102,20 @@ export class SocialService {
       limit?: number;
       sort?: 'recent' | 'trending';
       pollsOnly?: boolean;
+      visibility?: PostVisibility;
+      hasImages?: boolean;
+      since?: FeedTimePeriod;
     } = {},
   ): Promise<{ posts: Post[]; nextCursor: string | null }> {
-    const { cursor, limit = 20, sort = 'recent', pollsOnly = false } = options;
+    const {
+      cursor,
+      limit = 20,
+      sort = 'recent',
+      pollsOnly = false,
+      visibility,
+      hasImages,
+      since,
+    } = options;
 
     const queryBuilder = this.postRepository
       .createQueryBuilder('post')
@@ -107,30 +124,56 @@ export class SocialService {
       .andWhere('post.isHidden = false');
 
     // Build visibility filter
-    const visibilityConditions = ['post.visibility = :university'];
-    const params: Record<string, unknown> = { university: PostVisibility.UNIVERSITY };
+    if (visibility) {
+      // Filter to specific visibility scope
+      queryBuilder.andWhere('post.visibility = :visibility', { visibility });
 
-    if (facultyId) {
-      visibilityConditions.push(
-        '(post.visibility = :faculty AND post.facultyId = :facultyId)',
-      );
-      params.faculty = PostVisibility.FACULTY;
-      params.facultyId = facultyId;
+      // Ensure user has access to this scope
+      if (visibility === PostVisibility.FACULTY && facultyId) {
+        queryBuilder.andWhere('post.facultyId = :facultyId', { facultyId });
+      } else if (visibility === PostVisibility.DEPARTMENT && departmentId) {
+        queryBuilder.andWhere('post.departmentId = :departmentId', { departmentId });
+      }
+    } else {
+      // Default: show all posts user has access to
+      const visibilityConditions = ['post.visibility = :university'];
+      const params: Record<string, unknown> = { university: PostVisibility.UNIVERSITY };
+
+      if (facultyId) {
+        visibilityConditions.push(
+          '(post.visibility = :faculty AND post.facultyId = :facultyId)',
+        );
+        params.faculty = PostVisibility.FACULTY;
+        params.facultyId = facultyId;
+      }
+
+      if (departmentId) {
+        visibilityConditions.push(
+          '(post.visibility = :department AND post.departmentId = :departmentId)',
+        );
+        params.department = PostVisibility.DEPARTMENT;
+        params.departmentId = departmentId;
+      }
+
+      queryBuilder.andWhere(`(${visibilityConditions.join(' OR ')})`, params);
     }
-
-    if (departmentId) {
-      visibilityConditions.push(
-        '(post.visibility = :department AND post.departmentId = :departmentId)',
-      );
-      params.department = PostVisibility.DEPARTMENT;
-      params.departmentId = departmentId;
-    }
-
-    queryBuilder.andWhere(`(${visibilityConditions.join(' OR ')})`, params);
 
     // Filter for polls only
     if (pollsOnly) {
       queryBuilder.andWhere('post.poll IS NOT NULL');
+    }
+
+    // Filter by images
+    if (hasImages === true) {
+      queryBuilder.andWhere("post.imageUrls != '[]'::jsonb");
+    } else if (hasImages === false) {
+      queryBuilder.andWhere("post.imageUrls = '[]'::jsonb");
+    }
+
+    // Filter by time period
+    if (since) {
+      const sinceDate = this.getDateFromTimePeriod(since);
+      queryBuilder.andWhere('post.createdAt >= :sinceDate', { sinceDate });
     }
 
     // Add cursor for pagination
@@ -164,6 +207,23 @@ export class SocialService {
     }
 
     return { posts, nextCursor };
+  }
+
+  /**
+   * Convert time period to Date
+   */
+  private getDateFromTimePeriod(period: FeedTimePeriod): Date {
+    const now = Date.now();
+    switch (period) {
+      case FeedTimePeriod.DAY:
+        return new Date(now - 24 * 60 * 60 * 1000);
+      case FeedTimePeriod.WEEK:
+        return new Date(now - 7 * 24 * 60 * 60 * 1000);
+      case FeedTimePeriod.MONTH:
+        return new Date(now - 30 * 24 * 60 * 60 * 1000);
+      default:
+        return new Date(0);
+    }
   }
 
   /**
