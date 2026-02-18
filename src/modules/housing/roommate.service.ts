@@ -16,7 +16,11 @@ import {
   SleepSchedule,
 } from '../../database/entities/roommate.entity';
 import { User } from '../../database/entities/user.entity';
-import { CreateRoommateProfileDto, ExpressInterestDto } from './dto';
+import {
+  CreateRoommateProfileDto,
+  ExpressInterestDto,
+  SearchRoommateProfilesDto,
+} from './dto';
 
 @Injectable()
 export class RoommateService {
@@ -149,6 +153,62 @@ export class RoommateService {
     await this.profileRepo.increment({ id: profileId }, 'viewCount', 1);
 
     return this.sanitizeProfileUser(profile);
+  }
+
+  /**
+   * Get all active roommate profiles with filters
+   */
+  async getAllProfiles(
+    userId: string,
+    universityId: string,
+    dto: SearchRoommateProfilesDto,
+  ): Promise<{ profiles: RoommateProfile[]; total: number }> {
+    const page = dto.page || 1;
+    const limit = dto.limit || 20;
+
+    const queryBuilder = this.profileRepo
+      .createQueryBuilder('profile')
+      .leftJoinAndSelect('profile.user', 'user')
+      .where('profile.universityId = :universityId', { universityId })
+      .andWhere('profile.status = :status', { status: RoommateProfileStatus.ACTIVE })
+      .andWhere('profile.userId != :userId', { userId });
+
+    // Apply gender filter
+    if (dto.gender) {
+      queryBuilder.andWhere('profile.gender = :gender', { gender: dto.gender });
+    }
+
+    // Apply budget filters (find profiles with overlapping budget ranges)
+    if (dto.minBudget !== undefined) {
+      queryBuilder.andWhere('profile.budgetMax >= :minBudget', {
+        minBudget: dto.minBudget,
+      });
+    }
+    if (dto.maxBudget !== undefined) {
+      queryBuilder.andWhere('profile.budgetMin <= :maxBudget', {
+        maxBudget: dto.maxBudget,
+      });
+    }
+
+    // Apply area filter (search in preferredAreas JSONB array)
+    if (dto.area) {
+      queryBuilder.andWhere('profile.preferredAreas @> :area', {
+        area: JSON.stringify([dto.area]),
+      });
+    }
+
+    // Order by newest first
+    queryBuilder.orderBy('profile.createdAt', 'DESC');
+
+    const [profiles, total] = await queryBuilder
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      profiles: this.sanitizeProfilesUsers(profiles),
+      total,
+    };
   }
 
   /**
