@@ -13,6 +13,7 @@ import {
 } from '../../database/entities/conversation.entity';
 import { Listing } from '../../database/entities/listing.entity';
 import { HousingListing } from '../../database/entities/housing.entity';
+import { BuyRequest } from '../../database/entities/buy-request.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { tierMeetsRequirement } from '../../common/decorators/min-tier.decorator';
 import {
@@ -32,6 +33,8 @@ export class ChatService {
     private readonly listingRepository: Repository<Listing>,
     @InjectRepository(HousingListing)
     private readonly housingListingRepository: Repository<HousingListing>,
+    @InjectRepository(BuyRequest)
+    private readonly buyRequestRepository: Repository<BuyRequest>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
   ) {}
@@ -43,9 +46,10 @@ export class ChatService {
     const userId = user.id;
 
     // Validate mutual exclusivity
-    if (dto.listingId && dto.housingListingId) {
+    const listingTypes = [dto.listingId, dto.housingListingId, dto.buyRequestId].filter(Boolean);
+    if (listingTypes.length > 1) {
       throw new BadRequestException(
-        'Cannot specify both listingId and housingListingId',
+        'Cannot specify multiple listing types (listingId, housingListingId, buyRequestId)',
       );
     }
 
@@ -65,6 +69,7 @@ export class ChatService {
 
     let listingId: string | null = null;
     let housingListingId: string | null = null;
+    let buyRequestId: string | null = null;
     let conversationType: ConversationType = ConversationType.DIRECT_MESSAGE;
 
     // Handle marketplace listing inquiry
@@ -137,6 +142,37 @@ export class ChatService {
         return this.getConversationById(existingConversation.id, userId);
       }
     }
+    // Handle buy request inquiry (seller responding to a buy request)
+    else if (dto.buyRequestId) {
+      const buyRequest = await this.buyRequestRepository.findOne({
+        where: { id: dto.buyRequestId },
+      });
+
+      if (!buyRequest) {
+        throw new NotFoundException('Buy request not found');
+      }
+
+      // The recipient should be the requester (owner of buy request)
+      if (buyRequest.requesterId !== dto.recipientId) {
+        throw new BadRequestException('Recipient must be the buy request owner');
+      }
+
+      buyRequestId = dto.buyRequestId;
+      conversationType = ConversationType.BUY_REQUEST_INQUIRY;
+
+      // Check for existing conversation for this buy request
+      // buyerId represents the responder (seller) in BUY_REQUEST_INQUIRY
+      const existingConversation = await this.conversationRepository.findOne({
+        where: {
+          buyRequestId: dto.buyRequestId,
+          buyerId: userId,
+        },
+      });
+
+      if (existingConversation) {
+        return this.getConversationById(existingConversation.id, userId);
+      }
+    }
     // Handle direct message
     else {
       const existingConversation = await this.conversationRepository
@@ -164,7 +200,8 @@ export class ChatService {
       type: dto.type || conversationType,
       listingId,
       housingListingId,
-      buyerId: listingId || housingListingId ? userId : null,
+      buyRequestId,
+      buyerId: listingId || housingListingId || buyRequestId ? userId : null,
       participant1Id: userId,
       participant2Id: dto.recipientId,
     });
@@ -183,6 +220,8 @@ export class ChatService {
       type = ConversationType.LISTING_INQUIRY;
     } else if (dto.housingListingId) {
       type = ConversationType.HOUSING_INQUIRY;
+    } else if (dto.buyRequestId) {
+      type = ConversationType.BUY_REQUEST_INQUIRY;
     }
 
     // Create or get conversation
@@ -190,6 +229,7 @@ export class ChatService {
       type,
       listingId: dto.listingId,
       housingListingId: dto.housingListingId,
+      buyRequestId: dto.buyRequestId,
       recipientId: dto.recipientId,
     };
 
@@ -279,7 +319,7 @@ export class ChatService {
   ): Promise<Conversation> {
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId },
-      relations: ['participant1', 'participant2', 'listing', 'listing.images', 'housingListing'],
+      relations: ['participant1', 'participant2', 'listing', 'listing.images', 'housingListing', 'buyRequest'],
     });
 
     if (!conversation) {
