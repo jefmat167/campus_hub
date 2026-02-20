@@ -42,7 +42,7 @@ export class ChatController {
   @Post('conversations')
   @ApiOperation({
     summary: 'Create a new conversation',
-    description: 'Creates a new conversation with another user, optionally about a listing.',
+    description: 'Creates a new conversation with another user, optionally about a marketplace listing or housing listing. Housing inquiries require TIER_1 verification.',
   })
   @ApiResponse({
     status: 201,
@@ -66,12 +66,13 @@ export class ChatController {
   })
   @ApiResponse({ status: 400, description: 'Cannot create conversation with yourself' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'TIER_1 required for housing inquiries' })
   async createConversation(
     @CurrentUser() user: User,
     @Body() dto: CreateConversationDto,
   ) {
     const conversation = await this.chatService.createConversation(
-      user.id,
+      user,
       dto,
     );
     return {
@@ -84,7 +85,7 @@ export class ChatController {
   @Post('conversations/start')
   @ApiOperation({
     summary: 'Start conversation with initial message',
-    description: 'Creates a new conversation and sends the first message in one call.',
+    description: 'Creates a new conversation and sends the first message in one call. Housing inquiries require TIER_1 verification.',
   })
   @ApiResponse({
     status: 201,
@@ -113,12 +114,13 @@ export class ChatController {
   })
   @ApiResponse({ status: 400, description: 'Validation error' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'TIER_1 required for housing inquiries' })
   async startConversationWithMessage(
     @CurrentUser() user: User,
     @Body() dto: StartConversationWithMessageDto,
   ) {
     const result = await this.chatService.startConversationWithMessage(
-      user.id,
+      user,
       dto,
     );
     return {
