@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Conversation, Message } from '../../database/entities/conversation.entity';
 import { Listing } from '../../database/entities/listing.entity';
+import { HousingListing } from '../../database/entities/housing.entity';
 import { User } from '../../database/entities/user.entity';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
@@ -11,7 +12,7 @@ import { ChatGateway } from './chat.gateway';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Conversation, Message, Listing, User]),
+    TypeOrmModule.forFeature([Conversation, Message, Listing, HousingListing, User]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({

@@ -12,7 +12,9 @@ import {
   ConversationType,
 } from '../../database/entities/conversation.entity';
 import { Listing } from '../../database/entities/listing.entity';
-import { User } from '../../database/entities/user.entity';
+import { HousingListing } from '../../database/entities/housing.entity';
+import { User, VerificationTier } from '../../database/entities/user.entity';
+import { tierMeetsRequirement } from '../../common/decorators/min-tier.decorator';
 import {
   CreateConversationDto,
   SendMessageDto,
@@ -28,14 +30,25 @@ export class ChatService {
     private readonly messageRepository: Repository<Message>,
     @InjectRepository(Listing)
     private readonly listingRepository: Repository<Listing>,
+    @InjectRepository(HousingListing)
+    private readonly housingListingRepository: Repository<HousingListing>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
   ) {}
 
   async createConversation(
-    userId: string,
+    user: User,
     dto: CreateConversationDto,
   ): Promise<Conversation> {
+    const userId = user.id;
+
+    // Validate mutual exclusivity
+    if (dto.listingId && dto.housingListingId) {
+      throw new BadRequestException(
+        'Cannot specify both listingId and housingListingId',
+      );
+    }
+
     // Check if recipient exists
     const recipient = await this.userRepository.findOne({
       where: { id: dto.recipientId },
@@ -51,9 +64,10 @@ export class ChatService {
     }
 
     let listingId: string | null = null;
-    let sellerId: string | null = null;
+    let housingListingId: string | null = null;
+    let conversationType: ConversationType = ConversationType.DIRECT_MESSAGE;
 
-    // If this is a listing inquiry, validate the listing
+    // Handle marketplace listing inquiry
     if (dto.listingId) {
       const listing = await this.listingRepository.findOne({
         where: { id: dto.listingId },
@@ -69,7 +83,7 @@ export class ChatService {
       }
 
       listingId = dto.listingId;
-      sellerId = listing.sellerId;
+      conversationType = ConversationType.LISTING_INQUIRY;
 
       // Check for existing conversation for this listing
       const existingConversation = await this.conversationRepository.findOne({
@@ -82,8 +96,49 @@ export class ChatService {
       if (existingConversation) {
         return this.getConversationById(existingConversation.id, userId);
       }
-    } else {
-      // For direct messages, check if conversation already exists
+    }
+    // Handle housing listing inquiry
+    else if (dto.housingListingId) {
+      // Check tier requirement for housing inquiries
+      if (!tierMeetsRequirement(user.verificationTier, VerificationTier.TIER_1)) {
+        throw new ForbiddenException({
+          message: 'You must complete student verification to inquire about housing listings',
+          requiredTier: VerificationTier.TIER_1,
+          currentTier: user.verificationTier,
+          upgradeRequired: true,
+        });
+      }
+
+      const housingListing = await this.housingListingRepository.findOne({
+        where: { id: dto.housingListingId },
+      });
+
+      if (!housingListing) {
+        throw new NotFoundException('Housing listing not found');
+      }
+
+      // The recipient should be the landlord
+      if (housingListing.landlordId !== dto.recipientId) {
+        throw new BadRequestException('Recipient must be the housing listing landlord');
+      }
+
+      housingListingId = dto.housingListingId;
+      conversationType = ConversationType.HOUSING_INQUIRY;
+
+      // Check for existing conversation for this housing listing
+      const existingConversation = await this.conversationRepository.findOne({
+        where: {
+          housingListingId: dto.housingListingId,
+          buyerId: userId,
+        },
+      });
+
+      if (existingConversation) {
+        return this.getConversationById(existingConversation.id, userId);
+      }
+    }
+    // Handle direct message
+    else {
       const existingConversation = await this.conversationRepository
         .createQueryBuilder('conv')
         .where('conv.type = :type', { type: ConversationType.DIRECT_MESSAGE })
@@ -106,9 +161,10 @@ export class ChatService {
     }
 
     const conversation = this.conversationRepository.create({
-      type: dto.type || ConversationType.LISTING_INQUIRY,
+      type: dto.type || conversationType,
       listingId,
-      buyerId: listingId ? userId : null,
+      housingListingId,
+      buyerId: listingId || housingListingId ? userId : null,
       participant1Id: userId,
       participant2Id: dto.recipientId,
     });
@@ -118,29 +174,36 @@ export class ChatService {
   }
 
   async startConversationWithMessage(
-    userId: string,
+    user: User,
     dto: StartConversationWithMessageDto,
   ): Promise<{ conversation: Conversation; message: Message }> {
+    // Determine conversation type based on provided listing
+    let type: ConversationType = ConversationType.DIRECT_MESSAGE;
+    if (dto.listingId) {
+      type = ConversationType.LISTING_INQUIRY;
+    } else if (dto.housingListingId) {
+      type = ConversationType.HOUSING_INQUIRY;
+    }
+
     // Create or get conversation
     const conversationDto: CreateConversationDto = {
-      type: dto.listingId
-        ? ConversationType.LISTING_INQUIRY
-        : ConversationType.DIRECT_MESSAGE,
+      type,
       listingId: dto.listingId,
+      housingListingId: dto.housingListingId,
       recipientId: dto.recipientId,
     };
 
-    const conversation = await this.createConversation(userId, conversationDto);
+    const conversation = await this.createConversation(user, conversationDto);
 
     // Send the first message
-    const message = await this.sendMessage(userId, {
+    const message = await this.sendMessage(user.id, {
       conversationId: conversation.id,
       content: dto.content,
       attachments: dto.attachments,
     });
 
     return {
-      conversation: await this.getConversationById(conversation.id, userId),
+      conversation: await this.getConversationById(conversation.id, user.id),
       message,
     };
   }
@@ -216,7 +279,7 @@ export class ChatService {
   ): Promise<Conversation> {
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId },
-      relations: ['participant1', 'participant2', 'listing', 'listing.images'],
+      relations: ['participant1', 'participant2', 'listing', 'listing.images', 'housingListing'],
     });
 
     if (!conversation) {
@@ -264,6 +327,7 @@ export class ChatService {
       .leftJoinAndSelect('conv.participant2', 'p2')
       .leftJoinAndSelect('conv.listing', 'listing')
       .leftJoinAndSelect('listing.images', 'images')
+      .leftJoinAndSelect('conv.housingListing', 'housingListing')
       .where(
         new Brackets((qb) => {
           qb.where(

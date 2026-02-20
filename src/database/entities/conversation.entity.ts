@@ -12,14 +12,17 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Listing } from './listing.entity';
+import { HousingListing } from './housing.entity';
 
 export enum ConversationType {
   LISTING_INQUIRY = 'listing_inquiry',
+  HOUSING_INQUIRY = 'housing_inquiry',
   DIRECT_MESSAGE = 'direct_message',
 }
 
 @Entity('conversations')
 @Unique(['listingId', 'buyerId']) // One conversation per buyer per listing
+@Unique(['housingListingId', 'buyerId']) // One conversation per buyer per housing listing
 @Index(['participant1Id', 'updatedAt'])
 @Index(['participant2Id', 'updatedAt'])
 export class Conversation {
@@ -33,7 +36,7 @@ export class Conversation {
   })
   type: ConversationType;
 
-  // For listing inquiries
+  // For marketplace listing inquiries
   @Column({ type: 'uuid', name: 'listing_id', nullable: true })
   @Index()
   listingId: string | null;
@@ -42,7 +45,16 @@ export class Conversation {
   @JoinColumn({ name: 'listing_id' })
   listing: Listing | null;
 
-  // Buyer (the one who initiated)
+  // For housing listing inquiries
+  @Column({ type: 'uuid', name: 'housing_listing_id', nullable: true })
+  @Index()
+  housingListingId: string | null;
+
+  @ManyToOne(() => HousingListing, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'housing_listing_id' })
+  housingListing: HousingListing | null;
+
+  // Buyer/Inquirer (the one who initiated)
   @Column({ type: 'uuid', name: 'buyer_id', nullable: true })
   buyerId: string | null;
 
