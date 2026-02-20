@@ -1,12 +1,14 @@
 import {
   Controller,
   Get,
+  Param,
   Query,
   UseGuards,
   ParseIntPipe,
+  ParseUUIDPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
@@ -68,6 +70,35 @@ export class WalletController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
     return this.walletService.getTransactions(userId, page, Math.min(limit, 50));
+  }
+
+  @Get('transactions/:id')
+  @ApiOperation({ summary: 'Get transaction by ID' })
+  @ApiParam({ name: 'id', description: 'Transaction UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Transaction details',
+    schema: {
+      example: {
+        id: 'uuid',
+        type: 'DEPOSIT',
+        amount: 5000,
+        status: 'COMPLETED',
+        reference: 'FUND_123456',
+        externalReference: 'PAY_abc123',
+        balanceBefore: 20000,
+        balanceAfter: 25000,
+        metadata: null,
+        createdAt: '2024-01-15T10:00:00Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Transaction not found' })
+  async getTransactionById(
+    @CurrentUser('id') userId: string,
+    @Param('id', ParseUUIDPipe) transactionId: string,
+  ) {
+    return this.walletService.getTransactionById(userId, transactionId);
   }
 
   @Get()
