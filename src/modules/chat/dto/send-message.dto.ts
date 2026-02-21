@@ -45,23 +45,23 @@ export class SendMessageDto {
 
 export class StartConversationWithMessageDto {
   @ApiPropertyOptional({
-    description: 'UUID of the marketplace listing (mutually exclusive with housingListingId)',
+    description: 'UUID of the marketplace listing (mutually exclusive with other listing types)',
     example: '550e8400-e29b-41d4-a716-446655440000',
     format: 'uuid',
   })
   @IsUUID()
   @IsOptional()
-  @ValidateIf((o) => !o.housingListingId)
+  @ValidateIf((o) => !o.housingListingId && !o.buyRequestId && !o.roommateProfileId)
   listingId?: string;
 
   @ApiPropertyOptional({
-    description: 'UUID of the housing listing (mutually exclusive with listingId). Requires TIER_1.',
+    description: 'UUID of the housing listing (mutually exclusive with other listing types). Requires TIER_1.',
     example: '550e8400-e29b-41d4-a716-446655440000',
     format: 'uuid',
   })
   @IsUUID()
   @IsOptional()
-  @ValidateIf((o) => !o.listingId && !o.buyRequestId)
+  @ValidateIf((o) => !o.listingId && !o.buyRequestId && !o.roommateProfileId)
   housingListingId?: string;
 
   @ApiPropertyOptional({
@@ -71,8 +71,18 @@ export class StartConversationWithMessageDto {
   })
   @IsUUID()
   @IsOptional()
-  @ValidateIf((o) => !o.listingId && !o.housingListingId)
+  @ValidateIf((o) => !o.listingId && !o.housingListingId && !o.roommateProfileId)
   buyRequestId?: string;
+
+  @ApiPropertyOptional({
+    description: 'UUID of a roommate profile (for inquiring about a potential roommate). Requires TIER_1 and same university.',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    format: 'uuid',
+  })
+  @IsUUID()
+  @IsOptional()
+  @ValidateIf((o) => !o.listingId && !o.housingListingId && !o.buyRequestId)
+  roommateProfileId?: string;
 
   @ApiProperty({
     description: 'UUID of the user to message',

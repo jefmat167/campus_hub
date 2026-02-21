@@ -6,6 +6,7 @@ import { Conversation, Message } from '../../database/entities/conversation.enti
 import { Listing } from '../../database/entities/listing.entity';
 import { HousingListing } from '../../database/entities/housing.entity';
 import { BuyRequest } from '../../database/entities/buy-request.entity';
+import { RoommateProfile } from '../../database/entities/roommate.entity';
 import { User } from '../../database/entities/user.entity';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
@@ -13,7 +14,7 @@ import { ChatGateway } from './chat.gateway';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Conversation, Message, Listing, HousingListing, BuyRequest, User]),
+    TypeOrmModule.forFeature([Conversation, Message, Listing, HousingListing, BuyRequest, RoommateProfile, User]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
