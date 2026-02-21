@@ -14,11 +14,13 @@ import { User } from './user.entity';
 import { Listing } from './listing.entity';
 import { HousingListing } from './housing.entity';
 import { BuyRequest } from './buy-request.entity';
+import { RoommateProfile } from './roommate.entity';
 
 export enum ConversationType {
   LISTING_INQUIRY = 'listing_inquiry',
   HOUSING_INQUIRY = 'housing_inquiry',
   BUY_REQUEST_INQUIRY = 'buy_request_inquiry',
+  ROOMMATE_INQUIRY = 'roommate_inquiry',
   DIRECT_MESSAGE = 'direct_message',
 }
 
@@ -26,6 +28,7 @@ export enum ConversationType {
 @Unique(['listingId', 'buyerId']) // One conversation per buyer per listing
 @Unique(['housingListingId', 'buyerId']) // One conversation per buyer per housing listing
 @Unique(['buyRequestId', 'buyerId']) // One conversation per responder per buy request
+@Unique(['roommateProfileId', 'buyerId']) // One conversation per inquirer per roommate profile
 @Index(['participant1Id', 'updatedAt'])
 @Index(['participant2Id', 'updatedAt'])
 export class Conversation {
@@ -65,6 +68,15 @@ export class Conversation {
   @ManyToOne(() => BuyRequest, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'buy_request_id' })
   buyRequest: BuyRequest | null;
+
+  // For roommate profile inquiries
+  @Column({ type: 'uuid', name: 'roommate_profile_id', nullable: true })
+  @Index()
+  roommateProfileId: string | null;
+
+  @ManyToOne(() => RoommateProfile, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'roommate_profile_id' })
+  roommateProfile: RoommateProfile | null;
 
   // Buyer/Inquirer (the one who initiated)
   @Column({ type: 'uuid', name: 'buyer_id', nullable: true })

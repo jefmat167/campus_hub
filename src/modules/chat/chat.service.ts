@@ -14,6 +14,7 @@ import {
 import { Listing } from '../../database/entities/listing.entity';
 import { HousingListing } from '../../database/entities/housing.entity';
 import { BuyRequest } from '../../database/entities/buy-request.entity';
+import { RoommateProfile, RoommateProfileStatus } from '../../database/entities/roommate.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { tierMeetsRequirement } from '../../common/decorators/min-tier.decorator';
 import {
@@ -35,6 +36,8 @@ export class ChatService {
     private readonly housingListingRepository: Repository<HousingListing>,
     @InjectRepository(BuyRequest)
     private readonly buyRequestRepository: Repository<BuyRequest>,
+    @InjectRepository(RoommateProfile)
+    private readonly roommateProfileRepository: Repository<RoommateProfile>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
   ) {}
@@ -46,10 +49,10 @@ export class ChatService {
     const userId = user.id;
 
     // Validate mutual exclusivity
-    const listingTypes = [dto.listingId, dto.housingListingId, dto.buyRequestId].filter(Boolean);
+    const listingTypes = [dto.listingId, dto.housingListingId, dto.buyRequestId, dto.roommateProfileId].filter(Boolean);
     if (listingTypes.length > 1) {
       throw new BadRequestException(
-        'Cannot specify multiple listing types (listingId, housingListingId, buyRequestId)',
+        'Cannot specify multiple listing types (listingId, housingListingId, buyRequestId, roommateProfileId)',
       );
     }
 
@@ -70,6 +73,7 @@ export class ChatService {
     let listingId: string | null = null;
     let housingListingId: string | null = null;
     let buyRequestId: string | null = null;
+    let roommateProfileId: string | null = null;
     let conversationType: ConversationType = ConversationType.DIRECT_MESSAGE;
 
     // Handle marketplace listing inquiry
@@ -173,6 +177,56 @@ export class ChatService {
         return this.getConversationById(existingConversation.id, userId);
       }
     }
+    // Handle roommate profile inquiry
+    else if (dto.roommateProfileId) {
+      // Check tier requirement for roommate inquiries
+      if (!tierMeetsRequirement(user.verificationTier, VerificationTier.TIER_1)) {
+        throw new ForbiddenException({
+          message: 'You must complete student verification to inquire about roommate profiles',
+          requiredTier: VerificationTier.TIER_1,
+          currentTier: user.verificationTier,
+          upgradeRequired: true,
+        });
+      }
+
+      const roommateProfile = await this.roommateProfileRepository.findOne({
+        where: { id: dto.roommateProfileId },
+      });
+
+      if (!roommateProfile) {
+        throw new NotFoundException('Roommate profile not found');
+      }
+
+      // Check profile is active
+      if (roommateProfile.status !== RoommateProfileStatus.ACTIVE) {
+        throw new BadRequestException('Roommate profile is not active');
+      }
+
+      // Check same university
+      if (roommateProfile.universityId !== user.universityId) {
+        throw new ForbiddenException('You can only inquire about roommate profiles within your university');
+      }
+
+      // The recipient should be the profile owner
+      if (roommateProfile.userId !== dto.recipientId) {
+        throw new BadRequestException('Recipient must be the roommate profile owner');
+      }
+
+      roommateProfileId = dto.roommateProfileId;
+      conversationType = ConversationType.ROOMMATE_INQUIRY;
+
+      // Check for existing conversation for this roommate profile
+      const existingConversation = await this.conversationRepository.findOne({
+        where: {
+          roommateProfileId: dto.roommateProfileId,
+          buyerId: userId,
+        },
+      });
+
+      if (existingConversation) {
+        return this.getConversationById(existingConversation.id, userId);
+      }
+    }
     // Handle direct message
     else {
       const existingConversation = await this.conversationRepository
@@ -201,7 +255,8 @@ export class ChatService {
       listingId,
       housingListingId,
       buyRequestId,
-      buyerId: listingId || housingListingId || buyRequestId ? userId : null,
+      roommateProfileId,
+      buyerId: listingId || housingListingId || buyRequestId || roommateProfileId ? userId : null,
       participant1Id: userId,
       participant2Id: dto.recipientId,
     });
@@ -222,6 +277,8 @@ export class ChatService {
       type = ConversationType.HOUSING_INQUIRY;
     } else if (dto.buyRequestId) {
       type = ConversationType.BUY_REQUEST_INQUIRY;
+    } else if (dto.roommateProfileId) {
+      type = ConversationType.ROOMMATE_INQUIRY;
     }
 
     // Create or get conversation
@@ -230,6 +287,7 @@ export class ChatService {
       listingId: dto.listingId,
       housingListingId: dto.housingListingId,
       buyRequestId: dto.buyRequestId,
+      roommateProfileId: dto.roommateProfileId,
       recipientId: dto.recipientId,
     };
 
@@ -319,7 +377,7 @@ export class ChatService {
   ): Promise<Conversation> {
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId },
-      relations: ['participant1', 'participant2', 'listing', 'listing.images', 'housingListing', 'buyRequest'],
+      relations: ['participant1', 'participant2', 'listing', 'listing.images', 'housingListing', 'buyRequest', 'roommateProfile'],
     });
 
     if (!conversation) {
