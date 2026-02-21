@@ -34,8 +34,18 @@ export class CreateConversationDto {
   })
   @IsUUID()
   @IsOptional()
-  @ValidateIf((o) => !o.listingId)
+  @ValidateIf((o) => !o.listingId && !o.buyRequestId)
   housingListingId?: string;
+
+  @ApiPropertyOptional({
+    description: 'UUID of a buy request (for sellers responding to a buy request)',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    format: 'uuid',
+  })
+  @IsUUID()
+  @IsOptional()
+  @ValidateIf((o) => !o.listingId && !o.housingListingId)
+  buyRequestId?: string;
 
   @ApiProperty({
     description: 'UUID of the user to start conversation with',

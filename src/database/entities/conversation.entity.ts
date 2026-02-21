@@ -13,16 +13,19 @@ import {
 import { User } from './user.entity';
 import { Listing } from './listing.entity';
 import { HousingListing } from './housing.entity';
+import { BuyRequest } from './buy-request.entity';
 
 export enum ConversationType {
   LISTING_INQUIRY = 'listing_inquiry',
   HOUSING_INQUIRY = 'housing_inquiry',
+  BUY_REQUEST_INQUIRY = 'buy_request_inquiry',
   DIRECT_MESSAGE = 'direct_message',
 }
 
 @Entity('conversations')
 @Unique(['listingId', 'buyerId']) // One conversation per buyer per listing
 @Unique(['housingListingId', 'buyerId']) // One conversation per buyer per housing listing
+@Unique(['buyRequestId', 'buyerId']) // One conversation per responder per buy request
 @Index(['participant1Id', 'updatedAt'])
 @Index(['participant2Id', 'updatedAt'])
 export class Conversation {
@@ -53,6 +56,15 @@ export class Conversation {
   @ManyToOne(() => HousingListing, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'housing_listing_id' })
   housingListing: HousingListing | null;
+
+  // For buy request inquiries (seller responding to a buy request)
+  @Column({ type: 'uuid', name: 'buy_request_id', nullable: true })
+  @Index()
+  buyRequestId: string | null;
+
+  @ManyToOne(() => BuyRequest, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'buy_request_id' })
+  buyRequest: BuyRequest | null;
 
   // Buyer/Inquirer (the one who initiated)
   @Column({ type: 'uuid', name: 'buyer_id', nullable: true })

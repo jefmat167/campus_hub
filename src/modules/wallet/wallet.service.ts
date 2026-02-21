@@ -489,6 +489,26 @@ export class WalletService {
   }
 
   /**
+   * Get transaction by ID (must belong to user's wallet)
+   */
+  async getTransactionById(
+    userId: string,
+    transactionId: string,
+  ): Promise<WalletTransaction> {
+    const wallet = await this.getWallet(userId);
+
+    const transaction = await this.transactionRepo.findOne({
+      where: { id: transactionId, walletId: wallet.id },
+    });
+
+    if (!transaction) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    return transaction;
+  }
+
+  /**
    * Get transaction by reference
    */
   async getTransactionByReference(reference: string): Promise<WalletTransaction | null> {
