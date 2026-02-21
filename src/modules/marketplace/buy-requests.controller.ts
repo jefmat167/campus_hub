@@ -21,7 +21,6 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
@@ -37,7 +36,7 @@ import {
 @ApiTags('Marketplace - Buy Requests')
 @Controller('marketplace/requests')
 export class BuyRequestsController {
-  constructor(private readonly buyRequestsService: BuyRequestsService) {}
+  constructor(private readonly buyRequestsService: BuyRequestsService) { }
 
   @Post()
   @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
@@ -96,7 +95,7 @@ export class BuyRequestsController {
   }
 
   @Get()
-  @UseGuards(OptionalJwtAuthGuard)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Search buy requests',
@@ -208,7 +207,7 @@ export class BuyRequestsController {
   }
 
   @Get(':id')
-  @UseGuards(OptionalJwtAuthGuard)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get buy request by ID',
