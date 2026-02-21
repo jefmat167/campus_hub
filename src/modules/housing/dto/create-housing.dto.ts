@@ -17,6 +17,7 @@ import {
   HousingType,
   FurnishingStatus,
   GenderPreference,
+  PaymentFrequency,
 } from '../../../database/entities/housing.entity';
 
 export class CreateHousingDto {
@@ -51,23 +52,21 @@ export class CreateHousingDto {
   type: HousingType;
 
   @ApiProperty({
-    description: 'Monthly rent in Naira',
-    example: 35000,
+    description: 'Rent price in Naira (amount per payment frequency)',
+    example: 400000,
     minimum: 1000,
   })
   @IsNumber()
   @Min(1000)
-  pricePerMonth: number;
+  price: number;
 
-  @ApiPropertyOptional({
-    description: 'Yearly rent in Naira (if different from monthly × 12)',
-    example: 400000,
-    minimum: 0,
+  @ApiProperty({
+    description: 'How frequently rent payments are made',
+    enum: PaymentFrequency,
+    example: PaymentFrequency.YEARLY,
   })
-  @IsNumber()
-  @Min(0)
-  @IsOptional()
-  pricePerYear?: number;
+  @IsEnum(PaymentFrequency)
+  paymentFrequency: PaymentFrequency;
 
   @ApiPropertyOptional({
     description: 'Refundable caution/security deposit in Naira',
