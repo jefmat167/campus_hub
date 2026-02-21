@@ -172,10 +172,10 @@ export class HousingService {
 
     // Price range filter
     if (minPrice !== undefined) {
-      queryBuilder.andWhere('housing.pricePerMonth >= :minPrice', { minPrice });
+      queryBuilder.andWhere('housing.price >= :minPrice', { minPrice });
     }
     if (maxPrice !== undefined) {
-      queryBuilder.andWhere('housing.pricePerMonth <= :maxPrice', { maxPrice });
+      queryBuilder.andWhere('housing.price <= :maxPrice', { maxPrice });
     }
 
     // Area filter
@@ -227,10 +227,10 @@ export class HousingService {
     // Sorting
     switch (sortBy) {
       case 'price_asc':
-        queryBuilder.orderBy('housing.pricePerMonth', 'ASC');
+        queryBuilder.orderBy('housing.price', 'ASC');
         break;
       case 'price_desc':
-        queryBuilder.orderBy('housing.pricePerMonth', 'DESC');
+        queryBuilder.orderBy('housing.price', 'DESC');
         break;
       case 'popular':
         queryBuilder.orderBy('housing.viewCount', 'DESC');

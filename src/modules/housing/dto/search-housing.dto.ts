@@ -33,7 +33,7 @@ export class SearchHousingDto {
   type?: HousingType;
 
   @ApiPropertyOptional({
-    description: 'Minimum monthly rent in Naira',
+    description: 'Minimum rent price in Naira',
     example: 20000,
     minimum: 0,
   })
@@ -44,7 +44,7 @@ export class SearchHousingDto {
   minPrice?: number;
 
   @ApiPropertyOptional({
-    description: 'Maximum monthly rent in Naira',
+    description: 'Maximum rent price in Naira',
     example: 50000,
     minimum: 0,
   })

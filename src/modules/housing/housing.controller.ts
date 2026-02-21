@@ -39,7 +39,7 @@ export class HousingController {
 
   @Post()
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('pricePerMonth', {
+  @TierAmountLimit('price', {
     [VerificationTier.TIER_1]: 50000,
     [VerificationTier.TIER_2]: null, // unlimited
   })
@@ -47,7 +47,7 @@ export class HousingController {
     summary: 'Create a new housing listing',
     description:
       'Creates a new housing listing for rent. Requires TIER_1 verification. ' +
-      'TIER_1 users are limited to listings with maximum ₦50,000/month rent. ' +
+      'TIER_1 users are limited to listings with maximum ₦50,000 rent. ' +
       'TIER_2 users have no price limit. Listings are scoped to the user\'s university.',
   })
   @ApiResponse({
@@ -64,8 +64,8 @@ export class HousingController {
           description: 'Well-maintained self-contain apartment with 24/7 water supply, prepaid meter, and excellent security. Located 5 minutes walk from the main gate.',
           type: 'self_contain',
           status: 'available',
-          pricePerMonth: 35000,
-          pricePerYear: 400000,
+          price: 400000,
+          paymentFrequency: 'yearly',
           cautionFee: 35000,
           agentFee: 17500,
           address: '15 University Road, Akoka, Lagos',
@@ -152,7 +152,8 @@ export class HousingController {
             description: 'Well-maintained self-contain apartment with 24/7 water supply...',
             type: 'self_contain',
             status: 'available',
-            pricePerMonth: 35000,
+            price: 400000,
+            paymentFrequency: 'yearly',
             cautionFee: 35000,
             address: '15 University Road, Akoka, Lagos',
             area: 'Akoka',
@@ -174,7 +175,8 @@ export class HousingController {
             description: 'Clean and comfortable room in a 3-bedroom flat shared with 2 other female students...',
             type: 'room',
             status: 'available',
-            pricePerMonth: 25000,
+            price: 25000,
+            paymentFrequency: 'monthly',
             cautionFee: 25000,
             address: '8 Iwaya Road, Yaba, Lagos',
             area: 'Yaba',
@@ -263,7 +265,8 @@ export class HousingController {
             title: 'Spacious Self-Contain Near UNILAG Main Gate',
             type: 'self_contain',
             status: 'available',
-            pricePerMonth: 35000,
+            price: 400000,
+            paymentFrequency: 'yearly',
             area: 'Akoka',
             bedrooms: 1,
             bathrooms: 1,
@@ -278,7 +281,8 @@ export class HousingController {
             title: '2 Bedroom Flat in Bariga',
             type: 'flat',
             status: 'rented',
-            pricePerMonth: 80000,
+            price: 960000,
+            paymentFrequency: 'yearly',
             area: 'Bariga',
             bedrooms: 2,
             bathrooms: 2,
@@ -355,8 +359,8 @@ export class HousingController {
           description: 'Well-maintained self-contain apartment with 24/7 water supply, prepaid meter, and excellent security. Located 5 minutes walk from the main gate. Perfect for students who value privacy and convenience.',
           type: 'self_contain',
           status: 'available',
-          pricePerMonth: 35000,
-          pricePerYear: 400000,
+          price: 400000,
+          paymentFrequency: 'yearly',
           cautionFee: 35000,
           agentFee: 17500,
           address: '15 University Road, Akoka, Lagos',
@@ -447,7 +451,8 @@ export class HousingController {
           title: 'Spacious Self-Contain Near UNILAG Main Gate - Updated Price!',
           type: 'self_contain',
           status: 'available',
-          pricePerMonth: 32000,
+          price: 380000,
+          paymentFrequency: 'yearly',
           cautionFee: 32000,
           address: '15 University Road, Akoka, Lagos',
           area: 'Akoka',
@@ -521,7 +526,8 @@ export class HousingController {
           title: 'Spacious Self-Contain Near UNILAG Main Gate',
           type: 'self_contain',
           status: 'rented',
-          pricePerMonth: 35000,
+          price: 400000,
+          paymentFrequency: 'yearly',
           area: 'Akoka',
           updatedAt: '2024-01-25T11:00:00.000Z',
         },
@@ -584,7 +590,8 @@ export class HousingController {
           title: 'Spacious Self-Contain Near UNILAG Main Gate',
           type: 'self_contain',
           status: 'paused',
-          pricePerMonth: 35000,
+          price: 400000,
+          paymentFrequency: 'yearly',
           area: 'Akoka',
           updatedAt: '2024-01-25T11:30:00.000Z',
         },
@@ -647,7 +654,8 @@ export class HousingController {
           title: 'Spacious Self-Contain Near UNILAG Main Gate',
           type: 'self_contain',
           status: 'available',
-          pricePerMonth: 35000,
+          price: 400000,
+          paymentFrequency: 'yearly',
           area: 'Akoka',
           updatedAt: '2024-01-26T08:00:00.000Z',
         },

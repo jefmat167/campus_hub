@@ -40,11 +40,17 @@ export enum GenderPreference {
   ANY = 'any',
 }
 
+export enum PaymentFrequency {
+  MONTHLY = 'monthly',
+  QUARTERLY = 'quarterly',
+  YEARLY = 'yearly',
+}
+
 @Entity('housing_listings')
 @Index(['universityId', 'status', 'createdAt'])
 @Index(['universityId', 'type', 'status'])
 @Index(['landlordId', 'status'])
-@Index(['pricePerMonth', 'status'])
+@Index(['price', 'status'])
 export class HousingListing {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -87,10 +93,13 @@ export class HousingListing {
   status: HousingStatus;
 
   @Column({ type: 'decimal', precision: 12, scale: 2 })
-  pricePerMonth: number;
+  price: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
-  pricePerYear: number | null;
+  @Column({
+    type: 'enum',
+    enum: PaymentFrequency,
+  })
+  paymentFrequency: PaymentFrequency;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
   cautionFee: number | null; // Security deposit
