@@ -53,7 +53,7 @@ export interface PaystackAccountVerifyResponse {
 @Injectable()
 export class PaystackService {
   private readonly logger = new Logger(PaystackService.name);
-  private readonly baseUrl = 'https://api.paystack.co';
+  private readonly baseUrl: string;
   private readonly secretKey: string;
   private readonly isConfigured: boolean;
 
@@ -61,7 +61,8 @@ export class PaystackService {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.secretKey = this.configService.get<string>('PAYSTACK_SECRET_KEY') || '';
+    this.secretKey = this.configService.getOrThrow<string>('PAYSTACK_SECRET_KEY');
+    this.baseUrl = this.configService.getOrThrow<string>('PAYSTACK_BASE_URL')
     this.isConfigured = !!this.secretKey;
 
     if (!this.isConfigured) {

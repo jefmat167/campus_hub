@@ -85,7 +85,6 @@ export class PaymentController {
       },
     },
   })
-
   async initializeFunding(
     @CurrentUser() user: User,
     @Body() dto: InitializeFundingDto,

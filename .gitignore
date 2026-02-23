@@ -3,7 +3,7 @@ node_modules/
 
 # Build output
 dist/
-migrations/
+# migrations/
 
 # Environment files
 .env
