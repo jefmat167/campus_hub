@@ -294,6 +294,74 @@ export class EmailService {
     }
   }
 
+  /**
+   * Send account deletion scheduled confirmation email
+   */
+  async sendAccountDeletionScheduledEmail(
+    email: string,
+    fullName: string,
+    scheduledDeletionAt: Date,
+  ): Promise<void> {
+    const formattedDate = scheduledDeletionAt.toLocaleDateString('en-NG', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    const result = await this.resendService.sendEmail({
+      to: email,
+      subject: 'Your CampusHub account is scheduled for deletion',
+      template: 'accountDeletionScheduled',
+      context: {
+        name: fullName ?? 'User',
+        deletionDate: formattedDate,
+        gracePeriodDays: 30,
+      },
+    });
+
+    if (!result.success) {
+      this.logger.error(
+        `Failed to send account deletion scheduled email to ${email}: ${result.error}`,
+      );
+    }
+  }
+
+  /**
+   * Send account deletion reminder email (3 days before)
+   */
+  async sendAccountDeletionReminderEmail(
+    email: string,
+    fullName: string,
+    scheduledDeletionAt: Date,
+    daysRemaining: number,
+  ): Promise<void> {
+    const formattedDate = scheduledDeletionAt.toLocaleDateString('en-NG', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    const result = await this.resendService.sendEmail({
+      to: email,
+      subject: `Your CampusHub account will be deleted in ${daysRemaining} days`,
+      template: 'accountDeletionReminder',
+      context: {
+        name: fullName ?? 'User',
+        deletionDate: formattedDate,
+        daysRemaining,
+        loginUrl: `${this.frontendUrl}/auth/login`,
+      },
+    });
+
+    if (!result.success) {
+      this.logger.error(
+        `Failed to send account deletion reminder email to ${email}: ${result.error}`,
+      );
+    }
+  }
+
   private calculateExpiry(type: EmailVerificationType): Date {
     const now = new Date();
     const hours = type === EmailVerificationType.PERSONAL ? 1 : 2;

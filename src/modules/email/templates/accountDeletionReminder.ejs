@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Account Deletion Reminder</title>
+  </head>
+  <body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
+    <table width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; padding: 20px; border-radius: 8px;">
+      <tr>
+        <td>
+          <h2 style="color: #dc2626;">Account Deletion Reminder</h2>
+
+          <% if (name) { %>
+            <p style="color: #555555;">Hi <%= name %>,</p>
+          <% } %>
+
+          <p style="color: #555555;">
+            This is a reminder that your CampusHub account is scheduled to be <strong>permanently deleted</strong> in:
+          </p>
+
+          <p style="text-align: center; margin: 20px 0;">
+            <span style="
+              display: inline-block;
+              padding: 15px 30px;
+              background-color: #dc2626;
+              color: #ffffff;
+              font-size: 24px;
+              font-weight: bold;
+              border-radius: 8px;
+            ">
+              <%= daysRemaining %> days
+            </span>
+          </p>
+
+          <p style="color: #555555; text-align: center;">
+            Deletion date: <strong><%= deletionDate %></strong>
+          </p>
+
+          <p style="color: #555555;">
+            If you want to keep your account, simply log in before the deletion date:
+          </p>
+
+          <p style="text-align: center; margin: 30px 0;">
+            <a href="<%= loginUrl %>"
+               style="
+                 display: inline-block;
+                 padding: 12px 24px;
+                 background-color: #2563eb;
+                 color: #ffffff;
+                 text-decoration: none;
+                 border-radius: 4px;
+                 font-weight: bold;
+               ">
+              Log in to cancel deletion
+            </a>
+          </p>
+
+          <p style="color: #999999; font-size: 12px;">
+            If you still want to delete your account, no action is needed. Your account will be permanently deleted on <%= deletionDate %>.
+          </p>
+
+          <p style="color: #999999; font-size: 12px;">
+            If the button does not work, copy and paste the following link into your browser:<br />
+            <a href="<%= loginUrl %>" style="color: #2563eb; word-break: break-all;"><%= loginUrl %></a>
+          </p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

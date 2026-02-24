@@ -28,6 +28,7 @@ import {
   VerifyPaymentDto,
   AddBankAccountDto,
   InitiateWithdrawalDto,
+  VerifyAccountDto,
 } from './dto';
 
 @ApiTags('Payment')
@@ -65,6 +66,43 @@ export class PaymentController {
     return {
       success: true,
       data: banks,
+    };
+  }
+
+  @Post('verify-account')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify bank account number' })
+  @ApiResponse({
+    status: 200,
+    description: 'Account verified successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          accountNumber: '0123456789',
+          accountName: 'JOHN DOE',
+          bankCode: '058',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid bank account details',
+  })
+  async verifyAccount(@Body() dto: VerifyAccountDto) {
+    const accountDetails = await this.paystackService.verifyBankAccount(
+      dto.accountNumber,
+      dto.bankCode,
+    );
+
+    return {
+      success: true,
+      data: {
+        accountNumber: dto.accountNumber,
+        accountName: accountDetails.account_name,
+        bankCode: dto.bankCode,
+      },
     };
   }
 

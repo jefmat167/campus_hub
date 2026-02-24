@@ -16,6 +16,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
 import { SmsModule } from '../sms/sms.module';
 import { UniversitiesModule } from '../universities/universities.module';
 import { EmailModule } from '../email/email.module';
+import { UsersModule } from '../users/users.module';
 import { AUTH_QUEUE_NAME } from './interfaces/auth-jobs.interface';
 
 @Module({
@@ -38,6 +39,7 @@ import { AUTH_QUEUE_NAME } from './interfaces/auth-jobs.interface';
     SmsModule,
     UniversitiesModule,
     EmailModule,
+    UsersModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, AuthProcessor, JwtStrategy, JwtRefreshStrategy],

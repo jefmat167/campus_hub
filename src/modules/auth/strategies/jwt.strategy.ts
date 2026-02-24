@@ -55,6 +55,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         'verificationTier',
         'isBanned',
         'banExpiresAt',
+        'isDeleted',
+        'isDeactivated',
         'profilePhotoUrl',
         'yearOfStudy',
         'role'
@@ -63,6 +65,16 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     if (!user) {
       throw new UnauthorizedException('User not found');
+    }
+
+    // Check if user account is deleted
+    if (user.isDeleted) {
+      throw new UnauthorizedException('This account has been deleted');
+    }
+
+    // Check if user account is deactivated (pending deletion)
+    if (user.isDeactivated) {
+      throw new UnauthorizedException('This account is scheduled for deletion. Please log in to cancel.');
     }
 
     // Check if user is banned
