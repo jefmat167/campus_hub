@@ -49,6 +49,7 @@ export enum RoommateProfileStatus {
   ACTIVE = 'active',
   PAUSED = 'paused',
   MATCHED = 'matched',
+  DELETED = 'deleted',
 }
 
 @Entity('roommate_profiles')

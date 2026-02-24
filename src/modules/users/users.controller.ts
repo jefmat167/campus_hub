@@ -1,11 +1,15 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Param,
   Body,
   UseGuards,
   ParseUUIDPipe,
+  Headers,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -16,11 +20,10 @@ import {
 } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { DeleteAccountDto } from './dto/delete-account.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { MinTier } from '../../common/decorators/min-tier.decorator';
-import { User, VerificationTier } from '../../database/entities/user.entity';
+import { User } from '../../database/entities/user.entity';
 
 @ApiTags('Users')
 @Controller('users')
@@ -173,5 +176,93 @@ export class UsersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async canTransact(@CurrentUser('id') userId: string) {
     return this.usersService.canTransact(userId);
+  }
+
+  @Get('me/can-delete')
+  @ApiOperation({
+    summary: 'Check if user can delete their account',
+    description: 'Checks if the user has any active escrow transactions that would block account deletion.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Account deletion eligibility status',
+    schema: {
+      example: {
+        canDelete: true,
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User cannot delete account',
+    schema: {
+      example: {
+        canDelete: false,
+        reason: 'You have 2 active escrow transaction(s). Please complete or cancel them before deleting your account.',
+        activeEscrowCount: 2,
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async canDeleteAccount(@CurrentUser('id') userId: string) {
+    return this.usersService.checkCanDeleteAccount(userId);
+  }
+
+  @Post('me/delete/request-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Request OTP for account deletion',
+    description: 'Sends an OTP to the user\'s phone number for account deletion verification.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'OTP sent successfully',
+    schema: {
+      example: {
+        sent: true,
+        message: 'OTP sent to your phone',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async requestAccountDeletionOtp(@CurrentUser('id') userId: string) {
+    return this.usersService.requestAccountDeletionOtp(userId);
+  }
+
+  @Post('me/delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Schedule account for deletion',
+    description: 'Schedules the user account for deletion after a 30-day grace period. During this period, the user can log in to cancel the deletion. After the grace period, the account and associated data will be permanently deleted.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Account scheduled for deletion',
+    schema: {
+      example: {
+        success: true,
+        message: 'Your account has been scheduled for deletion',
+        scheduledDeletionAt: '2024-03-15T00:00:00.000Z',
+        gracePeriodDays: 30,
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid OTP or active escrow transactions exist',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async deleteAccount(
+    @CurrentUser('id') userId: string,
+    @Body() dto: DeleteAccountDto,
+    @Headers('authorization') authHeader: string,
+  ) {
+    // Extract access token from Authorization header
+    let accessToken: string | undefined;
+    if (authHeader?.startsWith('Bearer ')) {
+      accessToken = authHeader.substring(7);
+    }
+
+    return this.usersService.deleteAccount(userId, dto.otp, accessToken);
   }
 }

@@ -23,6 +23,7 @@ import { PasswordReset } from '../../database/entities/password-reset.entity';
 import { SmsService } from '../sms/sms.service';
 import { UniversitiesService } from '../universities/universities.service';
 import { EmailService } from '../email/email.service';
+import { UsersService } from '../users/users.service';
 import { EmailVerificationType } from '../../database/entities/email-verification.entity';
 import {
   AUTH_QUEUE_NAME,
@@ -45,6 +46,7 @@ export interface TokenPair {
 export interface AuthResponse {
   user: Partial<User>;
   tokens: TokenPair;
+  deletionCancelled?: boolean;
 }
 
 @Injectable()
@@ -63,6 +65,7 @@ export class AuthService {
     private smsService: SmsService,
     private universitiesService: UniversitiesService,
     private emailService: EmailService,
+    private usersService: UsersService,
     private dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     @InjectQueue(AUTH_QUEUE_NAME) private authQueue: Queue,
@@ -87,9 +90,12 @@ export class AuthService {
     const formattedPhone = this.formatPhone(dto.phone);
     const email = dto.email.toLowerCase();
 
-    // Check for existing user
+    // Check for existing user (exclude soft-deleted users to allow re-registration)
     const existingUser = await this.userRepo.findOne({
-      where: [{ phone: formattedPhone }, { email }],
+      where: [
+        { phone: formattedPhone, isDeleted: false },
+        { email, isDeleted: false },
+      ],
     });
 
     if (existingUser) {
@@ -367,6 +373,11 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    // Check if user account is deleted
+    if (user.isDeleted) {
+      throw new UnauthorizedException('This account has been deleted');
+    }
+
     // Check if user is banned
     if (user.isBanned && (!user.banExpiresAt || user.banExpiresAt > new Date())) {
       throw new UnauthorizedException('Your account has been suspended');
@@ -377,6 +388,14 @@ export class AuthService {
 
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid email or password');
+    }
+
+    // Check if user has scheduled deletion - auto-cancel it
+    let deletionCancelled = false;
+    if (user.isDeactivated) {
+      const cancelResult = await this.usersService.cancelAccountDeletion(user.id);
+      deletionCancelled = cancelResult.success;
+      this.logger.log(`Account deletion cancelled for user ${user.id} on login`);
     }
 
     // Update device ID if provided
@@ -392,10 +411,16 @@ export class AuthService {
     user.lastLoginAt = new Date();
     await this.userRepo.save(user);
 
-    return {
+    const response: AuthResponse = {
       user: this.sanitizeUser(user),
       tokens,
     };
+
+    if (deletionCancelled) {
+      response.deletionCancelled = true;
+    }
+
+    return response;
   }
 
   async refreshTokens(userId: string, refreshToken: string): Promise<TokenPair> {

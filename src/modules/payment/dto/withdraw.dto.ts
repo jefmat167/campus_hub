@@ -27,6 +27,25 @@ export class AddBankAccountDto {
   bankCode: string;
 }
 
+export class VerifyAccountDto {
+  @ApiProperty({
+    description: 'Nigerian bank account number (10 digits)',
+    example: '0123456789',
+    minLength: 10,
+    maxLength: 10,
+  })
+  @IsString()
+  @Length(10, 10)
+  accountNumber: string;
+
+  @ApiProperty({
+    description: 'Bank code from Paystack',
+    example: '058',
+  })
+  @IsString()
+  bankCode: string;
+}
+
 export class InitiateWithdrawalDto {
   @ApiProperty({
     description: 'Amount to withdraw in Naira',

@@ -208,6 +208,21 @@ export class User {
   @Index()
   deviceId: string;
 
+  // Soft delete and deactivation
+  @Column({ default: false })
+  @Index()
+  isDeleted: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  deletedAt: Date | null;
+
+  @Column({ default: false })
+  isDeactivated: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  @Index()
+  scheduledDeletionAt: Date | null;
+
   // Ratings
   @Column({ type: 'decimal', precision: 3, scale: 2, default: 0 })
   sellerRating: number;
