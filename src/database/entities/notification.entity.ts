@@ -20,9 +20,13 @@ export enum NotificationType {
   OFFER_COUNTERED = 'offer_countered',
   OFFER_EXPIRED = 'offer_expired',
 
-  // Escrow
+  // Escrow / Orders
   ESCROW_INITIATED = 'escrow_initiated',
-  ESCROW_CONFIRMED = 'escrow_confirmed',
+  SELLER_READY = 'seller_ready', // Seller clicked "I'm Ready"
+  DELIVERY_CODE_SENT = 'delivery_code_sent', // Code sent to buyer
+  DELIVERY_CONFIRMED = 'delivery_confirmed', // Code verified
+  ORDER_AUTO_COMPLETED = 'order_auto_completed', // 24h auto-release
+  ORDER_EXPIRED = 'order_expired', // 72h fulfillment expired
   ESCROW_RELEASED = 'escrow_released',
   ESCROW_CANCELLED = 'escrow_cancelled',
   ESCROW_DISPUTED = 'escrow_disputed',

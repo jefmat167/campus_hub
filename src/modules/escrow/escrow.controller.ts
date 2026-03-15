@@ -11,16 +11,35 @@ import {
   HttpStatus,
   ParseUUIDPipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import {
+  TierGuard,
+  TierAmountLimit,
+  TierAmountLimitGuard,
+} from '../../common/guards/tier.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
-import { User, UserRole, VerificationTier } from '../../database/entities/user.entity';
+import {
+  User,
+  UserRole,
+  VerificationTier,
+} from '../../database/entities/user.entity';
 import { EscrowService } from './escrow.service';
-import { InitiateEscrowDto, OpenDisputeDto, ResolveDisputeDto } from './dto';
+import {
+  InitiateEscrowDto,
+  OpenDisputeDto,
+  ResolveDisputeDto,
+  SellerReadyDto,
+  VerifyCodeDto,
+} from './dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
@@ -28,11 +47,12 @@ import { InitiateEscrowDto, OpenDisputeDto, ResolveDisputeDto } from './dto';
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {
-  constructor(private readonly escrowService: EscrowService) {}
+  constructor(private readonly escrowService: EscrowService) { }
 
   /**
    * Initiate an escrow transaction
    * Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited.
+   * Seller has 72 hours to mark ready, otherwise auto-refund.
    */
   @Post()
   @TierAmountLimit('amount', {
@@ -40,7 +60,11 @@ export class EscrowController {
     [VerificationTier.TIER_1]: 60000,
     [VerificationTier.TIER_2]: null, // unlimited
   })
-  @ApiOperation({ summary: 'Initiate escrow', description: 'Lock funds in escrow for a transaction. Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited.' })
+  @ApiOperation({
+    summary: 'Initiate escrow',
+    description:
+      'Lock funds in escrow for a transaction. Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited. Seller has 72 hours to confirm readiness.',
+  })
   @ApiResponse({ status: 201, description: 'Escrow initiated successfully' })
   async initiateEscrow(
     @CurrentUser() user: User,
@@ -51,7 +75,7 @@ export class EscrowController {
     return {
       success: true,
       data: escrow,
-      message: 'Escrow initiated successfully. Funds have been locked.',
+      message: `Order ${escrow.orderNumber} created. Seller has 72 hours to confirm readiness.`,
     };
   }
 
@@ -101,85 +125,195 @@ export class EscrowController {
   }
 
   /**
-   * Buyer confirms receipt of item
+   * Seller marks ready and sets delivery details
+   * This starts the delivery scheduling process
    */
-  @Post(':id/confirm-receipt')
+  @Post(':id/ready')
   @HttpCode(HttpStatus.OK)
-  async confirmReceipt(
+  @ApiOperation({
+    summary: 'Seller marks ready',
+    description:
+      'Seller confirms they are ready to deliver and sets delivery details (date, time, location). Generates a 4-digit delivery code for the buyer.',
+  })
+  @ApiResponse({ status: 200, description: 'Delivery scheduled successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid status or not the seller' })
+  @ApiResponse({ status: 404, description: 'Escrow not found' })
+  async sellerReady(
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SellerReadyDto,
   ) {
-    const escrow = await this.escrowService.buyerConfirmReceipt(id, user.id);
+    const { escrow, deliveryCode } = await this.escrowService.sellerReady(
+      id,
+      user.id,
+      dto,
+    );
 
     return {
       success: true,
-      data: escrow,
-      message: 'Receipt confirmed. Awaiting seller confirmation.',
+      data: {
+        escrow,
+        deliveryCode: {
+          validFrom: deliveryCode.validFrom,
+          validUntil: deliveryCode.validUntil,
+        },
+      },
+      message: `Delivery scheduled for ${dto.deliveryDate} at ${dto.deliveryTime}. A delivery code has been sent to the buyer.`,
     };
   }
 
   /**
-   * Seller confirms delivery
+   * Buyer views their delivery code
    */
-  @Post(':id/confirm-delivery')
-  @HttpCode(HttpStatus.OK)
-  async confirmDelivery(
+  @Get(':id/delivery-code')
+  @ApiOperation({
+    summary: 'Get delivery code',
+    description:
+      'Buyer retrieves their 4-digit delivery code. Code is valid within ±2 hours of scheduled delivery time.',
+  })
+  @ApiResponse({ status: 200, description: 'Delivery code retrieved' })
+  @ApiResponse({ status: 400, description: 'Not the buyer or no code exists' })
+  @ApiResponse({ status: 404, description: 'Escrow not found' })
+  async getDeliveryCode(
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    const escrow = await this.escrowService.sellerConfirmDelivery(id, user.id);
+    const deliveryCode = await this.escrowService.getDeliveryCode(id, user.id);
 
-    const message = escrow.status === 'completed'
-      ? 'Delivery confirmed. Funds have been released to you.'
-      : 'Delivery confirmed. Awaiting buyer confirmation.';
+    return {
+      success: true,
+      data: {
+        code: deliveryCode.code,
+        validFrom: deliveryCode.validFrom,
+        validUntil: deliveryCode.validUntil,
+        isValid: deliveryCode.isValid,
+        isExpired: deliveryCode.isExpired,
+        isNotYetValid: deliveryCode.isNotYetValid,
+      },
+    };
+  }
+
+  /**
+   * Buyer requests a new delivery code (invalidates old one)
+   */
+  @Post(':id/resend-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Resend delivery code',
+    description:
+      'Buyer requests a new 4-digit delivery code. The previous code is invalidated.',
+  })
+  @ApiResponse({ status: 200, description: 'New code generated' })
+  @ApiResponse({ status: 400, description: 'Not the buyer or invalid status' })
+  @ApiResponse({ status: 404, description: 'Escrow not found' })
+  async resendDeliveryCode(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const deliveryCode = await this.escrowService.resendDeliveryCode(
+      id,
+      user.id,
+    );
+
+    return {
+      success: true,
+      data: {
+        code: deliveryCode.code,
+        validFrom: deliveryCode.validFrom,
+        validUntil: deliveryCode.validUntil,
+      },
+      message: 'A new delivery code has been generated.',
+    };
+  }
+
+  /**
+   * Seller verifies delivery code at handover
+   */
+  @Post(':id/verify-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verify delivery code',
+    description:
+      'Seller enters the 4-digit code shown by buyer to confirm delivery. Starts the 24-hour auto-release window.',
+  })
+  @ApiResponse({ status: 200, description: 'Delivery confirmed' })
+  @ApiResponse({ status: 400, description: 'Invalid code or not the seller' })
+  @ApiResponse({ status: 404, description: 'Escrow not found' })
+  async verifyDeliveryCode(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: VerifyCodeDto,
+  ) {
+    const escrow = await this.escrowService.verifyDeliveryCode(
+      id,
+      user.id,
+      dto.code,
+    );
 
     return {
       success: true,
       data: escrow,
+      message:
+        'Delivery confirmed! Funds will be released in 24 hours unless a dispute is opened.',
+    };
+  }
+
+  /**
+   * Cancel escrow
+   * - If buyer cancels after seller is ready: cancellation fee applies
+   * - Otherwise: full refund to buyer
+   */
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Cancel escrow',
+    description:
+      'Cancel the escrow transaction. If buyer cancels after seller has marked ready, a cancellation fee applies (60% to seller, 40% to platform). Otherwise, full refund.',
+  })
+  @ApiResponse({ status: 200, description: 'Escrow cancelled' })
+  @ApiResponse({ status: 400, description: 'Cannot cancel in current status' })
+  @ApiResponse({ status: 404, description: 'Escrow not found' })
+  async cancelEscrow(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const result = await this.escrowService.cancelEscrow(id, user.id);
+
+    let message = 'Escrow cancelled.';
+    if (result.cancellationFee && result.cancellationFee > 0) {
+      message = `Escrow cancelled. A cancellation fee of ₦${result.cancellationFee.toLocaleString()} was deducted.`;
+    } else {
+      message = 'Escrow cancelled. Full refund has been processed.';
+    }
+
+    return {
+      success: true,
+      data: {
+        escrow: result.escrow,
+        cancellationFee: result.cancellationFee || 0,
+        refundAmount: result.refundAmount,
+        sellerCompensation: result.sellerCompensation || 0,
+      },
       message,
     };
   }
 
   /**
-   * Buyer releases escrow funds to seller
-   */
-  @Post(':id/release')
-  @HttpCode(HttpStatus.OK)
-  async releaseEscrow(
-    @CurrentUser() user: User,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
-    const escrow = await this.escrowService.releaseEscrow(id, user.id);
-
-    return {
-      success: true,
-      data: escrow,
-      message: 'Funds released to seller successfully.',
-    };
-  }
-
-  /**
-   * Cancel escrow and refund buyer
-   */
-  @Post(':id/cancel')
-  @HttpCode(HttpStatus.OK)
-  async cancelEscrow(
-    @CurrentUser() user: User,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
-    const escrow = await this.escrowService.cancelEscrow(id, user.id);
-
-    return {
-      success: true,
-      data: escrow,
-      message: 'Escrow cancelled. Funds have been refunded.',
-    };
-  }
-
-  /**
    * Open a dispute for an escrow
+   * Only available within 24 hours after delivery confirmation
    */
   @Post(':id/dispute')
+  @ApiOperation({
+    summary: 'Open dispute',
+    description:
+      'Open a dispute for the escrow. Only available within 24 hours after delivery confirmation. Opening a dispute pauses the auto-release timer.',
+  })
+  @ApiResponse({ status: 201, description: 'Dispute opened' })
+  @ApiResponse({
+    status: 400,
+    description: 'Can only dispute during the 24h window after delivery',
+  })
+  @ApiResponse({ status: 404, description: 'Escrow not found' })
   async openDispute(
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
