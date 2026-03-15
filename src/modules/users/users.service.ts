@@ -193,9 +193,9 @@ export class UsersService {
     activeEscrowCount?: number;
   }> {
     const activeStatuses = [
-      EscrowStatus.PENDING,
-      EscrowStatus.BUYER_CONFIRMED,
-      EscrowStatus.SELLER_CONFIRMED,
+      EscrowStatus.AWAITING_SELLER,
+      EscrowStatus.SELLER_READY,
+      EscrowStatus.DELIVERED,
       EscrowStatus.DISPUTED,
     ];
 

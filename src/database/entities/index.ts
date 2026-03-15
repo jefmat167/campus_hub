@@ -13,6 +13,8 @@ export * from './conversation.entity';
 export * from './favorite.entity';
 export * from './escrow.entity';
 export * from './dispute.entity';
+export * from './delivery-code.entity';
+export * from './platform-wallet.entity';
 export * from './housing.entity';
 export * from './roommate.entity';
 export * from './password-reset.entity';
