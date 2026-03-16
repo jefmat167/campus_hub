@@ -204,10 +204,14 @@ export class YouVerifyService {
             lock: { mode: 'pessimistic_write' },
           });
 
-          if (wallet) {
-            wallet.balance = Number(wallet.balance) - KYC_FEE;
-            await queryRunner.manager.save(wallet);
+          if (!wallet || wallet.availableBalance < KYC_FEE) {
+            throw new BadRequestException(
+              `Insufficient wallet balance. KYC verification requires ₦${KYC_FEE}. Please fund your wallet.`,
+            );
           }
+
+          wallet.balance = Number(wallet.balance) - KYC_FEE;
+          await queryRunner.manager.save(wallet);
         }
 
         await queryRunner.manager.save(user);
