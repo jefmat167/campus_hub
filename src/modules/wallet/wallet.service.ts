@@ -291,6 +291,19 @@ export class WalletService {
         throw new NotFoundException('Wallet not found');
       }
 
+      // Validate sender has sufficient locked and total balance
+      if (Number(fromWallet.lockedBalance) < amount) {
+        throw new BadRequestException(
+          'Insufficient locked balance for escrow release',
+        );
+      }
+
+      if (Number(fromWallet.balance) < amount) {
+        throw new BadRequestException(
+          'Insufficient balance for escrow release',
+        );
+      }
+
       // Deduct from locked balance of sender
       fromWallet.lockedBalance = Number(fromWallet.lockedBalance) - amount;
       fromWallet.balance = Number(fromWallet.balance) - amount;
@@ -342,6 +355,13 @@ export class WalletService {
 
       if (!wallet) {
         throw new NotFoundException('Wallet not found');
+      }
+
+      // Validate sufficient locked balance before refunding
+      if (Number(wallet.lockedBalance) < amount) {
+        throw new BadRequestException(
+          'Insufficient locked balance for escrow refund',
+        );
       }
 
       // Release from locked balance
