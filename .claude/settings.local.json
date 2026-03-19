@@ -6,7 +6,8 @@
       "Bash(npm run build:*)",
       "Bash(npm view:*)",
       "Bash(timeout 15 npm run start:dev)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(grep:*)"
     ]
   }
 }

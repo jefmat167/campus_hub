@@ -11,6 +11,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { ApiTags, ApiOperation, ApiResponse, ApiHeader } from '@nestjs/swagger';
 import { PaystackService } from './paystack.service';
 import { WalletService } from '../wallet/wallet.service';
 import { WalletTransactionType } from '../../database/entities/wallet.entity';
@@ -29,6 +30,7 @@ interface PaystackWebhookEvent {
   };
 }
 
+@ApiTags('Webhooks')
 @Controller('webhooks')
 export class WebhookController {
   private readonly logger = new Logger(WebhookController.name);
@@ -40,6 +42,10 @@ export class WebhookController {
 
   @Post('paystack')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Paystack webhook', description: 'Handles Paystack webhook events (charge.success, transfer.success, transfer.failed, transfer.reversed). Signature is verified using HMAC-SHA512.' })
+  @ApiHeader({ name: 'x-paystack-signature', description: 'HMAC-SHA512 signature from Paystack', required: true })
+  @ApiResponse({ status: 200, description: 'Webhook processed', schema: { example: { received: true } } })
+  @ApiResponse({ status: 401, description: 'Invalid webhook signature' })
   async handlePaystackWebhook(
     @Body() body: PaystackWebhookEvent,
     @Headers('x-paystack-signature') signature: string,

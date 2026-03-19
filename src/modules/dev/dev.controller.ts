@@ -7,6 +7,7 @@ import {
   ForbiddenException,
   Get,
 } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -21,6 +22,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
  * Development-only controller for testing verification flows.
  * All endpoints are disabled in production.
  */
+@ApiTags('Dev (Development Only)')
 @Controller('dev')
 export class DevController {
   private readonly isDevelopment: boolean;
@@ -45,6 +47,31 @@ export class DevController {
   /**
    * Get user's current verification status
    */
+  @ApiOperation({ summary: 'Get user verification status and limits' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiResponse({
+    status: 200,
+    description: 'User verification status retrieved successfully',
+    schema: {
+      example: {
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        email: 'user@test.com',
+        phone: '+2348012345678',
+        fullName: 'Test User',
+        verificationTier: 'tier_1',
+        phoneVerified: true,
+        emailVerified: true,
+        schoolEmail: null,
+        schoolEmailVerified: false,
+        tier1ReviewStatus: 'approved',
+        bvnVerified: false,
+        ninVerified: false,
+        limits: { buying: 60000, selling: 50000, housing: 50000 },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Get('users/:userId/verification-status')
   async getVerificationStatus(@Param('userId') userId: string) {
     this.checkDevMode();
@@ -78,6 +105,24 @@ export class DevController {
   /**
    * Set user's verification tier directly
    */
+  @ApiOperation({ summary: 'Set user verification tier directly' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiBody({ schema: { example: { tier: 'tier_0' } } })
+  @ApiResponse({
+    status: 201,
+    description: 'User tier changed successfully',
+    schema: {
+      example: {
+        message: 'User tier changed from none to tier_0',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        previousTier: 'none',
+        newTier: 'tier_0',
+        limits: { buying: 30000, selling: 0, housing: 0 },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/set-tier')
   async setTier(
     @Param('userId') userId: string,
@@ -147,6 +192,23 @@ export class DevController {
   /**
    * Upgrade user to next tier
    */
+  @ApiOperation({ summary: 'Upgrade user to next verification tier' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiResponse({
+    status: 201,
+    description: 'User tier upgraded successfully',
+    schema: {
+      example: {
+        message: 'User tier changed from tier_0 to tier_1',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        previousTier: 'tier_0',
+        newTier: 'tier_1',
+        limits: { buying: 60000, selling: 50000, housing: 50000 },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/upgrade-tier')
   async upgradeTier(@Param('userId') userId: string) {
     this.checkDevMode();
@@ -179,6 +241,22 @@ export class DevController {
   /**
    * Mark phone as verified
    */
+  @ApiOperation({ summary: 'Mark user phone as verified' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiResponse({
+    status: 201,
+    description: 'Phone marked as verified',
+    schema: {
+      example: {
+        message: 'Phone marked as verified',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        phoneVerified: true,
+        verificationTier: 'none',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/verify-phone')
   async verifyPhone(@Param('userId') userId: string) {
     this.checkDevMode();
@@ -209,6 +287,22 @@ export class DevController {
   /**
    * Mark email as verified
    */
+  @ApiOperation({ summary: 'Mark user email as verified' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiResponse({
+    status: 201,
+    description: 'Email marked as verified',
+    schema: {
+      example: {
+        message: 'Email marked as verified',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        emailVerified: true,
+        verificationTier: 'tier_0',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/verify-email')
   async verifyEmail(@Param('userId') userId: string) {
     this.checkDevMode();
@@ -239,6 +333,23 @@ export class DevController {
   /**
    * Approve Tier 1 verification (student documents)
    */
+  @ApiOperation({ summary: 'Approve Tier 1 verification (student documents)' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiResponse({
+    status: 201,
+    description: 'Tier 1 approved successfully',
+    schema: {
+      example: {
+        message: 'Tier 1 approved - user can now sell items',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        verificationTier: 'tier_1',
+        tier1ReviewStatus: 'approved',
+        limits: { buying: 60000, selling: 50000, housing: 50000 },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/approve-tier1')
   async approveTier1(@Param('userId') userId: string) {
     this.checkDevMode();
@@ -279,6 +390,26 @@ export class DevController {
   /**
    * Approve Tier 2 verification (KYC - BVN/NIN)
    */
+  @ApiOperation({ summary: 'Approve Tier 2 verification (KYC - BVN/NIN)' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiBody({ schema: { example: { type: 'bvn' } } })
+  @ApiResponse({
+    status: 201,
+    description: 'Tier 2 approved successfully',
+    schema: {
+      example: {
+        message: 'Tier 2 approved - user has unlimited access',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        verificationTier: 'tier_2',
+        bvnVerified: true,
+        ninVerified: false,
+        hasHighTrustBadge: false,
+        limits: { buying: null, selling: null, housing: null },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/approve-tier2')
   async approveTier2(
     @Param('userId') userId: string,
@@ -332,6 +463,21 @@ export class DevController {
   /**
    * Reset user verification to NONE
    */
+  @ApiOperation({ summary: 'Reset user verification to NONE' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiResponse({
+    status: 201,
+    description: 'User verification reset successfully',
+    schema: {
+      example: {
+        message: 'User verification reset to NONE',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        verificationTier: 'none',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/reset-verification')
   async resetVerification(@Param('userId') userId: string) {
     this.checkDevMode();
@@ -370,6 +516,23 @@ export class DevController {
   /**
    * Add funds to user's wallet (for testing purchases)
    */
+  @ApiOperation({ summary: 'Add funds to user wallet for testing' })
+  @ApiParam({ name: 'userId', description: 'UUID of the user', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiBody({ schema: { example: { amount: 100000 } } })
+  @ApiResponse({
+    status: 201,
+    description: 'Funds added successfully',
+    schema: {
+      example: {
+        message: 'Added ₦100,000 to wallet',
+        userId: '550e8400-e29b-41d4-a716-446655440000',
+        newBalance: 200000,
+        availableBalance: 200000,
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   @Post('users/:userId/add-funds')
   async addFunds(
     @Param('userId') userId: string,
@@ -396,6 +559,35 @@ export class DevController {
   /**
    * Create a test user with specified tier
    */
+  @ApiOperation({ summary: 'Create a test user with specified tier' })
+  @ApiBody({
+    schema: {
+      example: {
+        tier: 'tier_0',
+        universityId: '550e8400-e29b-41d4-a716-446655440000',
+        facultyId: '550e8400-e29b-41d4-a716-446655440001',
+        departmentId: '550e8400-e29b-41d4-a716-446655440002',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Test user created successfully',
+    schema: {
+      example: {
+        message: 'Test user created at tier_0',
+        user: {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          email: 'testuser1234567890@test.com',
+          phone: '+2341234567890',
+          fullName: 'Test User 1234567890',
+          verificationTier: 'tier_0',
+        },
+        note: 'Password hash is invalid - use set-tier endpoints to configure user',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
   @Post('create-test-user')
   async createTestUser(
     @Body() body: {
@@ -462,6 +654,9 @@ export class DevController {
   /**
    * List all available dev endpoints
    */
+  @ApiOperation({ summary: 'List all available dev endpoints' })
+  @ApiResponse({ status: 200, description: 'List of available dev endpoints' })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
   @Get('help')
   getHelp() {
     this.checkDevMode();
