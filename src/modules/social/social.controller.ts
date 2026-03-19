@@ -183,6 +183,34 @@ export class SocialController {
    * Get trending posts
    */
   @Get('posts/trending')
+  @ApiOperation({ summary: 'Get trending posts', description: 'Returns top trending posts from the last 24 hours within the user\'s university, ranked by engagement score.' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Number of trending posts to return (default: 10)', example: 10, type: Number })
+  @ApiResponse({
+    status: 200,
+    description: 'Trending posts retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            anonymousId: 'Anon-7F3A',
+            isOP: false,
+            visibility: 'university',
+            content: 'The new student center is amazing!',
+            imageUrls: [],
+            poll: null,
+            reactions: [{ type: 'like', count: 45, hasReacted: false }],
+            totalReactions: 52,
+            commentCount: 23,
+            viewCount: 412,
+            isEdited: false,
+            createdAt: '2026-03-19T08:00:00.000Z',
+          },
+        ],
+      },
+    },
+  })
   async getTrending(
     @CurrentUser() user: User,
     @Query('limit') limit?: string,
@@ -202,6 +230,36 @@ export class SocialController {
    * Get user's own posts
    */
   @Get('posts/mine')
+  @ApiOperation({ summary: 'Get my posts', description: 'Returns the current user\'s own anonymous posts with cursor-based pagination.' })
+  @ApiQuery({ name: 'cursor', required: false, description: 'Pagination cursor (ISO timestamp)', example: '2026-03-19T10:30:00.000Z' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Number of posts to return (default: 20)', example: 20, type: Number })
+  @ApiResponse({
+    status: 200,
+    description: 'User posts retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            anonymousId: 'Anon-7F3A',
+            isOP: true,
+            visibility: 'university',
+            content: 'The new student center is amazing!',
+            imageUrls: [],
+            poll: null,
+            reactions: [{ type: 'like', count: 45, hasReacted: false }],
+            totalReactions: 52,
+            commentCount: 23,
+            viewCount: 412,
+            isEdited: false,
+            createdAt: '2026-03-19T08:00:00.000Z',
+          },
+        ],
+        meta: { nextCursor: '2026-03-18T15:20:00.000Z', hasMore: true },
+      },
+    },
+  })
   async getMyPosts(
     @CurrentUser() user: User,
     @Query('cursor') cursor?: string,
@@ -227,6 +285,35 @@ export class SocialController {
    * Get a single post
    */
   @Get('posts/:id')
+  @ApiOperation({ summary: 'Get a single post', description: 'Returns a single post by ID. Increments the view count.' })
+  @ApiParam({ name: 'id', description: 'Post UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  @ApiResponse({
+    status: 200,
+    description: 'Post retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          anonymousId: 'Anon-7F3A',
+          isOP: false,
+          visibility: 'university',
+          content: 'Does anyone know when the library closes during exam week?',
+          imageUrls: [],
+          poll: null,
+          reactions: [
+            { type: 'like', count: 12, hasReacted: false },
+            { type: 'love', count: 3, hasReacted: true },
+          ],
+          totalReactions: 15,
+          commentCount: 8,
+          viewCount: 125,
+          isEdited: false,
+          createdAt: '2026-03-19T10:30:00.000Z',
+        },
+      },
+    },
+  })
   async getPost(@CurrentUser() user: User, @Param('id') id: string) {
     const post = await this.socialService.getPost(id, user.id);
 
@@ -241,6 +328,25 @@ export class SocialController {
    */
   @Post('posts/:id/react')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'React to a post', description: 'Toggle a reaction on a post. Sending the same reaction type again removes it. Only one reaction type per user per post.' })
+  @ApiParam({ name: 'id', description: 'Post UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  @ApiResponse({
+    status: 200,
+    description: 'Reaction updated successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          reactions: [
+            { type: 'like', count: 13, hasReacted: true },
+            { type: 'love', count: 3, hasReacted: false },
+          ],
+          totalReactions: 16,
+        },
+        message: 'Reaction updated',
+      },
+    },
+  })
   async reactToPost(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -263,6 +369,33 @@ export class SocialController {
    */
   @Post('posts/:id/vote')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Vote on a poll', description: 'Cast a vote on a post\'s poll. Vote counts become visible after voting.' })
+  @ApiParam({ name: 'id', description: 'Post UUID (must contain a poll)', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  @ApiResponse({
+    status: 200,
+    description: 'Vote recorded successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          poll: {
+            question: 'What is the best cafeteria on campus?',
+            options: [
+              { id: 'opt_1', text: 'Main Cafeteria', voteCount: 24, hasVoted: true, percentage: 48 },
+              { id: 'opt_2', text: 'Faculty Canteen', voteCount: 18, hasVoted: false, percentage: 36 },
+              { id: 'opt_3', text: 'Student Union', voteCount: 8, hasVoted: false, percentage: 16 },
+            ],
+            allowMultipleVotes: false,
+            endsAt: '2026-03-25T23:59:59.000Z',
+            isClosed: false,
+            totalVotes: 50,
+            hasVoted: true,
+          },
+        },
+        message: 'Vote recorded',
+      },
+    },
+  })
   async votePoll(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -284,6 +417,15 @@ export class SocialController {
    */
   @Delete('posts/:id')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a post', description: 'Delete your own anonymous post. Only the original author can delete.' })
+  @ApiParam({ name: 'id', description: 'Post UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  @ApiResponse({
+    status: 200,
+    description: 'Post deleted successfully',
+    schema: {
+      example: { success: true, message: 'Post deleted' },
+    },
+  })
   async deletePost(@CurrentUser() user: User, @Param('id') id: string) {
     await this.socialService.deletePost(id, user.id);
 
@@ -297,6 +439,37 @@ export class SocialController {
    * Get comments for a post
    */
   @Get('posts/:postId/comments')
+  @ApiOperation({ summary: 'Get comments for a post', description: 'Returns comments for a post with cursor-based pagination. Use parentId to fetch nested replies.' })
+  @ApiParam({ name: 'postId', description: 'Post UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  @ApiQuery({ name: 'parentId', required: false, description: 'Parent comment UUID to fetch replies for', example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901' })
+  @ApiQuery({ name: 'cursor', required: false, description: 'Pagination cursor (ISO timestamp)', example: '2026-03-19T10:30:00.000Z' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Number of comments to return (default: 20)', example: 20, type: Number })
+  @ApiResponse({
+    status: 200,
+    description: 'Comments retrieved successfully',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+            postId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            parentId: null,
+            anonymousId: 'Anon-3B2C',
+            isOP: false,
+            content: 'Great question! The library stays open until midnight during exams.',
+            reactions: [{ type: 'like', count: 5, hasReacted: false }],
+            totalReactions: 5,
+            replyCount: 2,
+            depth: 0,
+            isEdited: false,
+            createdAt: '2026-03-19T11:00:00.000Z',
+          },
+        ],
+        meta: { nextCursor: '2026-03-19T10:30:00.000Z', hasMore: true },
+      },
+    },
+  })
   async getComments(
     @CurrentUser() user: User,
     @Param('postId') postId: string,
@@ -323,6 +496,32 @@ export class SocialController {
    * Create a comment on a post
    */
   @Post('posts/:postId/comments')
+  @ApiOperation({ summary: 'Create a comment', description: 'Create an anonymous comment on a post. Use parentId in the body to create a nested reply (max depth 3).' })
+  @ApiParam({ name: 'postId', description: 'Post UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  @ApiResponse({
+    status: 201,
+    description: 'Comment created successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+          postId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          parentId: null,
+          anonymousId: 'Anon-3B2C',
+          isOP: true,
+          content: 'Great question! The library stays open until midnight during exams.',
+          reactions: [{ type: 'like', count: 0, hasReacted: false }],
+          totalReactions: 0,
+          replyCount: 0,
+          depth: 0,
+          isEdited: false,
+          createdAt: '2026-03-19T11:00:00.000Z',
+        },
+        message: 'Comment created',
+      },
+    },
+  })
   async createComment(
     @CurrentUser() user: User,
     @Param('postId') postId: string,
@@ -342,6 +541,22 @@ export class SocialController {
    */
   @Post('comments/:id/react')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'React to a comment', description: 'Toggle a reaction on a comment. Sending the same reaction type again removes it.' })
+  @ApiParam({ name: 'id', description: 'Comment UUID', example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901' })
+  @ApiResponse({
+    status: 200,
+    description: 'Reaction updated successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          reactions: [{ type: 'like', count: 6, hasReacted: true }],
+          totalReactions: 6,
+        },
+        message: 'Reaction updated',
+      },
+    },
+  })
   async reactToComment(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -364,6 +579,15 @@ export class SocialController {
    */
   @Delete('comments/:id')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a comment', description: 'Delete your own anonymous comment. Only the original author can delete.' })
+  @ApiParam({ name: 'id', description: 'Comment UUID', example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901' })
+  @ApiResponse({
+    status: 200,
+    description: 'Comment deleted successfully',
+    schema: {
+      example: { success: true, message: 'Comment deleted' },
+    },
+  })
   async deleteComment(@CurrentUser() user: User, @Param('id') id: string) {
     await this.socialService.deleteComment(id, user.id);
 

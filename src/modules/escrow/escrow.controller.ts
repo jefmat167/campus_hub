@@ -16,6 +16,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -65,7 +66,28 @@ export class EscrowController {
     description:
       'Lock funds in escrow for a transaction. Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited. Seller has 72 hours to confirm readiness.',
   })
-  @ApiResponse({ status: 201, description: 'Escrow initiated successfully' })
+  @ApiResponse({
+    status: 201,
+    description: 'Escrow initiated successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+          orderNumber: 'ORD-2026-000142',
+          buyerId: '550e8400-e29b-41d4-a716-446655440000',
+          sellerId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+          listingId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+          amount: '25000.00',
+          status: 'awaiting_seller',
+          fulfillmentExpiresAt: '2026-03-22T14:30:00.000Z',
+          createdAt: '2026-03-19T14:30:00.000Z',
+          updatedAt: '2026-03-19T14:30:00.000Z',
+        },
+        message: 'Order ORD-2026-000142 created. Seller has 72 hours to confirm readiness.',
+      },
+    },
+  })
   async initiateEscrow(
     @CurrentUser() user: User,
     @Body() dto: InitiateEscrowDto,
@@ -83,6 +105,36 @@ export class EscrowController {
    * Get user's escrow transactions
    */
   @Get()
+  @ApiOperation({
+    summary: 'Get my escrows',
+    description:
+      'Retrieve the authenticated user\'s escrow transactions. Filter by role (buyer, seller, or all).',
+  })
+  @ApiQuery({ name: 'role', required: false, enum: ['buyer', 'seller', 'all'], description: 'Filter by user role in the transaction', example: 'all' })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number', example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page', example: 20 })
+  @ApiResponse({
+    status: 200,
+    description: 'Escrow transactions retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+            orderNumber: 'ORD-2026-000142',
+            amount: '25000.00',
+            status: 'awaiting_seller',
+            listing: { id: '7c9e6679-7425-40de-944b-e07fc1f90ae7', title: 'iPhone 13 Pro Max' },
+            buyer: { id: '550e8400-e29b-41d4-a716-446655440000', firstName: 'Chidi', lastName: 'Okafor' },
+            seller: { id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8', firstName: 'Amina', lastName: 'Bello' },
+            createdAt: '2026-03-19T14:30:00.000Z',
+          },
+        ],
+        meta: { total: 1, page: 1, limit: 20, pages: 1 },
+      },
+    },
+  })
   async getMyEscrows(
     @CurrentUser() user: User,
     @Query('role') role?: 'buyer' | 'seller' | 'all',
@@ -112,6 +164,38 @@ export class EscrowController {
    * Get escrow by ID
    */
   @Get(':id')
+  @ApiOperation({
+    summary: 'Get escrow by ID',
+    description: 'Retrieve a single escrow transaction. User must be the buyer or seller.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Escrow transaction retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+          orderNumber: 'ORD-2026-000142',
+          buyerId: '550e8400-e29b-41d4-a716-446655440000',
+          sellerId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+          listingId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+          amount: '25000.00',
+          platformFee: null,
+          sellerPayout: null,
+          status: 'seller_ready',
+          deliveryDate: '2026-03-21',
+          deliveryTime: '14:30',
+          deliveryLocation: 'Faculty of Engineering, near the main gate',
+          fulfillmentExpiresAt: '2026-03-22T14:30:00.000Z',
+          sellerReadyAt: '2026-03-20T10:00:00.000Z',
+          createdAt: '2026-03-19T14:30:00.000Z',
+          updatedAt: '2026-03-20T10:00:00.000Z',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Escrow not found' })
   async getEscrow(
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -135,7 +219,31 @@ export class EscrowController {
     description:
       'Seller confirms they are ready to deliver and sets delivery details (date, time, location). Generates a 4-digit delivery code for the buyer.',
   })
-  @ApiResponse({ status: 200, description: 'Delivery scheduled successfully' })
+  @ApiResponse({
+    status: 200,
+    description: 'Delivery scheduled successfully',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          escrow: {
+            id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+            orderNumber: 'ORD-2026-000142',
+            status: 'seller_ready',
+            deliveryDate: '2026-03-21',
+            deliveryTime: '14:30',
+            deliveryLocation: 'Faculty of Engineering, near the main gate',
+            sellerReadyAt: '2026-03-20T10:00:00.000Z',
+          },
+          deliveryCode: {
+            validFrom: '2026-03-21T12:30:00.000Z',
+            validUntil: '2026-03-21T16:30:00.000Z',
+          },
+        },
+        message: 'Delivery scheduled for 2026-03-21 at 14:30. A delivery code has been sent to the buyer.',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Invalid status or not the seller' })
   @ApiResponse({ status: 404, description: 'Escrow not found' })
   async sellerReady(
@@ -171,7 +279,23 @@ export class EscrowController {
     description:
       'Buyer retrieves their 4-digit delivery code. Code is valid within ±2 hours of scheduled delivery time.',
   })
-  @ApiResponse({ status: 200, description: 'Delivery code retrieved' })
+  @ApiResponse({
+    status: 200,
+    description: 'Delivery code retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          code: '4829',
+          validFrom: '2026-03-21T12:30:00.000Z',
+          validUntil: '2026-03-21T16:30:00.000Z',
+          isValid: true,
+          isExpired: false,
+          isNotYetValid: false,
+        },
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Not the buyer or no code exists' })
   @ApiResponse({ status: 404, description: 'Escrow not found' })
   async getDeliveryCode(
@@ -203,7 +327,21 @@ export class EscrowController {
     description:
       'Buyer requests a new 4-digit delivery code. The previous code is invalidated.',
   })
-  @ApiResponse({ status: 200, description: 'New code generated' })
+  @ApiResponse({
+    status: 200,
+    description: 'New code generated',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          code: '7361',
+          validFrom: '2026-03-21T12:30:00.000Z',
+          validUntil: '2026-03-21T16:30:00.000Z',
+        },
+        message: 'A new delivery code has been generated.',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Not the buyer or invalid status' })
   @ApiResponse({ status: 404, description: 'Escrow not found' })
   async resendDeliveryCode(
@@ -236,7 +374,23 @@ export class EscrowController {
     description:
       'Seller enters the 4-digit code shown by buyer to confirm delivery. Starts the 24-hour auto-release window.',
   })
-  @ApiResponse({ status: 200, description: 'Delivery confirmed' })
+  @ApiResponse({
+    status: 200,
+    description: 'Delivery confirmed',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+          orderNumber: 'ORD-2026-000142',
+          status: 'delivered',
+          deliveredAt: '2026-03-21T14:35:00.000Z',
+          disputeWindowExpiresAt: '2026-03-22T14:35:00.000Z',
+        },
+        message: 'Delivery confirmed! Funds will be released in 24 hours unless a dispute is opened.',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Invalid code or not the seller' })
   @ApiResponse({ status: 404, description: 'Escrow not found' })
   async verifyDeliveryCode(
@@ -270,7 +424,26 @@ export class EscrowController {
     description:
       'Cancel the escrow transaction. If buyer cancels after seller has marked ready, a cancellation fee applies (60% to seller, 40% to platform). Otherwise, full refund.',
   })
-  @ApiResponse({ status: 200, description: 'Escrow cancelled' })
+  @ApiResponse({
+    status: 200,
+    description: 'Escrow cancelled',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          escrow: {
+            id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+            orderNumber: 'ORD-2026-000142',
+            status: 'cancelled',
+          },
+          cancellationFee: 2500,
+          refundAmount: 22500,
+          sellerCompensation: 1500,
+        },
+        message: 'Escrow cancelled. A cancellation fee of ₦2,500 was deducted.',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Cannot cancel in current status' })
   @ApiResponse({ status: 404, description: 'Escrow not found' })
   async cancelEscrow(
@@ -308,7 +481,26 @@ export class EscrowController {
     description:
       'Open a dispute for the escrow. Only available within 24 hours after delivery confirmation. Opening a dispute pauses the auto-release timer.',
   })
-  @ApiResponse({ status: 201, description: 'Dispute opened' })
+  @ApiResponse({
+    status: 201,
+    description: 'Dispute opened',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          escrowId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+          filedBy: '550e8400-e29b-41d4-a716-446655440000',
+          reason: 'item_not_as_described',
+          description: 'The laptop screen has a crack that was not mentioned in the listing. The seller did not disclose this damage.',
+          evidence: ['https://storage.example.com/evidence/photo1.jpg'],
+          status: 'open',
+          createdAt: '2026-03-21T18:00:00.000Z',
+        },
+        message: 'Dispute opened. Our team will review it shortly.',
+      },
+    },
+  })
   @ApiResponse({
     status: 400,
     description: 'Can only dispute during the 24h window after delivery',
@@ -334,6 +526,32 @@ export class EscrowController {
   @Get('admin/disputes')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({
+    summary: 'Get open disputes (admin)',
+    description: 'Retrieve all open disputes. Requires ADMIN or SUPER_ADMIN role.',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number', example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page', example: 20 })
+  @ApiResponse({
+    status: 200,
+    description: 'Open disputes retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            escrowId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+            filedBy: '550e8400-e29b-41d4-a716-446655440000',
+            reason: 'item_not_as_described',
+            status: 'open',
+            createdAt: '2026-03-21T18:00:00.000Z',
+          },
+        ],
+        meta: { total: 1, page: 1, limit: 20, pages: 1 },
+      },
+    },
+  })
   async getOpenDisputes(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -361,6 +579,38 @@ export class EscrowController {
   @Get('admin/disputes/:disputeId')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({
+    summary: 'Get dispute details (admin)',
+    description: 'Retrieve full details of a specific dispute including the escrow transaction.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Dispute details retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          escrowId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+          filedBy: '550e8400-e29b-41d4-a716-446655440000',
+          reason: 'item_not_as_described',
+          description: 'The laptop screen has a crack that was not mentioned in the listing.',
+          evidence: ['https://storage.example.com/evidence/photo1.jpg'],
+          status: 'open',
+          escrow: {
+            id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+            orderNumber: 'ORD-2026-000142',
+            amount: '25000.00',
+            status: 'disputed',
+            buyer: { id: '550e8400-e29b-41d4-a716-446655440000', firstName: 'Chidi', lastName: 'Okafor' },
+            seller: { id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8', firstName: 'Amina', lastName: 'Bello' },
+          },
+          createdAt: '2026-03-21T18:00:00.000Z',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Dispute not found' })
   async getDispute(@Param('disputeId', ParseUUIDPipe) disputeId: string) {
     const dispute = await this.escrowService.getDispute(disputeId);
 
@@ -376,6 +626,32 @@ export class EscrowController {
   @Patch('admin/disputes/:disputeId/resolve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({
+    summary: 'Resolve dispute (admin)',
+    description:
+      'Resolve a dispute by refunding the buyer, releasing to the seller, or splitting funds. Requires ADMIN or SUPER_ADMIN role.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Dispute resolved',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          status: 'resolved_split',
+          resolution: 'resolved_split',
+          resolutionNotes: 'Item was partially damaged. Splitting funds 70-30 in favor of buyer.',
+          resolvedBy: 'c3d4e5f6-a1b2-7890-abcd-ef1234567890',
+          buyerRefundAmount: '17500.00',
+          sellerReleaseAmount: '7500.00',
+          resolvedAt: '2026-03-22T10:00:00.000Z',
+        },
+        message: 'Dispute resolved: resolved_split',
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Dispute not found' })
   async resolveDispute(
     @CurrentUser() user: User,
     @Param('disputeId', ParseUUIDPipe) disputeId: string,

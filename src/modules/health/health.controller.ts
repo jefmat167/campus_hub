@@ -6,8 +6,10 @@ import {
   MemoryHealthIndicator,
   DiskHealthIndicator,
 } from '@nestjs/terminus';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { RedisHealthIndicator } from './redis.health';
 
+@ApiTags('Health')
 @Controller('health')
 export class HealthController {
   constructor(
@@ -23,6 +25,9 @@ export class HealthController {
    */
   @Get()
   @HealthCheck()
+  @ApiOperation({ summary: 'Basic health check', description: 'Quick health check for load balancers. Checks database connectivity.' })
+  @ApiResponse({ status: 200, description: 'Health check passed', schema: { example: { status: 'ok', details: { database: { status: 'up' } } } } })
+  @ApiResponse({ status: 503, description: 'Health check failed', schema: { example: { status: 'error', error: { database: { status: 'down', message: 'Connection refused' } } } } })
   check() {
     return this.health.check([
       () => this.db.pingCheck('database'),
@@ -34,6 +39,9 @@ export class HealthController {
    */
   @Get('detailed')
   @HealthCheck()
+  @ApiOperation({ summary: 'Detailed health check', description: 'Comprehensive health check for monitoring. Checks database, Redis, memory, and disk.' })
+  @ApiResponse({ status: 200, description: 'All health checks passed', schema: { example: { status: 'ok', details: { postgres: { status: 'up' }, redis: { status: 'up', message: 'Redis is reachable' }, memory_heap: { status: 'up' }, memory_rss: { status: 'up' }, disk: { status: 'up' } } } } })
+  @ApiResponse({ status: 503, description: 'One or more health checks failed' })
   checkDetailed() {
     return this.health.check([
       // Database checks
@@ -59,6 +67,8 @@ export class HealthController {
    * Liveness probe - is the app running?
    */
   @Get('live')
+  @ApiOperation({ summary: 'Liveness probe', description: 'Kubernetes liveness probe. Returns OK if the process is running.' })
+  @ApiResponse({ status: 200, description: 'Process is alive', schema: { example: { status: 'ok', timestamp: '2026-03-19T14:30:00.000Z' } } })
   live() {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
@@ -68,6 +78,9 @@ export class HealthController {
    */
   @Get('ready')
   @HealthCheck()
+  @ApiOperation({ summary: 'Readiness probe', description: 'Kubernetes readiness probe. Checks if the app can accept traffic (database and Redis are up).' })
+  @ApiResponse({ status: 200, description: 'App is ready', schema: { example: { status: 'ok', details: { database: { status: 'up' }, redis: { status: 'up', message: 'Redis is reachable' } } } } })
+  @ApiResponse({ status: 503, description: 'App not ready to accept traffic' })
   ready() {
     return this.health.check([
       () => this.db.pingCheck('database'),
