@@ -67,8 +67,8 @@ export class BuyRequestOffer {
   @Column({ type: 'text', nullable: true })
   message: string | null;
 
-  @Column({ type: 'varchar', length: 500, nullable: true, name: 'image_url' })
-  imageUrl: string | null;
+  @Column({ type: 'jsonb', nullable: true, name: 'image_urls' })
+  imageUrls: string[] | null;
 
   @Column({
     type: 'enum',

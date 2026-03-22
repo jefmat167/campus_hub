@@ -11,6 +11,7 @@ import {
 import { User } from './user.entity';
 import { Listing } from './listing.entity';
 import { Offer } from './offer.entity';
+import { BuyRequestOffer } from './buy-request-offer.entity';
 
 export enum EscrowStatus {
   AWAITING_SELLER = 'awaiting_seller', // Waiting for seller to click "I'm Ready"
@@ -47,13 +48,21 @@ export class EscrowTransaction {
   @JoinColumn({ name: 'seller_id' })
   seller: User;
 
-  @Column({ name: 'listing_id' })
+  @Column({ type: 'uuid', name: 'listing_id', nullable: true })
   @Index()
-  listingId: string;
+  listingId: string | null;
 
   @ManyToOne(() => Listing, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'listing_id' })
-  listing: Listing;
+  listing: Listing | null;
+
+  @Column({ type: 'uuid', name: 'buy_request_offer_id', nullable: true })
+  @Index()
+  buyRequestOfferId: string | null;
+
+  @ManyToOne(() => BuyRequestOffer, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'buy_request_offer_id' })
+  buyRequestOffer: BuyRequestOffer | null;
 
   @Column({ type: 'uuid', name: 'offer_id', nullable: true })
   offerId: string | null;

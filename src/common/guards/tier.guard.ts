@@ -176,10 +176,7 @@ export class TierAmountLimitGuard implements CanActivate {
 /**
  * Helper function to get amount limit for a user's tier
  */
-export function getAmountLimitForTier(
-  tier: VerificationTier,
-  type: 'buying' | 'selling' | 'housing',
-): number | null {
+export function getAmountLimitForTier(tier: VerificationTier, type: 'buying' | 'selling' | 'housing'): number | null {
   const limits: Record<string, Record<VerificationTier, number | null>> = {
     buying: {
       [VerificationTier.NONE]: 0,
@@ -201,5 +198,6 @@ export function getAmountLimitForTier(
     },
   };
 
-  return limits[type]?.[tier] ?? 0;
+  const limit = limits[type]?.[tier];
+  return limit === undefined ? 0 : limit;
 }

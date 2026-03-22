@@ -4,6 +4,8 @@ import {
   IsOptional,
   IsEnum,
   IsUrl,
+  IsArray,
+  ArrayMaxSize,
   Min,
   Max,
   MaxLength,
@@ -44,12 +46,14 @@ export class CreateBuyRequestOfferDto {
   message?: string;
 
   @ApiPropertyOptional({
-    description: 'URL to an image of your item (optional proof)',
-    example: 'https://storage.example.com/item-photo.jpg',
-    maxLength: 500,
+    description: 'URLs to images of your item (max 5)',
+    example: ['https://storage.example.com/item-photo1.jpg', 'https://storage.example.com/item-photo2.jpg'],
+    type: [String],
   })
-  @IsUrl()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @IsUrl({}, { each: true })
+  @MaxLength(500, { each: true })
   @IsOptional()
-  @MaxLength(500)
-  imageUrl?: string;
+  imageUrls?: string[];
 }

@@ -6,7 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan, Not } from 'typeorm';
+import { Repository, DataSource, LessThan, Not } from 'typeorm';
 import {
   BuyRequestOffer,
   BuyRequestOfferStatus,
@@ -21,6 +21,9 @@ import {
 } from '../../database/entities/conversation.entity';
 import { User } from '../../database/entities/user.entity';
 import { ChatService } from '../chat/chat.service';
+import { EscrowService } from '../escrow/escrow.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../../database/entities/notification.entity';
 import {
   CreateBuyRequestOfferDto,
   RespondBuyRequestOfferDto,
@@ -39,6 +42,9 @@ export class BuyRequestOffersService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly chatService: ChatService,
+    private readonly escrowService: EscrowService,
+    private readonly notificationsService: NotificationsService,
+    private readonly dataSource: DataSource,
   ) { }
 
   private sanitizeUser(user: User): Record<string, any> {
@@ -122,7 +128,7 @@ export class BuyRequestOffersService {
       proposedPrice: dto.proposedPrice,
       itemCondition: dto.itemCondition,
       message: dto.message || null,
-      imageUrl: dto.imageUrl || null,
+      imageUrls: dto.imageUrls?.length ? dto.imageUrls : null,
       status: BuyRequestOfferStatus.PENDING,
       expiresAt,
       conversationId: conversation.id,
@@ -130,13 +136,27 @@ export class BuyRequestOffersService {
 
     const savedOffer = await this.offerRepository.save(offer);
 
+    // Notify the buyer (requester) about the new offer
+    await this.notificationsService.createNotification({
+      userId: buyRequest.requesterId,
+      type: NotificationType.OFFER_RECEIVED,
+      title: 'You have a new offer',
+      body: `${user.fullName} offered ₦${dto.proposedPrice.toLocaleString()} (${dto.itemCondition.replace('_', ' ')}) on "${buyRequest.title}"`,
+      data: {
+        offerId: savedOffer.id,
+        buyRequestId,
+        proposedPrice: dto.proposedPrice,
+        responderId: userId,
+      },
+    });
+
     // Send initial message in conversation if message provided
     if (dto.message) {
       const messageContent = `[Offer: ₦${dto.proposedPrice.toLocaleString()} - ${dto.itemCondition.replace('_', ' ')}]\n\n${dto.message}`;
       await this.chatService.sendMessage(userId, {
         conversationId: conversation.id,
         content: messageContent,
-        attachments: dto.imageUrl ? [dto.imageUrl] : undefined,
+        attachments: dto.imageUrls?.length ? dto.imageUrls : undefined,
       });
     }
 
@@ -207,15 +227,6 @@ export class BuyRequestOffersService {
 
     if (dto.action === BuyRequestOfferResponseAction.ACCEPT) {
       await this.acceptOffer(offer, now);
-
-      // Send system message about acceptance
-      if (offer.conversationId) {
-        await this.chatService.sendSystemMessage(
-          offer.conversationId,
-          `Offer accepted! ₦${Number(offer.proposedPrice).toLocaleString()} - You can now finalize the details.`,
-          { type: 'offer_accepted', offerId: offer.id },
-        );
-      }
     } else {
       await this.offerRepository.update(offerId, {
         status: BuyRequestOfferStatus.REJECTED,
@@ -239,18 +250,36 @@ export class BuyRequestOffersService {
   }
 
   private async acceptOffer(offer: BuyRequestOffer, respondedAt: Date): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    await Promise.all([
-      this.offerRepository.update(offer.id, {
+    try {
+      // Mark offer as accepted and buy request as fulfilled
+      await queryRunner.manager.update(BuyRequestOffer, offer.id, {
         status: BuyRequestOfferStatus.ACCEPTED,
         respondedAt,
-      }),
-      this.buyRequestRepository.update(offer.buyRequestId, {
+      });
+      await queryRunner.manager.update(BuyRequest, offer.buyRequestId, {
         status: BuyRequestStatus.FULFILLED,
-      })
-    ]);
+      });
 
-    // Reject all other pending offers for this buy request
+      // Initiate escrow within the same transaction — no orphans
+      await this.escrowService.initiateEscrowFromOffer(
+        offer.requesterId,
+        offer,
+        queryRunner,
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    // Reject all other pending offers (outside transaction — non-critical)
     const otherPendingOffers = await this.offerRepository.find({
       where: {
         buyRequestId: offer.buyRequestId,
