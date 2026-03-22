@@ -21,8 +21,16 @@ import {
 } from '../../database/entities/dispute.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
 import { Listing, ListingStatus } from '../../database/entities/listing.entity';
-import { User } from '../../database/entities/user.entity';
+import { User, VerificationTier } from '../../database/entities/user.entity';
 import { University } from '../../database/entities/university.entity';
+import {
+  BuyRequestOffer,
+} from '../../database/entities/buy-request-offer.entity';
+import {
+  BuyRequest,
+  BuyRequestStatus,
+} from '../../database/entities/buy-request.entity';
+import { getAmountLimitForTier } from '../../common/guards/tier.guard';
 import { WalletService } from '../wallet/wallet.service';
 import { PlatformWalletService } from '../wallet/platform-wallet.service';
 import { PlatformTransactionType } from '../../database/entities/platform-wallet.entity';
@@ -60,6 +68,10 @@ export class EscrowService {
     private universityRepo: Repository<University>,
     @InjectRepository(User)
     private userRepo: Repository<User>,
+    @InjectRepository(BuyRequestOffer)
+    private buyRequestOfferRepo: Repository<BuyRequestOffer>,
+    @InjectRepository(BuyRequest)
+    private buyRequestRepo: Repository<BuyRequest>,
     private walletService: WalletService,
     @Inject(forwardRef(() => PlatformWalletService))
     private platformWalletService: PlatformWalletService,
@@ -237,6 +249,174 @@ export class EscrowService {
   }
 
   /**
+   * Resolve the display title for an escrow (listing title or buy request title)
+   */
+  private async getItemTitle(escrow: EscrowTransaction): Promise<string> {
+    if (escrow.listingId) {
+      const listing = await this.listingRepo.findOne({ where: { id: escrow.listingId } });
+      return listing?.title ?? 'Unknown item';
+    }
+    if (escrow.buyRequestOfferId) {
+      const offer = await this.buyRequestOfferRepo.findOne({
+        where: { id: escrow.buyRequestOfferId },
+        relations: ['buyRequest'],
+      });
+      return offer?.buyRequest?.title ?? 'Buy request item';
+    }
+    return 'Unknown item';
+  }
+
+  /**
+   * Initiate escrow from an accepted buy request offer.
+   * Called within the offer acceptance transaction via a shared QueryRunner.
+   */
+  async initiateEscrowFromOffer(buyerId: string, offer: BuyRequestOffer, queryRunner: import('typeorm').QueryRunner,): Promise<EscrowTransaction> {
+    // Safety check
+    if (offer.requesterId !== buyerId) {
+      throw new BadRequestException('Buyer does not match the requester of this offer');
+    }
+
+    const sellerId = offer.responderId;
+    const amount = Number(offer.proposedPrice);
+
+    // Programmatic tier amount limit check
+    const buyer = await this.userRepo.findOne({ where: { id: buyerId } });
+    if (!buyer) {
+      throw new NotFoundException('Buyer not found');
+    }
+
+    const buyerTier = buyer.verificationTier || VerificationTier.NONE;
+    const amountLimit = getAmountLimitForTier(buyerTier, 'buying');
+    console.log("amount limit => ", amountLimit);
+    console.log("buyer tier => ", buyerTier);
+
+    if (amountLimit !== null && amount > amountLimit) {
+      throw new ForbiddenException({
+        message: `Amount exceeds your tier limit. Maximum allowed: ₦${amountLimit.toLocaleString()}`,
+        limit: amountLimit,
+        amount,
+        currentTier: buyerTier,
+        upgradeRequired: true,
+      });
+    }
+
+    // Check wallet balance
+    const balance = await this.walletService.getBalance(buyerId);
+    if (balance.availableBalance < amount) {
+      throw new BadRequestException(
+        `Insufficient balance. You need ₦${amount.toLocaleString()}`,
+      );
+    }
+
+    const orderNumber = await this.generateOrderNumber();
+    const fulfillmentExpiresAt = new Date(
+      Date.now() + this.FULFILLMENT_HOURS * 60 * 60 * 1000,
+    );
+
+    // Create escrow — no listing, linked to buy request offer
+    const escrow = this.escrowRepo.create({
+      buyerId,
+      sellerId,
+      listingId: null,
+      buyRequestOfferId: offer.id,
+      offerId: null,
+      amount,
+      orderNumber,
+      status: EscrowStatus.AWAITING_SELLER,
+      fulfillmentExpiresAt,
+    });
+
+    const savedEscrow = await queryRunner.manager.save(escrow);
+
+    // Lock buyer's funds
+    await this.walletService.lockFunds(buyerId, amount, `ESCROW_${savedEscrow.id}`);
+
+    // No listing to update — buy request status is handled by the caller
+
+    // Schedule 72h fulfillment expiry job (outside transaction is fine)
+    await this.escrowQueue.add(
+      EscrowJobName.CHECK_FULFILLMENT_EXPIRY,
+      { escrowId: savedEscrow.id },
+      {
+        delay: this.FULFILLMENT_HOURS * 60 * 60 * 1000,
+        jobId: `fulfillment-expiry-${savedEscrow.id}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1000 },
+      },
+    );
+
+    this.logger.log(
+      `Escrow ${savedEscrow.id} (${orderNumber}) initiated from buy request offer ${offer.id} for ₦${amount}`,
+    );
+
+    // Fetch seller for notifications/emails
+    const seller = await this.userRepo.findOne({ where: { id: sellerId } });
+    const itemTitle = offer.buyRequest?.title ?? 'Buy request item';
+    const formattedAmount = amount.toLocaleString();
+
+    // Notify buyer
+    await this.notificationsService.createNotification({
+      userId: buyerId,
+      type: NotificationType.ESCROW_INITIATED,
+      title: 'Order confirmed',
+      body: `Your order ${orderNumber} for "${itemTitle}" (₦${formattedAmount}) has been placed. The seller has 72 hours to set delivery details.`,
+      data: {
+        escrowId: savedEscrow.id,
+        orderNumber,
+        buyRequestOfferId: offer.id,
+        amount,
+      },
+    });
+
+    // Notify seller — tailored copy for buy request offers
+    await this.notificationsService.createNotification({
+      userId: sellerId,
+      type: NotificationType.ESCROW_INITIATED,
+      title: 'Your offer was accepted!',
+      body: `Your offer on "${itemTitle}" (₦${formattedAmount}) was accepted (${orderNumber}). You have 72 hours to set delivery details.`,
+      data: {
+        escrowId: savedEscrow.id,
+        orderNumber,
+        buyRequestOfferId: offer.id,
+        amount,
+      },
+    });
+
+    // Send order confirmation email to buyer
+    if (buyer.email) {
+      await this.resendService.sendEmail({
+        to: buyer.email,
+        subject: `Order Confirmed — ${orderNumber}`,
+        template: 'orderConfirmationBuyer',
+        context: {
+          buyerName: buyer.fullName,
+          orderNumber,
+          listingTitle: itemTitle,
+          amount: formattedAmount,
+          sellerName: seller?.fullName ?? 'Seller',
+        },
+      });
+    }
+
+    // Send new order email to seller
+    if (seller?.email) {
+      await this.resendService.sendEmail({
+        to: seller.email,
+        subject: `Offer Accepted — ${orderNumber}`,
+        template: 'newOrderSeller',
+        context: {
+          sellerName: seller.fullName,
+          orderNumber,
+          listingTitle: itemTitle,
+          amount: formattedAmount,
+        },
+      });
+    }
+
+    return savedEscrow;
+  }
+
+  /**
    * Seller marks ready and sets delivery details
    * Generates delivery code for buyer
    */
@@ -300,16 +480,24 @@ export class EscrowService {
 
       this.logger.log(`Seller ready for escrow ${escrowId}, delivery scheduled for ${dto.deliveryDate} ${dto.deliveryTime}`);
 
+      // Format delivery date for display (e.g. "Mar 21, 2026")
+      const formattedDeliveryDate = deliveryDateObj.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+
       // Notify buyer — push + in-app
       await this.notificationsService.createNotification({
         userId: escrow.buyerId,
         type: NotificationType.DELIVERY_CODE_SENT,
         title: 'Your delivery code is ready',
-        body: `The seller is ready for order ${escrow.orderNumber}. Delivery scheduled for ${dto.deliveryDate} at ${dto.deliveryTime} at ${dto.deliveryLocation}.`,
+        body: `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Delivery scheduled for ${formattedDeliveryDate} at ${dto.deliveryTime} at ${dto.deliveryLocation}.`,
         data: {
           escrowId,
           orderNumber: escrow.orderNumber,
-          deliveryDate: dto.deliveryDate,
+          deliveryCode: deliveryCode.code,
+          deliveryDate: formattedDeliveryDate,
           deliveryTime: dto.deliveryTime,
           deliveryLocation: dto.deliveryLocation,
         },
@@ -325,7 +513,8 @@ export class EscrowService {
           context: {
             buyerName: buyer.fullName,
             orderNumber: escrow.orderNumber,
-            deliveryDate: dto.deliveryDate,
+            deliveryCode: deliveryCode.code,
+            deliveryDate: formattedDeliveryDate,
             deliveryTime: dto.deliveryTime,
             deliveryLocation: dto.deliveryLocation,
           },
@@ -547,10 +736,24 @@ export class EscrowService {
       escrow.refundedAt = new Date();
       await queryRunner.manager.save(escrow);
 
-      // Release listing
-      await queryRunner.manager.update(Listing, escrow.listingId, {
-        status: ListingStatus.ACTIVE,
-      });
+      // Release listing (if listing-based escrow)
+      if (escrow.listingId) {
+        await queryRunner.manager.update(Listing, escrow.listingId, {
+          status: ListingStatus.ACTIVE,
+        });
+      }
+
+      // Revert buy request to OPEN (if buy-request-based escrow)
+      if (escrow.buyRequestOfferId) {
+        const offer = await this.buyRequestOfferRepo.findOne({
+          where: { id: escrow.buyRequestOfferId },
+        });
+        if (offer) {
+          await queryRunner.manager.update(BuyRequest, offer.buyRequestId, {
+            status: BuyRequestStatus.OPEN,
+          });
+        }
+      }
 
       await queryRunner.commitTransaction();
 
@@ -601,7 +804,8 @@ export class EscrowService {
         escrowId,
         orderNumber: escrow.orderNumber,
         sellerId: escrow.sellerId,
-        listingId: escrow.listingId,
+        ...(escrow.listingId && { listingId: escrow.listingId }),
+        ...(escrow.buyRequestOfferId && { buyRequestOfferId: escrow.buyRequestOfferId }),
       },
     });
   }
@@ -646,10 +850,12 @@ export class EscrowService {
 
       await queryRunner.manager.save(escrow);
 
-      // Update listing to sold
-      await queryRunner.manager.update(Listing, escrow.listingId, {
-        status: ListingStatus.SOLD,
-      });
+      // Update listing to sold (if listing-based escrow)
+      if (escrow.listingId) {
+        await queryRunner.manager.update(Listing, escrow.listingId, {
+          status: ListingStatus.SOLD,
+        });
+      }
 
       await queryRunner.commitTransaction();
 
@@ -768,10 +974,24 @@ export class EscrowService {
 
       await queryRunner.manager.save(escrow);
 
-      // Release listing
-      await queryRunner.manager.update(Listing, escrow.listingId, {
-        status: ListingStatus.ACTIVE,
-      });
+      // Release listing (if listing-based escrow)
+      if (escrow.listingId) {
+        await queryRunner.manager.update(Listing, escrow.listingId, {
+          status: ListingStatus.ACTIVE,
+        });
+      }
+
+      // Revert buy request to OPEN (if buy-request-based escrow)
+      if (escrow.buyRequestOfferId) {
+        const offer = await this.buyRequestOfferRepo.findOne({
+          where: { id: escrow.buyRequestOfferId },
+        });
+        if (offer) {
+          await queryRunner.manager.update(BuyRequest, offer.buyRequestId, {
+            status: BuyRequestStatus.OPEN,
+          });
+        }
+      }
 
       // Remove any pending jobs
       await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
@@ -998,13 +1218,27 @@ export class EscrowService {
       await queryRunner.manager.save(dispute);
       await queryRunner.manager.save(escrow);
 
-      // Update listing status
-      await queryRunner.manager.update(Listing, escrow.listingId, {
-        status:
-          dto.resolution === DisputeStatus.RESOLVED_BUYER
-            ? ListingStatus.ACTIVE
-            : ListingStatus.SOLD,
-      });
+      // Update listing status (if listing-based escrow)
+      if (escrow.listingId) {
+        await queryRunner.manager.update(Listing, escrow.listingId, {
+          status:
+            dto.resolution === DisputeStatus.RESOLVED_BUYER
+              ? ListingStatus.ACTIVE
+              : ListingStatus.SOLD,
+        });
+      }
+
+      // Revert buy request to OPEN if resolved in buyer's favor
+      if (escrow.buyRequestOfferId && dto.resolution === DisputeStatus.RESOLVED_BUYER) {
+        const offer = await this.buyRequestOfferRepo.findOne({
+          where: { id: escrow.buyRequestOfferId },
+        });
+        if (offer) {
+          await queryRunner.manager.update(BuyRequest, offer.buyRequestId, {
+            status: BuyRequestStatus.OPEN,
+          });
+        }
+      }
 
       await queryRunner.commitTransaction();
 
@@ -1028,7 +1262,7 @@ export class EscrowService {
   ): Promise<EscrowTransaction> {
     const escrow = await this.escrowRepo.findOne({
       where: { id: escrowId },
-      relations: ['buyer', 'seller', 'listing'],
+      relations: ['buyer', 'seller', 'listing', 'buyRequestOffer', 'buyRequestOffer.buyRequest'],
     });
 
     if (!escrow) {
@@ -1067,7 +1301,7 @@ export class EscrowService {
 
     const [escrows, total] = await this.escrowRepo.findAndCount({
       where,
-      relations: ['listing'],
+      relations: ['listing', 'buyRequestOffer', 'buyRequestOffer.buyRequest'],
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

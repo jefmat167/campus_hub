@@ -10,6 +10,8 @@ import { Listing } from '../../database/entities/listing.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
 import { University } from '../../database/entities/university.entity';
 import { User } from '../../database/entities/user.entity';
+import { BuyRequestOffer } from '../../database/entities/buy-request-offer.entity';
+import { BuyRequest } from '../../database/entities/buy-request.entity';
 import { WalletModule } from '../wallet/wallet.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { EmailModule } from '../email/email.module';
@@ -24,6 +26,8 @@ import { ESCROW_QUEUE_NAME } from './interfaces/escrow-jobs.interface';
       DeliveryCode,
       University,
       User,
+      BuyRequestOffer,
+      BuyRequest,
     ]),
     BullModule.registerQueue({
       name: ESCROW_QUEUE_NAME,

@@ -18,6 +18,8 @@ import {
 } from './buy-request-offers.controller';
 import { BuyRequestOffersService } from './buy-request-offers.service';
 import { ChatModule } from '../chat/chat.module';
+import { EscrowModule } from '../escrow/escrow.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -33,6 +35,8 @@ import { ChatModule } from '../chat/chat.module';
       Department,
     ]),
     ChatModule,
+    EscrowModule,
+    NotificationsModule,
   ],
   controllers: [
     MarketplaceController,
