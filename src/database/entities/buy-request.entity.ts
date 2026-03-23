@@ -75,9 +75,6 @@ export class BuyRequest {
   })
   budgetMax: number | null;
 
-  @Column({ default: true, name: 'is_budget_negotiable' })
-  isBudgetNegotiable: boolean;
-
   @Column({
     type: 'enum',
     enum: RequestUrgency,

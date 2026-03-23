@@ -293,13 +293,6 @@ export class BuyRequestsService {
       qb.andWhere('request.budgetMin <= :maxBudget', { maxBudget: query.maxBudget });
     }
 
-    // Filter by negotiable
-    if (query.isBudgetNegotiable !== undefined) {
-      qb.andWhere('request.isBudgetNegotiable = :isBudgetNegotiable', {
-        isBudgetNegotiable: query.isBudgetNegotiable,
-      });
-    }
-
     // Filter by university
     if (query.universityId) {
       qb.andWhere('request.universityId = :universityId', {
