@@ -3,7 +3,6 @@ import {
   IsNotEmpty,
   IsEnum,
   IsNumber,
-  IsBoolean,
   IsOptional,
   IsUUID,
   Min,
@@ -80,15 +79,6 @@ export class CreateBuyRequestDto {
   @IsOptional()
   @ValidateIf((o) => o.budgetMax !== undefined)
   budgetMax?: number;
-
-  @ApiPropertyOptional({
-    description: 'Whether you are open to negotiating on budget',
-    default: true,
-    example: true,
-  })
-  @IsBoolean()
-  @IsOptional()
-  isBudgetNegotiable?: boolean = true;
 
   @ApiPropertyOptional({
     description: 'How urgently you need the item',

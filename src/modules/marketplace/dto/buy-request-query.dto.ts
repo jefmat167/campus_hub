@@ -2,7 +2,6 @@ import {
   IsString,
   IsEnum,
   IsNumber,
-  IsBoolean,
   IsOptional,
   IsUUID,
   Min,
@@ -101,15 +100,6 @@ export class BuyRequestQueryDto {
   @IsOptional()
   @Type(() => Number)
   maxBudget?: number;
-
-  @ApiPropertyOptional({
-    description: 'Only show requests with negotiable budget',
-    example: true,
-  })
-  @IsBoolean()
-  @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
-  isBudgetNegotiable?: boolean;
 
   @ApiPropertyOptional({
     description: 'Filter by visibility scope',
