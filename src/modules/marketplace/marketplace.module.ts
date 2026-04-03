@@ -20,6 +20,7 @@ import { BuyRequestOffersService } from './buy-request-offers.service';
 import { ChatModule } from '../chat/chat.module';
 import { EscrowModule } from '../escrow/escrow.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ChatModule,
     EscrowModule,
     NotificationsModule,
+    UploadModule,
   ],
   controllers: [
     MarketplaceController,

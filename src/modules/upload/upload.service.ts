@@ -5,16 +5,20 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { LessThan, Repository, In } from 'typeorm';
 import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
+import { PendingUpload } from '../../database/entities/pending-upload.entity';
 
 export enum UploadFolder {
   LISTINGS = 'listings',
@@ -38,17 +42,31 @@ interface FileUploadOptions {
   allowedMimeTypes?: string[];
 }
 
+export interface PresignedUrlResult {
+  uploadUrl: string;
+  fileUrl: string;
+}
+
 @Injectable()
 export class UploadService {
   private readonly logger = new Logger(UploadService.name);
   private s3Client: S3Client | null = null;
+  private r2Client: S3Client | null = null;
   private cloudinaryConfigured = false;
   private readonly bucketName: string;
   private readonly s3Region: string;
+  private readonly r2BucketName: string;
+  private readonly r2PublicUrl: string;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(PendingUpload)
+    private readonly pendingUploadRepository: Repository<PendingUpload>,
+  ) {
     this.bucketName = this.configService.get<string>('AWS_S3_BUCKET') || '';
     this.s3Region = this.configService.get<string>('AWS_REGION') || 'us-east-1';
+    this.r2BucketName = this.configService.get<string>('R2_BUCKET_NAME') || '';
+    this.r2PublicUrl = this.configService.get<string>('R2_PUBLIC_URL') || '';
 
     // Initialize S3 if credentials are available
     const awsAccessKey = this.configService.get<string>('AWS_ACCESS_KEY_ID');
@@ -65,6 +83,25 @@ export class UploadService {
       this.logger.log('S3 client initialized');
     } else {
       this.logger.warn('S3 credentials not configured');
+    }
+
+    // Initialize R2 if credentials are available
+    const r2AccountId = this.configService.get<string>('R2_ACCOUNT_ID');
+    const r2AccessKey = this.configService.get<string>('R2_ACCESS_KEY_ID');
+    const r2SecretKey = this.configService.get<string>('R2_SECRET_ACCESS_KEY');
+
+    if (r2AccountId && r2AccessKey && r2SecretKey && this.r2BucketName) {
+      this.r2Client = new S3Client({
+        region: 'auto',
+        endpoint: `https://${r2AccountId}.r2.cloudflarestorage.com`,
+        credentials: {
+          accessKeyId: r2AccessKey,
+          secretAccessKey: r2SecretKey,
+        },
+      });
+      this.logger.log('R2 client initialized');
+    } else {
+      this.logger.warn('R2 credentials not configured');
     }
 
     // Initialize Cloudinary if credentials are available
@@ -260,6 +297,106 @@ export class UploadService {
 
       uploadStream.end(file.buffer);
     });
+  }
+
+  // R2 Presigned URL Operations
+
+  async generatePresignedUrls(
+    userId: string,
+    files: Array<{ contentType: string; filename: string }>,
+  ): Promise<PresignedUrlResult[]> {
+    if (!this.r2Client) {
+      throw new InternalServerErrorException('R2 storage not configured');
+    }
+
+    const results = await Promise.all(
+      files.map(async ({ contentType, filename }) => {
+        const sanitizedFilename = this.sanitizeFilename(filename);
+        const objectKey = `listings/${userId}/${uuidv4()}-${sanitizedFilename}`;
+
+        const command = new PutObjectCommand({
+          Bucket: this.r2BucketName,
+          Key: objectKey,
+          ContentType: contentType,
+        });
+
+        const uploadUrl = await getSignedUrl(this.r2Client!, command, {
+          expiresIn: 300,
+        });
+
+        const fileUrl = `${this.r2PublicUrl}/${objectKey}`;
+
+        return { uploadUrl, fileUrl, objectKey };
+      }),
+    );
+
+    // Track pending uploads for cleanup
+    const pendingUploads = results.map(({ objectKey }) =>
+      this.pendingUploadRepository.create({
+        userId,
+        objectKey,
+      }),
+    );
+    await this.pendingUploadRepository.save(pendingUploads);
+
+    return results.map(({ uploadUrl, fileUrl }) => ({ uploadUrl, fileUrl }));
+  }
+
+  async claimUploadedFiles(fileUrls: string[]): Promise<void> {
+    if (!this.r2PublicUrl || fileUrls.length === 0) return;
+
+    const objectKeys = fileUrls
+      .filter((url) => url.startsWith(this.r2PublicUrl))
+      .map((url) => url.replace(`${this.r2PublicUrl}/`, ''));
+
+    if (objectKeys.length === 0) return;
+
+    await this.pendingUploadRepository.delete({ objectKey: In(objectKeys) });
+  }
+
+  async cleanupOrphanedUploads(olderThanHours: number = 24): Promise<number> {
+    if (!this.r2Client) return 0;
+
+    const cutoff = new Date();
+    cutoff.setHours(cutoff.getHours() - olderThanHours);
+
+    const orphanedUploads = await this.pendingUploadRepository.find({
+      where: { createdAt: LessThan(cutoff) },
+    });
+
+    if (orphanedUploads.length === 0) return 0;
+
+    // Delete objects from R2 in batches of 1000 (S3 DeleteObjects limit)
+    const batchSize = 1000;
+    for (let i = 0; i < orphanedUploads.length; i += batchSize) {
+      const batch = orphanedUploads.slice(i, i + batchSize);
+      try {
+        await this.r2Client.send(
+          new DeleteObjectsCommand({
+            Bucket: this.r2BucketName,
+            Delete: {
+              Objects: batch.map((u) => ({ Key: u.objectKey })),
+            },
+          }),
+        );
+      } catch (error) {
+        this.logger.error('Failed to delete orphaned R2 objects', error);
+      }
+    }
+
+    // Remove pending upload records
+    const ids = orphanedUploads.map((u) => u.id);
+    await this.pendingUploadRepository.delete(ids);
+
+    this.logger.log(`Cleaned up ${orphanedUploads.length} orphaned uploads`);
+    return orphanedUploads.length;
+  }
+
+  private sanitizeFilename(filename: string): string {
+    return filename
+      .replace(/[/\\:\0]/g, '_')
+      .replace(/\s+/g, '_')
+      .slice(0, 100);
   }
 
   // Utility to check if storage is configured
