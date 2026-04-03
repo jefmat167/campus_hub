@@ -45,6 +45,7 @@ interface FileUploadOptions {
 export interface PresignedUrlResult {
   uploadUrl: string;
   fileUrl: string;
+  contentType: string;
 }
 
 @Injectable()
@@ -326,7 +327,7 @@ export class UploadService {
 
         const fileUrl = `${this.r2PublicUrl}/${objectKey}`;
 
-        return { uploadUrl, fileUrl, objectKey };
+        return { uploadUrl, fileUrl, contentType, objectKey };
       }),
     );
 
@@ -339,7 +340,7 @@ export class UploadService {
     );
     await this.pendingUploadRepository.save(pendingUploads);
 
-    return results.map(({ uploadUrl, fileUrl }) => ({ uploadUrl, fileUrl }));
+    return results.map(({ uploadUrl, fileUrl, contentType }) => ({ uploadUrl, fileUrl, contentType }));
   }
 
   async claimUploadedFiles(fileUrls: string[]): Promise<void> {
