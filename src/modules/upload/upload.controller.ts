@@ -27,6 +27,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { UploadService, UploadFolder } from './upload.service';
+import { GeneratePresignedUrlsDto } from './dto/presigned-url.dto';
 
 @ApiTags('Upload')
 @Controller('upload')
@@ -34,6 +35,47 @@ import { UploadService, UploadFolder } from './upload.service';
 @ApiBearerAuth()
 export class UploadController {
   constructor(private readonly uploadService: UploadService) {}
+
+  @Post('presigned-urls')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @MinTier(VerificationTier.TIER_0)
+  @ApiOperation({
+    summary: 'Generate presigned upload URLs for direct R2 upload',
+  })
+  @ApiBody({ type: GeneratePresignedUrlsDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Presigned URLs generated successfully',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            uploadUrl:
+              'https://account-id.r2.cloudflarestorage.com/bucket/listings/user-id/uuid-photo1.jpg?X-Amz-Signature=...',
+            fileUrl:
+              'https://pub-xxx.r2.dev/listings/user-id/uuid-photo1.jpg',
+          },
+        ],
+        message: 'Presigned URLs generated successfully',
+      },
+    },
+  })
+  async generatePresignedUrls(
+    @CurrentUser('id') userId: string,
+    @Body() dto: GeneratePresignedUrlsDto,
+  ) {
+    const results = await this.uploadService.generatePresignedUrls(
+      userId,
+      dto.files,
+    );
+
+    return {
+      success: true,
+      data: results,
+      message: 'Presigned URLs generated successfully',
+    };
+  }
 
   @Post('listing-image')
   @UseGuards(JwtAuthGuard, TierGuard)

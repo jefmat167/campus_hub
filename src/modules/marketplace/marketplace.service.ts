@@ -23,6 +23,7 @@ import {
   ListingSortBy,
   PaginatedListingsResponseDto,
 } from './dto';
+import { UploadService } from '../upload/upload.service';
 
 @Injectable()
 export class MarketplaceService {
@@ -39,6 +40,7 @@ export class MarketplaceService {
     private readonly facultyRepository: Repository<Faculty>,
     @InjectRepository(Department)
     private readonly departmentRepository: Repository<Department>,
+    private readonly uploadService: UploadService,
   ) { }
 
   /**
@@ -135,6 +137,9 @@ export class MarketplaceService {
         }),
       );
       await this.listingImageRepository.save(images);
+
+      // Claim R2 uploads so they won't be cleaned up as orphans
+      await this.uploadService.claimUploadedFiles(dto.imageUrls);
     }
 
     return this.getListingById(savedListing.id, userId);

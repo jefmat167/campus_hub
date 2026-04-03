@@ -62,6 +62,13 @@ export const envValidationSchema = Joi.object({
   CLOUDINARY_API_KEY: Joi.string().allow('').optional(),
   CLOUDINARY_API_SECRET: Joi.string().allow('').optional(),
 
+  // Cloudflare R2 - optional, for presigned URL uploads
+  R2_ACCOUNT_ID: Joi.string().allow('').optional(),
+  R2_ACCESS_KEY_ID: Joi.string().allow('').optional(),
+  R2_SECRET_ACCESS_KEY: Joi.string().allow('').optional(),
+  R2_BUCKET_NAME: Joi.string().allow('').optional(),
+  R2_PUBLIC_URL: Joi.string().uri().allow('').optional(),
+
   // Anonymous posts
   ANONYMOUS_SECRET: Joi.string().min(32).required(),
 
