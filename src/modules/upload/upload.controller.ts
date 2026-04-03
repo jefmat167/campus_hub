@@ -55,6 +55,7 @@ export class UploadController {
               'https://account-id.r2.cloudflarestorage.com/bucket/listings/user-id/uuid-photo1.jpg?X-Amz-Signature=...',
             fileUrl:
               'https://pub-xxx.r2.dev/listings/user-id/uuid-photo1.jpg',
+            contentType: 'image/jpeg',
           },
         ],
         message: 'Presigned URLs generated successfully',
