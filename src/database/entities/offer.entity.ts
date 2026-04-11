@@ -23,6 +23,7 @@ export enum OfferStatus {
 @Entity('offers')
 @Index(['listingId', 'status', 'createdAt'])
 @Index(['buyerId', 'status'])
+@Index(['sellerId', 'status', 'createdAt'])
 export class Offer {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -44,6 +45,7 @@ export class Offer {
   buyer: User;
 
   @Column({ name: 'seller_id' })
+  @Index()
   sellerId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })

@@ -119,6 +119,7 @@ export class User {
 
   // Faculty relationship
   @Column({ name: 'faculty_id' })
+  @Index()
   facultyId: string;
 
   @ManyToOne(() => Faculty, { onDelete: 'RESTRICT' })
@@ -127,6 +128,7 @@ export class User {
 
   // Department relationship
   @Column({ name: 'department_id' })
+  @Index()
   departmentId: string;
 
   @ManyToOne(() => Department, { onDelete: 'RESTRICT' })

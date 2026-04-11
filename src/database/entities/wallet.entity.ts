@@ -90,6 +90,7 @@ export class Wallet {
 
 @Entity('wallet_transactions')
 @Index(['walletId', 'createdAt'])
+@Index(['reference', 'status'])
 export class WalletTransaction {
   @PrimaryGeneratedColumn('uuid')
   id: string;

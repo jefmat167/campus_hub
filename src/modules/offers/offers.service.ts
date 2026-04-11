@@ -297,33 +297,49 @@ export class OffersService {
   async getBuyerOffers(
     userId: string,
     status?: OfferStatus,
-  ): Promise<Offer[]> {
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<{ offers: Offer[]; total: number; page: number; totalPages: number }> {
     const whereClause: any = { buyerId: userId };
     if (status) {
       whereClause.status = status;
     }
 
-    return this.offerRepository.find({
+    const offset = (page - 1) * limit;
+
+    const [offers, total] = await this.offerRepository.findAndCount({
       where: whereClause,
       relations: ['listing', 'listing.images', 'seller'],
       order: { createdAt: 'DESC' },
+      skip: offset,
+      take: limit,
     });
+
+    return { offers, total, page, totalPages: Math.ceil(total / limit) };
   }
 
   async getSellerOffers(
     userId: string,
     status?: OfferStatus,
-  ): Promise<Offer[]> {
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<{ offers: Offer[]; total: number; page: number; totalPages: number }> {
     const whereClause: any = { sellerId: userId };
     if (status) {
       whereClause.status = status;
     }
 
-    return this.offerRepository.find({
+    const offset = (page - 1) * limit;
+
+    const [offers, total] = await this.offerRepository.findAndCount({
       where: whereClause,
       relations: ['listing', 'listing.images', 'buyer'],
       order: { createdAt: 'DESC' },
+      skip: offset,
+      take: limit,
     });
+
+    return { offers, total, page, totalPages: Math.ceil(total / limit) };
   }
 
   // Job to mark expired offers

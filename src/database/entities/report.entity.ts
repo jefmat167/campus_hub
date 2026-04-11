@@ -53,6 +53,7 @@ export enum ReportAction {
 @Entity('reports')
 @Index(['status', 'createdAt'])
 @Index(['type', 'targetId'])
+@Index(['status', 'priority', 'createdAt'])
 export class Report {
   @PrimaryGeneratedColumn('uuid')
   id: string;
