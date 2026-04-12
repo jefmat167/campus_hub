@@ -1,8 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 export class AddPerformanceIndexes1742500400000
-  implements MigrationInterface
-{
+  implements MigrationInterface {
   name = 'AddPerformanceIndexes1742500400000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -24,7 +23,7 @@ export class AddPerformanceIndexes1742500400000
       `CREATE INDEX "IDX_offers_seller_id" ON "offers" ("seller_id")`,
     );
     await queryRunner.query(
-      `CREATE INDEX "IDX_offers_seller_status_created" ON "offers" ("seller_id", "status", "created_at")`,
+      `CREATE INDEX "IDX_offers_seller_status_created" ON "offers" ("seller_id", "status", "createdAt")`,
     );
 
     // wallet_transactions: composite (reference, status) for webhook processing
@@ -39,7 +38,7 @@ export class AddPerformanceIndexes1742500400000
 
     // reports: composite (status, priority, created_at) for admin queue ordering
     await queryRunner.query(
-      `CREATE INDEX "IDX_reports_status_priority_created" ON "reports" ("status", "priority", "created_at")`,
+      `CREATE INDEX "IDX_reports_status_priority_created" ON "reports" ("status", "priority", "createdAt")`,
     );
   }
 
