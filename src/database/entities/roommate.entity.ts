@@ -225,6 +225,7 @@ export class RoommateProfile {
 @Entity('roommate_interests')
 @Index(['fromUserId', 'toUserId'], { unique: true })
 @Index(['toUserId', 'status'])
+@Index(['fromUserId', 'status'])
 export class RoommateInterest {
   @PrimaryGeneratedColumn('uuid')
   id: string;

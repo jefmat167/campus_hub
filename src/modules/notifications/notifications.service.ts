@@ -272,15 +272,47 @@ export class NotificationsService {
     const tokenStrings = tokens.map((t) => t.token);
     const result = await this.firebaseService.sendToDevices(tokenStrings, message);
 
-    // Handle failures
+    // Batch update token statuses
+    const successTokens: string[] = [];
+    const failedTokens: string[] = [];
     result.results.forEach((res, index) => {
-      const token = tokenStrings[index];
       if (res.success) {
-        this.markTokenUsed(token);
+        successTokens.push(tokenStrings[index]);
       } else {
-        this.markTokenFailed(token);
+        failedTokens.push(tokenStrings[index]);
       }
     });
+
+    const tokenUpdates: Promise<any>[] = [];
+    if (successTokens.length > 0) {
+      tokenUpdates.push(
+        this.fcmTokenRepository.update(
+          { token: In(successTokens) },
+          { lastUsedAt: new Date(), failureCount: 0 },
+        ),
+      );
+    }
+    if (failedTokens.length > 0) {
+      tokenUpdates.push(
+        this.fcmTokenRepository
+          .createQueryBuilder()
+          .update(FcmToken)
+          .set({ failureCount: () => '"failure_count" + 1' })
+          .where({ token: In(failedTokens) })
+          .execute(),
+      );
+      // Deactivate tokens that hit 3 failures
+      tokenUpdates.push(
+        this.fcmTokenRepository
+          .createQueryBuilder()
+          .update(FcmToken)
+          .set({ isActive: false })
+          .where('token IN (:...tokens)', { tokens: failedTokens })
+          .andWhere('"failure_count" >= 3')
+          .execute(),
+      );
+    }
+    await Promise.all(tokenUpdates);
 
     this.logger.log(
       `Push sent to user ${userId}: ${result.successCount} success, ${result.failureCount} failed`,

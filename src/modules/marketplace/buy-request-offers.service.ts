@@ -300,16 +300,17 @@ export class BuyRequestOffersService {
         },
       );
 
-      // Send rejection notification to other responders
-      for (const rejectedOffer of otherPendingOffers) {
-        if (rejectedOffer.conversationId) {
-          await this.chatService.sendSystemMessage(
-            rejectedOffer.conversationId,
+      // Send rejection notification to other responders in parallel
+      const systemMessages = otherPendingOffers
+        .filter((o) => o.conversationId)
+        .map((rejectedOffer) =>
+          this.chatService.sendSystemMessage(
+            rejectedOffer.conversationId!,
             'This buy request has been fulfilled with another offer.',
             { type: 'request_fulfilled', offerId: rejectedOffer.id },
-          );
-        }
-      }
+          ),
+        );
+      await Promise.all(systemMessages);
     }
   }
 
@@ -375,7 +376,14 @@ export class BuyRequestOffersService {
     buyRequestId: string,
     userId: string,
     status?: BuyRequestOfferStatus,
-  ): Promise<BuyRequestOffer[]> {
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<{
+    offers: BuyRequestOffer[];
+    total: number;
+    page: number;
+    totalPages: number;
+  }> {
     const buyRequest = await this.buyRequestRepository.findOne({
       where: { id: buyRequestId },
     });
@@ -394,19 +402,29 @@ export class BuyRequestOffersService {
       whereClause.status = status;
     }
 
-    const offers = await this.offerRepository.find({
+    const offset = (page - 1) * limit;
+
+    const [offers, total] = await this.offerRepository.findAndCount({
       where: whereClause,
       relations: ['responder'],
       order: { createdAt: 'DESC' },
+      skip: offset,
+      take: limit,
     });
 
     // Sanitize responder data
-    return offers.map((offer) => {
+    offers.forEach((offer) => {
       if (offer.responder) {
         (offer as any).responder = this.sanitizeUser(offer.responder);
       }
-      return offer;
     });
+
+    return {
+      offers,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async getResponderOffers(

@@ -210,29 +210,31 @@ export class ReviewsService {
       whereClause.type = type;
     }
 
-    const [reviews, total] = await this.reviewRepository.findAndCount({
-      where: whereClause,
-      relations: ['reviewer'],
-      order: { createdAt: 'DESC' },
-      skip: offset,
-      take: limit,
-    });
+    // Run paginated reviews and stats in parallel (2 queries instead of 3)
+    const statsWhereClause: any = { revieweeId: userId };
+    if (type) {
+      statsWhereClause.type = type;
+    }
 
-    // Get average rating
-    const avgResult = await this.reviewRepository
-      .createQueryBuilder('review')
-      .select('AVG(review.rating)', 'average')
-      .where('review.revieweeId = :userId', { userId })
-      .getRawOne();
+    const [reviewsResult, distribution] = await Promise.all([
+      this.reviewRepository.findAndCount({
+        where: whereClause,
+        relations: ['reviewer'],
+        order: { createdAt: 'DESC' },
+        skip: offset,
+        take: limit,
+      }),
+      // Single query for both average and distribution
+      this.reviewRepository
+        .createQueryBuilder('review')
+        .select('review.rating', 'rating')
+        .addSelect('COUNT(*)', 'count')
+        .where('review.revieweeId = :userId', { userId })
+        .groupBy('review.rating')
+        .getRawMany(),
+    ]);
 
-    // Get rating distribution
-    const distribution = await this.reviewRepository
-      .createQueryBuilder('review')
-      .select('review.rating', 'rating')
-      .addSelect('COUNT(*)', 'count')
-      .where('review.revieweeId = :userId', { userId })
-      .groupBy('review.rating')
-      .getRawMany();
+    const [reviews, total] = reviewsResult;
 
     const ratingDistribution: Record<number, number> = {
       1: 0,
@@ -241,14 +243,19 @@ export class ReviewsService {
       4: 0,
       5: 0,
     };
+    let ratingSum = 0;
+    let ratingTotal = 0;
     distribution.forEach((d) => {
-      ratingDistribution[d.rating] = parseInt(d.count, 10);
+      const count = parseInt(d.count, 10);
+      ratingDistribution[d.rating] = count;
+      ratingSum += d.rating * count;
+      ratingTotal += count;
     });
 
     return {
       reviews: this.sanitizeReviewsUsers(reviews),
       total,
-      averageRating: avgResult.average ? parseFloat(avgResult.average) : 0,
+      averageRating: ratingTotal > 0 ? ratingSum / ratingTotal : 0,
       ratingDistribution,
     };
   }
@@ -331,29 +338,24 @@ export class ReviewsService {
   }
 
   private async updateUserRating(userId: string): Promise<void> {
-    // Update seller rating (when user is reviewed as seller)
-    const sellerResult = await this.reviewRepository
+    // Fetch both seller and buyer ratings in a single query
+    const results = await this.reviewRepository
       .createQueryBuilder('review')
-      .select('AVG(review.rating)', 'average')
+      .select('review.type', 'type')
+      .addSelect('AVG(review.rating)', 'average')
       .addSelect('COUNT(*)', 'count')
       .where('review.revieweeId = :userId', { userId })
-      .andWhere('review.type = :type', { type: ReviewType.BUYER_TO_SELLER })
-      .getRawOne();
+      .groupBy('review.type')
+      .getRawMany();
 
-    // Update buyer rating (when user is reviewed as buyer)
-    const buyerResult = await this.reviewRepository
-      .createQueryBuilder('review')
-      .select('AVG(review.rating)', 'average')
-      .addSelect('COUNT(*)', 'count')
-      .where('review.revieweeId = :userId', { userId })
-      .andWhere('review.type = :type', { type: ReviewType.SELLER_TO_BUYER })
-      .getRawOne();
+    const sellerResult = results.find((r) => r.type === ReviewType.BUYER_TO_SELLER);
+    const buyerResult = results.find((r) => r.type === ReviewType.SELLER_TO_BUYER);
 
     await this.userRepository.update(userId, {
-      sellerRating: sellerResult.average ? parseFloat(sellerResult.average) : 0,
-      sellerRatingCount: parseInt(sellerResult.count, 10) || 0,
-      buyerRating: buyerResult.average ? parseFloat(buyerResult.average) : 0,
-      buyerRatingCount: parseInt(buyerResult.count, 10) || 0,
+      sellerRating: sellerResult?.average ? parseFloat(sellerResult.average) : 0,
+      sellerRatingCount: parseInt(sellerResult?.count, 10) || 0,
+      buyerRating: buyerResult?.average ? parseFloat(buyerResult.average) : 0,
+      buyerRatingCount: parseInt(buyerResult?.count, 10) || 0,
     });
   }
 }

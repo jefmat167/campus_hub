@@ -104,28 +104,35 @@ export class BuyRequestOffersController {
   })
   @ApiParam({ name: 'requestId', description: 'Buy Request UUID' })
   @ApiQuery({ name: 'status', enum: BuyRequestOfferStatus, required: false })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default 20)' })
   @ApiResponse({
     status: 200,
     description: 'Offers retrieved successfully',
     schema: {
       example: {
         success: true,
-        data: [
-          {
-            id: '550e8400-e29b-41d4-a716-446655440000',
-            proposedPrice: 45000,
-            itemCondition: 'like_new',
-            status: 'pending',
-            message: 'I have a MacBook Pro 2021...',
-            imageUrl: 'https://storage.example.com/item.jpg',
-            responder: {
-              id: '...',
-              fullName: 'Jane Seller',
-              verificationTier: 'tier_1',
+        data: {
+          offers: [
+            {
+              id: '550e8400-e29b-41d4-a716-446655440000',
+              proposedPrice: 45000,
+              itemCondition: 'like_new',
+              status: 'pending',
+              message: 'I have a MacBook Pro 2021...',
+              imageUrl: 'https://storage.example.com/item.jpg',
+              responder: {
+                id: '...',
+                fullName: 'Jane Seller',
+                verificationTier: 'tier_1',
+              },
+              createdAt: '2024-01-15T10:30:00Z',
             },
-            createdAt: '2024-01-15T10:30:00Z',
-          },
-        ],
+          ],
+          total: 5,
+          page: 1,
+          totalPages: 1,
+        },
       },
     },
   })
@@ -135,15 +142,19 @@ export class BuyRequestOffersController {
     @Param('requestId', ParseUUIDPipe) requestId: string,
     @CurrentUser() user: User,
     @Query('status') status?: BuyRequestOfferStatus,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
   ) {
-    const offers = await this.offersService.getOffersForRequest(
+    const result = await this.offersService.getOffersForRequest(
       requestId,
       user.id,
       status,
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 20,
     );
     return {
       success: true,
-      data: offers,
+      data: result,
     };
   }
 

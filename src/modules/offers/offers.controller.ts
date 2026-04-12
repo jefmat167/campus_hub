@@ -93,30 +93,37 @@ export class OffersController {
     description: 'Filter by offer status',
     example: OfferStatus.PENDING,
   })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default 20)' })
   @ApiResponse({
     status: 200,
     description: 'Offers retrieved successfully',
     schema: {
       example: {
         success: true,
-        data: [
-          {
-            id: '550e8400-e29b-41d4-a716-446655440000',
-            amount: 400000,
-            status: 'pending',
-            listing: {
-              id: '550e8400-e29b-41d4-a716-446655440001',
-              title: 'iPhone 13 Pro Max',
-              price: 450000,
-              imageUrls: ['https://storage.example.com/img1.jpg'],
+        data: {
+          offers: [
+            {
+              id: '550e8400-e29b-41d4-a716-446655440000',
+              amount: 400000,
+              status: 'pending',
+              listing: {
+                id: '550e8400-e29b-41d4-a716-446655440001',
+                title: 'iPhone 13 Pro Max',
+                price: 450000,
+                imageUrls: ['https://storage.example.com/img1.jpg'],
+              },
+              seller: {
+                id: '550e8400-e29b-41d4-a716-446655440002',
+                fullName: 'Jane Doe',
+              },
+              createdAt: '2024-01-15T10:30:00Z',
             },
-            seller: {
-              id: '550e8400-e29b-41d4-a716-446655440002',
-              fullName: 'Jane Doe',
-            },
-            createdAt: '2024-01-15T10:30:00Z',
-          },
-        ],
+          ],
+          total: 5,
+          page: 1,
+          totalPages: 1,
+        },
       },
     },
   })
@@ -124,11 +131,18 @@ export class OffersController {
   async getBuyerOffers(
     @CurrentUser() user: User,
     @Query('status') status?: OfferStatus,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
   ) {
-    const offers = await this.offersService.getBuyerOffers(user.id, status);
+    const result = await this.offersService.getBuyerOffers(
+      user.id,
+      status,
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 20,
+    );
     return {
       success: true,
-      data: offers,
+      data: result,
     };
   }
 
@@ -145,31 +159,38 @@ export class OffersController {
     description: 'Filter by offer status',
     example: OfferStatus.PENDING,
   })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default 20)' })
   @ApiResponse({
     status: 200,
     description: 'Offers retrieved successfully',
     schema: {
       example: {
         success: true,
-        data: [
-          {
-            id: '550e8400-e29b-41d4-a716-446655440000',
-            amount: 400000,
-            status: 'pending',
-            listing: {
-              id: '550e8400-e29b-41d4-a716-446655440001',
-              title: 'iPhone 13 Pro Max',
-              price: 450000,
+        data: {
+          offers: [
+            {
+              id: '550e8400-e29b-41d4-a716-446655440000',
+              amount: 400000,
+              status: 'pending',
+              listing: {
+                id: '550e8400-e29b-41d4-a716-446655440001',
+                title: 'iPhone 13 Pro Max',
+                price: 450000,
+              },
+              buyer: {
+                id: '550e8400-e29b-41d4-a716-446655440002',
+                fullName: 'John Doe',
+                isIdVerified: true,
+              },
+              message: 'Hi, I am interested. Can you do 400k?',
+              createdAt: '2024-01-15T10:30:00Z',
             },
-            buyer: {
-              id: '550e8400-e29b-41d4-a716-446655440002',
-              fullName: 'John Doe',
-              isIdVerified: true,
-            },
-            message: 'Hi, I am interested. Can you do 400k?',
-            createdAt: '2024-01-15T10:30:00Z',
-          },
-        ],
+          ],
+          total: 5,
+          page: 1,
+          totalPages: 1,
+        },
       },
     },
   })
@@ -177,11 +198,18 @@ export class OffersController {
   async getSellerOffers(
     @CurrentUser() user: User,
     @Query('status') status?: OfferStatus,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
   ) {
-    const offers = await this.offersService.getSellerOffers(user.id, status);
+    const result = await this.offersService.getSellerOffers(
+      user.id,
+      status,
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 20,
+    );
     return {
       success: true,
-      data: offers,
+      data: result,
     };
   }
 

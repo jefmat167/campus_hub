@@ -32,6 +32,7 @@ export enum DocumentStatus {
 
 @Entity('verification_documents')
 @Index(['userId', 'type'])
+@Index(['userId', 'status'])
 export class VerificationDocument {
   @PrimaryGeneratedColumn('uuid')
   id: string;

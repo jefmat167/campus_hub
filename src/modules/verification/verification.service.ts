@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import {
   User,
   VerificationTier,
@@ -273,16 +273,27 @@ export class VerificationService {
 
     const [users, total] = await query.getManyAndCount();
 
-    // Fetch documents for each user
-    const usersWithDocs = await Promise.all(
-      users.map(async (user) => {
-        const documents = await this.documentRepo.find({
-          where: { userId: user.id, status: DocumentStatus.PENDING },
+    // Batch-load documents for all users in a single query
+    const userIds = users.map((user) => user.id);
+    const allDocuments = userIds.length
+      ? await this.documentRepo.find({
+          where: { userId: In(userIds), status: DocumentStatus.PENDING },
           order: { type: 'ASC' },
-        });
-        return { ...this.sanitizeUser(user), documents };
-      }),
-    );
+        })
+      : [];
+
+    // Group documents by userId
+    const docsByUserId = new Map<string, VerificationDocument[]>();
+    for (const doc of allDocuments) {
+      const docs = docsByUserId.get(doc.userId) || [];
+      docs.push(doc);
+      docsByUserId.set(doc.userId, docs);
+    }
+
+    const usersWithDocs = users.map((user) => ({
+      ...this.sanitizeUser(user),
+      documents: docsByUserId.get(user.id) || [],
+    }));
 
     return { users: usersWithDocs, total };
   }
