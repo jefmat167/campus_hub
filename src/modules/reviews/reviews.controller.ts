@@ -22,7 +22,6 @@ import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
-import { ReviewType } from '../../database/entities/review.entity';
 import { ReviewsService } from './reviews.service';
 import { CreateReviewDto, UpdateReviewDto } from './dto';
 
@@ -38,7 +37,7 @@ export class ReviewsController {
   @ApiOperation({
     summary: 'Create a review',
     description:
-      'Create a review for a completed transaction. Requires Tier 0 verification. The review type (buyer_to_seller or seller_to_buyer) is automatically determined based on your role in the transaction.',
+      'Rate and review the seller of a completed escrow transaction. Only the buyer of the escrow can create a review. Requires Tier 0 verification.',
   })
   @ApiResponse({
     status: 201,
@@ -48,10 +47,9 @@ export class ReviewsController {
         success: true,
         data: {
           id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-          transactionId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+          escrowTransactionId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
           reviewerId: '123e4567-e89b-12d3-a456-426614174000',
           revieweeId: '987fcdeb-51a2-3bc4-d567-890123456789',
-          type: 'buyer_to_seller',
           rating: 5,
           comment:
             'Great seller! Item was exactly as described and delivery was quick.',
@@ -65,7 +63,7 @@ export class ReviewsController {
   })
   @ApiResponse({ status: 400, description: 'Invalid request or already reviewed' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 404, description: 'Transaction not found' })
+  @ApiResponse({ status: 404, description: 'Escrow transaction not found' })
   async createReview(@CurrentUser() user: User, @Body() dto: CreateReviewDto) {
     const review = await this.reviewsService.createReview(user.id, dto);
     return {
@@ -97,10 +95,9 @@ export class ReviewsController {
         success: true,
         data: {
           id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-          transactionId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+          escrowTransactionId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
           reviewerId: '123e4567-e89b-12d3-a456-426614174000',
           revieweeId: '987fcdeb-51a2-3bc4-d567-890123456789',
-          type: 'buyer_to_seller',
           rating: 4,
           comment: 'Good seller, but delivery took a bit longer than expected.',
           isEdited: true,
@@ -130,20 +127,14 @@ export class ReviewsController {
 
   @Get('user/:userId')
   @ApiOperation({
-    summary: 'Get reviews received by a user',
+    summary: 'Get reviews received by a seller',
     description:
-      'Get all reviews received by a user with rating statistics and distribution',
+      'Get all reviews received by a seller with rating statistics and distribution',
   })
   @ApiParam({
     name: 'userId',
-    description: 'User ID to get reviews for',
+    description: 'Seller ID to get reviews for',
     example: '987fcdeb-51a2-3bc4-d567-890123456789',
-  })
-  @ApiQuery({
-    name: 'type',
-    required: false,
-    enum: ReviewType,
-    description: 'Filter by review type (buyer_to_seller or seller_to_buyer)',
   })
   @ApiQuery({
     name: 'page',
@@ -171,7 +162,6 @@ export class ReviewsController {
               id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
               rating: 5,
               comment: 'Excellent seller!',
-              type: 'buyer_to_seller',
               isEdited: false,
               createdAt: '2024-01-15T10:30:00.000Z',
               reviewer: {
@@ -196,13 +186,11 @@ export class ReviewsController {
   })
   async getUserReviews(
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Query('type') type?: ReviewType,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
     const result = await this.reviewsService.getUserReviews(
       userId,
-      type,
       page || 1,
       limit || 20,
     );
@@ -245,8 +233,7 @@ export class ReviewsController {
             {
               id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
               rating: 5,
-              comment: 'Great buyer, quick payment!',
-              type: 'seller_to_buyer',
+              comment: 'Item as described, fast delivery!',
               isEdited: false,
               createdAt: '2024-01-15T10:30:00.000Z',
               reviewee: {
@@ -267,7 +254,6 @@ export class ReviewsController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    console.log("current user => ", user);
     const result = await this.reviewsService.getReviewsGivenByUser(
       user.id,
       page || 1,
@@ -279,18 +265,18 @@ export class ReviewsController {
     };
   }
 
-  @Get('transaction/:transactionId')
+  @Get('transaction/:escrowTransactionId')
   @UseGuards(JwtAuthGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Get reviews for a transaction',
+    summary: 'Get review for an escrow transaction',
     description:
-      'Get all reviews associated with a specific transaction (both buyer and seller reviews). Requires Tier 0 verification.',
+      'Get the buyer review associated with a specific escrow transaction, if one exists. Requires Tier 0 verification.',
   })
   @ApiParam({
-    name: 'transactionId',
-    description: 'Transaction (accepted offer) ID',
+    name: 'escrowTransactionId',
+    description: 'Escrow transaction ID',
     example: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
   })
   @ApiResponse({
@@ -302,19 +288,10 @@ export class ReviewsController {
         data: [
           {
             id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-            type: 'buyer_to_seller',
             rating: 5,
             comment: 'Great seller!',
             reviewer: { id: '...', firstName: 'John', lastName: 'Doe' },
             reviewee: { id: '...', firstName: 'Jane', lastName: 'Smith' },
-          },
-          {
-            id: 'b2c3d4e5-f6a7-8901-bcde-f23456789012',
-            type: 'seller_to_buyer',
-            rating: 5,
-            comment: 'Great buyer, quick payment!',
-            reviewer: { id: '...', firstName: 'Jane', lastName: 'Smith' },
-            reviewee: { id: '...', firstName: 'John', lastName: 'Doe' },
           },
         ],
       },
@@ -322,28 +299,28 @@ export class ReviewsController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getTransactionReviews(
-    @Param('transactionId', ParseUUIDPipe) transactionId: string,
+    @Param('escrowTransactionId', ParseUUIDPipe) escrowTransactionId: string,
   ) {
     const reviews =
-      await this.reviewsService.getTransactionReviews(transactionId);
+      await this.reviewsService.getTransactionReviews(escrowTransactionId);
     return {
       success: true,
       data: reviews,
     };
   }
 
-  @Get('can-review/:transactionId')
+  @Get('can-review/:escrowTransactionId')
   @UseGuards(JwtAuthGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Check if user can review a transaction',
+    summary: 'Check if user can review an escrow transaction',
     description:
-      'Check if the authenticated user is eligible to review a specific transaction. Requires Tier 0 verification.',
+      'Check if the authenticated user is eligible to review a specific escrow transaction. Requires Tier 0 verification.',
   })
   @ApiParam({
-    name: 'transactionId',
-    description: 'Transaction (accepted offer) ID',
+    name: 'escrowTransactionId',
+    description: 'Escrow transaction ID',
     example: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
   })
   @ApiResponse({
@@ -380,12 +357,12 @@ export class ReviewsController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async canReviewTransaction(
-    @Param('transactionId', ParseUUIDPipe) transactionId: string,
+    @Param('escrowTransactionId', ParseUUIDPipe) escrowTransactionId: string,
     @CurrentUser() user: User,
   ) {
     const result = await this.reviewsService.canReviewTransaction(
       user.id,
-      transactionId,
+      escrowTransactionId,
     );
     return {
       success: true,
@@ -412,10 +389,9 @@ export class ReviewsController {
         success: true,
         data: {
           id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-          transactionId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+          escrowTransactionId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
           reviewerId: '123e4567-e89b-12d3-a456-426614174000',
           revieweeId: '987fcdeb-51a2-3bc4-d567-890123456789',
-          type: 'buyer_to_seller',
           rating: 5,
           comment: 'Great seller! Item was exactly as described.',
           isEdited: false,

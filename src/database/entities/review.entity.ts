@@ -10,24 +10,25 @@ import {
   Unique,
 } from 'typeorm';
 import { User } from './user.entity';
-
-export enum ReviewType {
-  BUYER_TO_SELLER = 'buyer_to_seller',
-  SELLER_TO_BUYER = 'seller_to_buyer',
-}
+import { EscrowTransaction } from './escrow.entity';
 
 @Entity('reviews')
-@Unique(['transactionId', 'reviewerId', 'type'])
-@Index(['revieweeId', 'type', 'createdAt'])
+@Unique(['escrowTransactionId', 'reviewerId'])
+@Index(['revieweeId', 'createdAt'])
 export class Review {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   // The escrow transaction this review is for
-  @Column({ name: 'transaction_id' })
+  @Column({ name: 'escrow_transaction_id' })
   @Index()
-  transactionId: string;
+  escrowTransactionId: string;
 
+  @ManyToOne(() => EscrowTransaction, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'escrow_transaction_id' })
+  escrowTransaction: EscrowTransaction;
+
+  // The buyer who wrote the review
   @Column({ name: 'reviewer_id' })
   @Index()
   reviewerId: string;
@@ -36,6 +37,7 @@ export class Review {
   @JoinColumn({ name: 'reviewer_id' })
   reviewer: User;
 
+  // The seller being reviewed
   @Column({ name: 'reviewee_id' })
   @Index()
   revieweeId: string;
@@ -43,12 +45,6 @@ export class Review {
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'reviewee_id' })
   reviewee: User;
-
-  @Column({
-    type: 'enum',
-    enum: ReviewType,
-  })
-  type: ReviewType;
 
   @Column({ type: 'smallint' })
   rating: number; // 1-5 stars

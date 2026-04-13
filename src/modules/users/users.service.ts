@@ -115,8 +115,6 @@ export class UsersService {
       verificationTier: user.verificationTier,
       sellerRating: user.sellerRating,
       sellerRatingCount: user.sellerRatingCount,
-      buyerRating: user.buyerRating,
-      buyerRatingCount: user.buyerRatingCount,
       completedTransactions: user.completedTransactions,
       isVerifiedSeller: user.isVerifiedSeller,
       createdAt: user.createdAt,
