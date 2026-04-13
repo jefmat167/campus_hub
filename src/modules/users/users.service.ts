@@ -294,7 +294,7 @@ export class UsersService {
       // 2. Soft delete housing listings
       await queryRunner.manager.update(
         HousingListing,
-        { landlordId: userId, status: In([HousingStatus.AVAILABLE, HousingStatus.PAUSED]) },
+        { posterId: userId, status: In([HousingStatus.AVAILABLE, HousingStatus.PAUSED]) },
         { status: HousingStatus.DELETED },
       );
 
@@ -436,7 +436,7 @@ export class UsersService {
       // 3. Reactivate housing listings (DELETED -> PAUSED for safety)
       await queryRunner.manager.update(
         HousingListing,
-        { landlordId: userId, status: HousingStatus.DELETED },
+        { posterId: userId, status: HousingStatus.DELETED },
         { status: HousingStatus.PAUSED },
       );
 

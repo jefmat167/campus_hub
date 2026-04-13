@@ -139,15 +139,6 @@ export class SearchHousingDto {
   hasGenerator?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Only show verified listings',
-    example: true,
-  })
-  @IsBoolean()
-  @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
-  isVerified?: boolean;
-
-  @ApiPropertyOptional({
     description: 'Page number for pagination',
     example: 1,
     minimum: 1,

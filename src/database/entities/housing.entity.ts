@@ -22,9 +22,11 @@ export enum HousingType {
 
 export enum HousingStatus {
   AVAILABLE = 'available',
-  RENTED = 'rented',
+  TAKEN = 'taken',
   RESERVED = 'reserved',
   PAUSED = 'paused',
+  UNDER_REVIEW = 'under_review',
+  EXPIRED = 'expired',
   DELETED = 'deleted',
 }
 
@@ -46,22 +48,29 @@ export enum PaymentFrequency {
   YEARLY = 'yearly',
 }
 
+export enum PosterRelationship {
+  CURRENT_TENANT = 'current_tenant',
+  PAST_TENANT = 'past_tenant',
+  KNOWS_LANDLORD = 'knows_landlord',
+}
+
 @Entity('housing_listings')
 @Index(['universityId', 'status', 'createdAt'])
 @Index(['universityId', 'type', 'status'])
-@Index(['landlordId', 'status'])
+@Index(['posterId', 'status'])
 @Index(['price', 'status'])
+@Index(['expiresAt'])
 export class HousingListing {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'landlord_id' })
+  @Column({ name: 'poster_id' })
   @Index()
-  landlordId: string;
+  posterId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'landlord_id' })
-  landlord: User;
+  @JoinColumn({ name: 'poster_id' })
+  poster: User;
 
   @Column({ name: 'university_id' })
   @Index()
@@ -91,6 +100,12 @@ export class HousingListing {
   })
   @Index()
   status: HousingStatus;
+
+  @Column({
+    type: 'enum',
+    enum: PosterRelationship,
+  })
+  posterRelationship: PosterRelationship;
 
   @Column({ type: 'decimal', precision: 12, scale: 2 })
   price: number;
@@ -173,7 +188,7 @@ export class HousingListing {
   @Column({ type: 'jsonb', default: [] })
   imageUrls: string[];
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ type: 'varchar', length: 500, nullable: true })
   videoUrl: string | null;
 
   @Column({ type: 'text', nullable: true })
@@ -188,11 +203,11 @@ export class HousingListing {
   @Column({ default: 0 })
   inquiryCount: number;
 
-  @Column({ default: false })
-  isVerified: boolean; // Verified by admin/agent
+  @Column({ default: 0 })
+  reportCount: number;
 
   @Column({ type: 'timestamp', nullable: true })
-  verifiedAt: Date | null;
+  expiresAt: Date | null;
 
   @CreateDateColumn()
   createdAt: Date;
