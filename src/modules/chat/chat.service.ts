@@ -13,6 +13,7 @@ import {
 } from '../../database/entities/conversation.entity';
 import { Listing } from '../../database/entities/listing.entity';
 import { HousingListing } from '../../database/entities/housing.entity';
+import { HousingService } from '../housing/housing.service';
 import { BuyRequest } from '../../database/entities/buy-request.entity';
 import { RoommateProfile, RoommateProfileStatus } from '../../database/entities/roommate.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
@@ -40,6 +41,7 @@ export class ChatService {
     private readonly roommateProfileRepository: Repository<RoommateProfile>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly housingService: HousingService,
   ) {}
 
   async createConversation(
@@ -109,10 +111,10 @@ export class ChatService {
     // Handle housing listing inquiry
     else if (dto.housingListingId) {
       // Check tier requirement for housing inquiries
-      if (!tierMeetsRequirement(user.verificationTier, VerificationTier.TIER_1)) {
+      if (!tierMeetsRequirement(user.verificationTier, VerificationTier.TIER_0)) {
         throw new ForbiddenException({
-          message: 'You must complete student verification to inquire about housing listings',
-          requiredTier: VerificationTier.TIER_1,
+          message: 'You must verify your phone and email before inquiring about housing listings',
+          requiredTier: VerificationTier.TIER_0,
           currentTier: user.verificationTier,
           upgradeRequired: true,
         });
@@ -126,9 +128,9 @@ export class ChatService {
         throw new NotFoundException('Housing listing not found');
       }
 
-      // The recipient should be the landlord
-      if (housingListing.landlordId !== dto.recipientId) {
-        throw new BadRequestException('Recipient must be the housing listing landlord');
+      // The recipient should be the poster (student who listed it)
+      if (housingListing.posterId !== dto.recipientId) {
+        throw new BadRequestException('Recipient must be the listing poster');
       }
 
       housingListingId = dto.housingListingId;
@@ -145,6 +147,11 @@ export class ChatService {
       if (existingConversation) {
         return this.getConversationById(existingConversation.id, userId);
       }
+
+      // New inquiry — bump the listing's inquiry counter. Kept out of the
+      // save path below so it only fires once per (tenant, listing) pair
+      // (the existingConversation short-circuit above handles dedup).
+      await this.housingService.incrementInquiry(dto.housingListingId);
     }
     // Handle buy request inquiry (seller responding to a buy request)
     else if (dto.buyRequestId) {

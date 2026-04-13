@@ -11,6 +11,7 @@ import { User } from '../../database/entities/user.entity';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { ChatGateway } from './chat.gateway';
+import { HousingModule } from '../housing/housing.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ChatGateway } from './chat.gateway';
       }),
       inject: [ConfigService],
     }),
+    HousingModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway],

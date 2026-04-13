@@ -18,6 +18,7 @@ import {
   FurnishingStatus,
   GenderPreference,
   PaymentFrequency,
+  PosterRelationship,
 } from '../../../database/entities/housing.entity';
 
 export class CreateHousingDto {
@@ -50,6 +51,15 @@ export class CreateHousingDto {
   })
   @IsEnum(HousingType)
   type: HousingType;
+
+  @ApiProperty({
+    description:
+      'Your relationship to this listing. Signals credibility to students browsing (current tenant = firsthand, past tenant = recent firsthand, knows landlord = third-party).',
+    enum: PosterRelationship,
+    example: PosterRelationship.CURRENT_TENANT,
+  })
+  @IsEnum(PosterRelationship)
+  posterRelationship: PosterRelationship;
 
   @ApiProperty({
     description: 'Rent price in Naira (amount per payment frequency)',
