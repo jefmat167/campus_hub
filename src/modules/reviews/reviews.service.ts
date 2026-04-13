@@ -7,8 +7,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Review, ReviewType } from '../../database/entities/review.entity';
-import { Offer, OfferStatus } from '../../database/entities/offer.entity';
+import { Review } from '../../database/entities/review.entity';
+import {
+  EscrowTransaction,
+  EscrowStatus,
+} from '../../database/entities/escrow.entity';
 import { User } from '../../database/entities/user.entity';
 import { CreateReviewDto, UpdateReviewDto } from './dto';
 
@@ -17,8 +20,8 @@ export class ReviewsService {
   constructor(
     @InjectRepository(Review)
     private readonly reviewRepository: Repository<Review>,
-    @InjectRepository(Offer)
-    private readonly offerRepository: Repository<Offer>,
+    @InjectRepository(EscrowTransaction)
+    private readonly escrowRepository: Repository<EscrowTransaction>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
   ) {}
@@ -36,8 +39,6 @@ export class ReviewsService {
       verificationTier: user.verificationTier,
       sellerRating: user.sellerRating,
       sellerRatingCount: user.sellerRatingCount,
-      buyerRating: user.buyerRating,
-      buyerRatingCount: user.buyerRatingCount,
     };
   }
 
@@ -62,47 +63,37 @@ export class ReviewsService {
   }
 
   async createReview(userId: string, dto: CreateReviewDto): Promise<Review> {
-    // In this system, transactionId refers to an accepted offer
-    // which represents a completed transaction
-    const offer = await this.offerRepository.findOne({
-      where: { id: dto.transactionId },
-      relations: ['listing'],
+    const escrow = await this.escrowRepository.findOne({
+      where: { id: dto.escrowTransactionId },
     });
 
-    if (!offer) {
-      throw new NotFoundException('Transaction not found');
+    if (!escrow) {
+      throw new NotFoundException('Escrow transaction not found');
     }
 
-    if (offer.status !== OfferStatus.ACCEPTED) {
+    if (escrow.status !== EscrowStatus.COMPLETED) {
       throw new BadRequestException(
-        'Can only review completed transactions',
+        'Can only review completed escrow transactions',
       );
     }
 
-    // Determine review type and reviewee
-    let reviewType: ReviewType;
-    let revieweeId: string;
-
-    if (userId === offer.buyerId) {
-      // Buyer reviewing seller
-      reviewType = ReviewType.BUYER_TO_SELLER;
-      revieweeId = offer.sellerId;
-    } else if (userId === offer.sellerId) {
-      // Seller reviewing buyer
-      reviewType = ReviewType.SELLER_TO_BUYER;
-      revieweeId = offer.buyerId;
-    } else {
+    // Only the buyer can review the seller
+    if (userId !== escrow.buyerId) {
+      if (userId === escrow.sellerId) {
+        throw new ForbiddenException('Sellers cannot review buyers');
+      }
       throw new ForbiddenException(
         'You are not a party to this transaction',
       );
     }
 
+    const revieweeId = escrow.sellerId;
+
     // Check if review already exists
     const existingReview = await this.reviewRepository.findOne({
       where: {
-        transactionId: dto.transactionId,
+        escrowTransactionId: dto.escrowTransactionId,
         reviewerId: userId,
-        type: reviewType,
       },
     });
 
@@ -112,20 +103,18 @@ export class ReviewsService {
       );
     }
 
-    // Create the review
     const review = this.reviewRepository.create({
-      transactionId: dto.transactionId,
+      escrowTransactionId: dto.escrowTransactionId,
       reviewerId: userId,
       revieweeId,
-      type: reviewType,
       rating: dto.rating,
       comment: dto.comment || null,
     });
 
     const savedReview = await this.reviewRepository.save(review);
 
-    // Update the reviewee's rating
-    await this.updateUserRating(revieweeId);
+    // Update the seller's rating
+    await this.updateSellerRating(revieweeId);
 
     return this.getReviewById(savedReview.id);
   }
@@ -157,7 +146,11 @@ export class ReviewsService {
       );
     }
 
-    const updateData: Partial<Review> = {
+    const updateData: {
+      isEdited: boolean;
+      rating?: number;
+      comment?: string | null;
+    } = {
       isEdited: true,
     };
 
@@ -171,9 +164,9 @@ export class ReviewsService {
 
     await this.reviewRepository.update(reviewId, updateData);
 
-    // Recalculate reviewee's rating if rating changed
+    // Recalculate seller's rating if rating changed
     if (dto.rating !== undefined && dto.rating !== review.rating) {
-      await this.updateUserRating(review.revieweeId);
+      await this.updateSellerRating(review.revieweeId);
     }
 
     return this.getReviewById(reviewId);
@@ -194,7 +187,6 @@ export class ReviewsService {
 
   async getUserReviews(
     userId: string,
-    type?: ReviewType,
     page: number = 1,
     limit: number = 20,
   ): Promise<{
@@ -205,26 +197,14 @@ export class ReviewsService {
   }> {
     const offset = (page - 1) * limit;
 
-    const whereClause: any = { revieweeId: userId };
-    if (type) {
-      whereClause.type = type;
-    }
-
-    // Run paginated reviews and stats in parallel (2 queries instead of 3)
-    const statsWhereClause: any = { revieweeId: userId };
-    if (type) {
-      statsWhereClause.type = type;
-    }
-
     const [reviewsResult, distribution] = await Promise.all([
       this.reviewRepository.findAndCount({
-        where: whereClause,
+        where: { revieweeId: userId },
         relations: ['reviewer'],
         order: { createdAt: 'DESC' },
         skip: offset,
         take: limit,
       }),
-      // Single query for both average and distribution
       this.reviewRepository
         .createQueryBuilder('review')
         .select('review.rating', 'rating')
@@ -279,10 +259,10 @@ export class ReviewsService {
   }
 
   async getTransactionReviews(
-    transactionId: string,
+    escrowTransactionId: string,
   ): Promise<Review[]> {
     const reviews = await this.reviewRepository.find({
-      where: { transactionId },
+      where: { escrowTransactionId },
       relations: ['reviewer', 'reviewee'],
     });
 
@@ -291,38 +271,36 @@ export class ReviewsService {
 
   async canReviewTransaction(
     userId: string,
-    transactionId: string,
+    escrowTransactionId: string,
   ): Promise<{
     canReview: boolean;
     reason?: string;
     existingReview?: Review;
   }> {
-    const offer = await this.offerRepository.findOne({
-      where: { id: transactionId },
+    const escrow = await this.escrowRepository.findOne({
+      where: { id: escrowTransactionId },
     });
 
-    if (!offer) {
-      return { canReview: false, reason: 'Transaction not found' };
+    if (!escrow) {
+      return { canReview: false, reason: 'Escrow transaction not found' };
     }
 
-    if (offer.status !== OfferStatus.ACCEPTED) {
-      return { canReview: false, reason: 'Transaction not completed' };
+    if (escrow.status !== EscrowStatus.COMPLETED) {
+      return { canReview: false, reason: 'Escrow transaction not completed' };
     }
 
-    if (userId !== offer.buyerId && userId !== offer.sellerId) {
+    if (userId === escrow.sellerId) {
+      return { canReview: false, reason: 'Sellers cannot review buyers' };
+    }
+
+    if (userId !== escrow.buyerId) {
       return { canReview: false, reason: 'Not a party to this transaction' };
     }
 
-    const reviewType =
-      userId === offer.buyerId
-        ? ReviewType.BUYER_TO_SELLER
-        : ReviewType.SELLER_TO_BUYER;
-
     const existingReview = await this.reviewRepository.findOne({
       where: {
-        transactionId,
+        escrowTransactionId,
         reviewerId: userId,
-        type: reviewType,
       },
     });
 
@@ -337,25 +315,17 @@ export class ReviewsService {
     return { canReview: true };
   }
 
-  private async updateUserRating(userId: string): Promise<void> {
-    // Fetch both seller and buyer ratings in a single query
-    const results = await this.reviewRepository
+  private async updateSellerRating(sellerId: string): Promise<void> {
+    const result = await this.reviewRepository
       .createQueryBuilder('review')
-      .select('review.type', 'type')
-      .addSelect('AVG(review.rating)', 'average')
+      .select('AVG(review.rating)', 'average')
       .addSelect('COUNT(*)', 'count')
-      .where('review.revieweeId = :userId', { userId })
-      .groupBy('review.type')
-      .getRawMany();
+      .where('review.revieweeId = :sellerId', { sellerId })
+      .getRawOne<{ average: string | null; count: string }>();
 
-    const sellerResult = results.find((r) => r.type === ReviewType.BUYER_TO_SELLER);
-    const buyerResult = results.find((r) => r.type === ReviewType.SELLER_TO_BUYER);
-
-    await this.userRepository.update(userId, {
-      sellerRating: sellerResult?.average ? parseFloat(sellerResult.average) : 0,
-      sellerRatingCount: parseInt(sellerResult?.count, 10) || 0,
-      buyerRating: buyerResult?.average ? parseFloat(buyerResult.average) : 0,
-      buyerRatingCount: parseInt(buyerResult?.count, 10) || 0,
+    await this.userRepository.update(sellerId, {
+      sellerRating: result?.average ? parseFloat(result.average) : 0,
+      sellerRatingCount: parseInt(result?.count ?? '0', 10) || 0,
     });
   }
 }

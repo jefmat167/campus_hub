@@ -12,11 +12,12 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateReviewDto {
   @ApiProperty({
-    description: 'The ID of the completed transaction (accepted offer) to review',
+    description:
+      'The ID of the completed escrow transaction to review. The escrow must be in COMPLETED status.',
     example: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
   })
   @IsUUID()
-  transactionId: string;
+  escrowTransactionId: string;
 
   @ApiProperty({
     description: 'Rating from 1 to 5 stars',

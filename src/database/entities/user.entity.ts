@@ -232,12 +232,6 @@ export class User {
   @Column({ default: 0 })
   sellerRatingCount: number;
 
-  @Column({ type: 'decimal', precision: 3, scale: 2, default: 0 })
-  buyerRating: number;
-
-  @Column({ default: 0 })
-  buyerRatingCount: number;
-
   @Column({ default: 0 })
   completedTransactions: number;
 
