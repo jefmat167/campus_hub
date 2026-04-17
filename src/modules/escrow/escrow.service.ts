@@ -53,7 +53,8 @@ export class EscrowService {
   private readonly logger = new Logger(EscrowService.name);
   private readonly PLATFORM_FEE_PERCENTAGE = 2.5; // 2.5% platform fee (deducted from seller)
   private readonly FULFILLMENT_HOURS = 72; // 72 hours for seller to respond
-  private readonly DISPUTE_WINDOW_HOURS = 24; // 24 hours to raise dispute after delivery
+  // TODO: revert to 24 hours for production
+  private readonly DISPUTE_WINDOW_MINUTES = 5; // 5 minutes for dev/testing (production: 24 hours)
 
   constructor(
     @InjectRepository(EscrowTransaction)
@@ -153,7 +154,7 @@ export class EscrowService {
       const savedEscrow = await queryRunner.manager.save(escrow);
 
       // Lock buyer's funds (exact amount, no fee)
-      await this.walletService.lockFunds(buyerId, dto.amount, `ESCROW_${savedEscrow.id}`);
+      await this.walletService.lockFunds(buyerId, dto.amount, `ESCROW_${savedEscrow.id}`, queryRunner);
 
       // Update listing status
       listing.status = ListingStatus.IN_ESCROW;
@@ -329,7 +330,7 @@ export class EscrowService {
     const savedEscrow = await queryRunner.manager.save(escrow);
 
     // Lock buyer's funds
-    await this.walletService.lockFunds(buyerId, amount, `ESCROW_${savedEscrow.id}`);
+    await this.walletService.lockFunds(buyerId, amount, `ESCROW_${savedEscrow.id}`, queryRunner);
 
     // No listing to update — buy request status is handled by the caller
 
@@ -663,7 +664,7 @@ export class EscrowService {
       // Update escrow
       const deliveredAt = new Date();
       const disputeWindowExpiresAt = new Date(
-        deliveredAt.getTime() + this.DISPUTE_WINDOW_HOURS * 60 * 60 * 1000,
+        deliveredAt.getTime() + this.DISPUTE_WINDOW_MINUTES * 60 * 1000,
       );
 
       escrow.status = EscrowStatus.DELIVERED;
@@ -679,7 +680,7 @@ export class EscrowService {
         EscrowJobName.CHECK_AUTO_RELEASE,
         { escrowId },
         {
-          delay: this.DISPUTE_WINDOW_HOURS * 60 * 60 * 1000,
+          delay: this.DISPUTE_WINDOW_MINUTES * 60 * 1000,
           jobId: `auto-release-${escrowId}`,
           attempts: 3,
           backoff: { type: 'exponential', delay: 1000 },
@@ -729,6 +730,7 @@ export class EscrowService {
         escrow.buyerId,
         escrow.amount,
         `ESCROW_EXPIRED_${escrow.id}`,
+        queryRunner,
       );
 
       // Update escrow
@@ -833,6 +835,7 @@ export class EscrowService {
         escrow.sellerId,
         sellerPayout,
         `ESCROW_RELEASE_${escrow.id}`,
+        queryRunner,
       );
 
       // Credit platform wallet with fee
@@ -840,6 +843,8 @@ export class EscrowService {
         platformFee,
         escrow.id,
         PlatformTransactionType.ESCROW_FEE,
+        undefined,
+        queryRunner,
       );
 
       // Update escrow
@@ -948,6 +953,7 @@ export class EscrowService {
           escrow.buyerId,
           buyerRefund,
           `ESCROW_CANCEL_${escrow.id}`,
+          queryRunner,
         );
       }
 
@@ -957,6 +963,9 @@ export class EscrowService {
           escrow.sellerId,
           sellerCompensation,
           `CANCEL_COMPENSATION_${escrow.id}`,
+          undefined,
+          undefined,
+          queryRunner,
         );
       }
 
@@ -966,6 +975,8 @@ export class EscrowService {
           platformShare,
           escrow.id,
           PlatformTransactionType.CANCELLATION_FEE,
+          undefined,
+          queryRunner,
         );
       }
 
@@ -1153,6 +1164,7 @@ export class EscrowService {
             escrow.buyerId,
             escrow.amount,
             `DISPUTE_REFUND_${dispute.id}`,
+            queryRunner,
           );
           dispute.buyerRefundAmount = escrow.amount;
           escrow.status = EscrowStatus.REFUNDED;
@@ -1170,12 +1182,15 @@ export class EscrowService {
             escrow.sellerId,
             sellerPayout,
             `DISPUTE_RELEASE_${dispute.id}`,
+            queryRunner,
           );
 
           await this.platformWalletService.creditPlatformFee(
             platformFee,
             escrow.id,
             PlatformTransactionType.ESCROW_FEE,
+            undefined,
+            queryRunner,
           );
 
           dispute.sellerReleaseAmount = sellerPayout;
@@ -1192,6 +1207,7 @@ export class EscrowService {
               escrow.buyerId,
               dto.buyerRefundAmount,
               `DISPUTE_SPLIT_REFUND_${dispute.id}`,
+              queryRunner,
             );
           }
           if (dto.sellerReleaseAmount && dto.sellerReleaseAmount > 0) {
@@ -1200,6 +1216,7 @@ export class EscrowService {
               escrow.sellerId,
               dto.sellerReleaseAmount,
               `DISPUTE_SPLIT_RELEASE_${dispute.id}`,
+              queryRunner,
             );
           }
           dispute.buyerRefundAmount = dto.buyerRefundAmount || null;

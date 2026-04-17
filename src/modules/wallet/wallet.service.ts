@@ -4,7 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, QueryRunner } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import {
   Wallet,
@@ -84,14 +84,20 @@ export class WalletService {
     reference: string,
     type: WalletTransactionType = WalletTransactionType.DEPOSIT,
     externalReference?: string,
+    externalQueryRunner?: QueryRunner,
   ): Promise<WalletTransaction> {
     if (amount <= 0) {
       throw new BadRequestException('Amount must be positive');
     }
 
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const isExternalTx = !!externalQueryRunner;
+    const queryRunner =
+      externalQueryRunner || this.dataSource.createQueryRunner();
+
+    if (!isExternalTx) {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+    }
 
     try {
       const wallet = await queryRunner.manager.findOne(Wallet, {
@@ -124,14 +130,21 @@ export class WalletService {
       });
 
       await queryRunner.manager.save(transaction);
-      await queryRunner.commitTransaction();
+
+      if (!isExternalTx) {
+        await queryRunner.commitTransaction();
+      }
 
       return transaction;
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (!isExternalTx) {
+        await queryRunner.rollbackTransaction();
+      }
       throw error;
     } finally {
-      await queryRunner.release();
+      if (!isExternalTx) {
+        await queryRunner.release();
+      }
     }
   }
 
@@ -206,14 +219,20 @@ export class WalletService {
     userId: string,
     amount: number,
     reference: string,
+    externalQueryRunner?: QueryRunner,
   ): Promise<WalletTransaction> {
     if (amount <= 0) {
       throw new BadRequestException('Amount must be positive');
     }
 
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const isExternalTx = !!externalQueryRunner;
+    const queryRunner =
+      externalQueryRunner || this.dataSource.createQueryRunner();
+
+    if (!isExternalTx) {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+    }
 
     try {
       const wallet = await queryRunner.manager.findOne(Wallet, {
@@ -250,14 +269,21 @@ export class WalletService {
       });
 
       await queryRunner.manager.save(transaction);
-      await queryRunner.commitTransaction();
+
+      if (!isExternalTx) {
+        await queryRunner.commitTransaction();
+      }
 
       return transaction;
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (!isExternalTx) {
+        await queryRunner.rollbackTransaction();
+      }
       throw error;
     } finally {
-      await queryRunner.release();
+      if (!isExternalTx) {
+        await queryRunner.release();
+      }
     }
   }
 
@@ -269,10 +295,16 @@ export class WalletService {
     toUserId: string,
     amount: number,
     reference: string,
+    externalQueryRunner?: QueryRunner,
   ): Promise<void> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const isExternalTx = !!externalQueryRunner;
+    const queryRunner =
+      externalQueryRunner || this.dataSource.createQueryRunner();
+
+    if (!isExternalTx) {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+    }
 
     try {
       // Lock both wallets
@@ -326,12 +358,19 @@ export class WalletService {
       });
 
       await queryRunner.manager.save(releaseTransaction);
-      await queryRunner.commitTransaction();
+
+      if (!isExternalTx) {
+        await queryRunner.commitTransaction();
+      }
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (!isExternalTx) {
+        await queryRunner.rollbackTransaction();
+      }
       throw error;
     } finally {
-      await queryRunner.release();
+      if (!isExternalTx) {
+        await queryRunner.release();
+      }
     }
   }
 
@@ -342,10 +381,16 @@ export class WalletService {
     userId: string,
     amount: number,
     reference: string,
+    externalQueryRunner?: QueryRunner,
   ): Promise<WalletTransaction> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const isExternalTx = !!externalQueryRunner;
+    const queryRunner =
+      externalQueryRunner || this.dataSource.createQueryRunner();
+
+    if (!isExternalTx) {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+    }
 
     try {
       const wallet = await queryRunner.manager.findOne(Wallet, {
@@ -381,14 +426,21 @@ export class WalletService {
       });
 
       await queryRunner.manager.save(transaction);
-      await queryRunner.commitTransaction();
+
+      if (!isExternalTx) {
+        await queryRunner.commitTransaction();
+      }
 
       return transaction;
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (!isExternalTx) {
+        await queryRunner.rollbackTransaction();
+      }
       throw error;
     } finally {
-      await queryRunner.release();
+      if (!isExternalTx) {
+        await queryRunner.release();
+      }
     }
   }
 
