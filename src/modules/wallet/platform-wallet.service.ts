@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, QueryRunner } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import {
   PlatformWallet,
@@ -56,10 +56,16 @@ export class PlatformWalletService {
     escrowId: string,
     type: PlatformTransactionType,
     description?: string,
+    externalQueryRunner?: QueryRunner,
   ): Promise<PlatformWalletTransaction> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const isExternalTx = !!externalQueryRunner;
+    const queryRunner =
+      externalQueryRunner || this.dataSource.createQueryRunner();
+
+    if (!isExternalTx) {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+    }
 
     try {
       // Get or create platform wallet with lock
@@ -95,7 +101,10 @@ export class PlatformWalletService {
       });
 
       await queryRunner.manager.save(transaction);
-      await queryRunner.commitTransaction();
+
+      if (!isExternalTx) {
+        await queryRunner.commitTransaction();
+      }
 
       this.logger.log(
         `Platform wallet credited: ${amount} (${type}) from escrow ${escrowId}`,
@@ -103,10 +112,14 @@ export class PlatformWalletService {
 
       return transaction;
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (!isExternalTx) {
+        await queryRunner.rollbackTransaction();
+      }
       throw error;
     } finally {
-      await queryRunner.release();
+      if (!isExternalTx) {
+        await queryRunner.release();
+      }
     }
   }
 

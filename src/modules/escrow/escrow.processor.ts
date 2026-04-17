@@ -68,7 +68,7 @@ export class EscrowProcessor extends WorkerHost {
       this.logger.error(
         `Failed to process fulfillment expiry for ${escrowId}: ${error.message}`,
       );
-      return { success: false, message: error.message };
+      throw error;
     }
   }
 
@@ -93,7 +93,7 @@ export class EscrowProcessor extends WorkerHost {
       this.logger.error(
         `Failed to process auto-release for ${escrowId}: ${error.message}`,
       );
-      return { success: false, message: error.message };
+      throw error;
     }
   }
 }
