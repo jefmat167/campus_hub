@@ -20,7 +20,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { PasswordReset } from '../../database/entities/password-reset.entity';
-import { SmsService } from '../sms/sms.service';
 import { UniversitiesService } from '../universities/universities.service';
 import { EmailService } from '../email/email.service';
 import { UsersService } from '../users/users.service';
@@ -32,7 +31,6 @@ import {
 import {
   RegisterDto,
   LoginDto,
-  VerifyPhoneDto,
   ForgotPasswordDto,
   ResetPasswordDto,
 } from './dto';
@@ -62,7 +60,6 @@ export class AuthService {
     private passwordResetRepo: Repository<PasswordReset>,
     private jwtService: JwtService,
     private configService: ConfigService,
-    private smsService: SmsService,
     private universitiesService: UniversitiesService,
     private emailService: EmailService,
     private usersService: UsersService,
@@ -82,11 +79,10 @@ export class AuthService {
    *
    * Flow:
    * 1. Creates user with verificationTier = NONE
-   * 2. Queues OTP to phone (sync in dev mode for mock OTP)
-   * 3. Queues verification email
-   * 4. Returns tokens (user can browse but has limited access)
+   * 2. Queues verification email
+   * 3. Returns tokens (user can browse but has limited access)
    */
-  async register(dto: RegisterDto): Promise<AuthResponse & { otpSent: boolean; emailSent: boolean; otp?: string }> {
+  async register(dto: RegisterDto): Promise<AuthResponse & { emailSent: boolean }> {
     const formattedPhone = this.formatPhone(dto.phone);
     const email = dto.email.toLowerCase();
 
@@ -181,37 +177,8 @@ export class AuthService {
     // Generate tokens using the pre-hashed refresh token JTI
     const tokens = await this.generateTokensWithJti(user, refreshTokenJti);
 
-    // OPTIMIZATION: Queue SMS and email jobs (non-blocking)
-    let otpQueued = false;
+    // Queue verification email job (non-blocking)
     let emailQueued = false;
-    let mockOtp: string | undefined;
-
-    const isDevelopment = this.configService.get<string>('NODE_ENV') === 'development';
-
-    // In development, call SMS synchronously to get mock OTP for response
-    if (isDevelopment) {
-      try {
-        const otpResult = await this.smsService.sendOtp(formattedPhone, 'registration');
-        otpQueued = true;
-        mockOtp = otpResult.otp;
-      } catch (error) {
-        this.logger.error(`Failed to send OTP during registration: ${error}`);
-      }
-    } else {
-      // In production, queue the SMS job
-      try {
-        await this.authQueue.add(
-          AuthJobName.SEND_OTP,
-          { phoneNumber: formattedPhone, purpose: 'registration' },
-          { attempts: 3, backoff: { type: 'exponential', delay: 1000 } },
-        );
-        otpQueued = true;
-      } catch (error) {
-        this.logger.error(`Failed to queue OTP job: ${error}`);
-      }
-    }
-
-    // Queue email job (always async, no data needed in response)
     try {
       await this.authQueue.add(
         AuthJobName.SEND_VERIFICATION_EMAIL,
@@ -224,92 +191,10 @@ export class AuthService {
     }
 
     // OPTIMIZATION: Build response without DB reload using cached entity data
-    const response: AuthResponse & { otpSent: boolean; emailSent: boolean; otp?: string } = {
+    return {
       user: this.sanitizeUserWithRelations(user, university, faculty, department),
       tokens,
-      otpSent: otpQueued,
       emailSent: emailQueued,
-    };
-
-    if (mockOtp) {
-      response.otp = mockOtp;
-    }
-
-    return response;
-  }
-
-  async verifyPhone(userId: string, dto: VerifyPhoneDto): Promise<{
-    verified: boolean;
-    phoneVerified: boolean;
-    emailVerified: boolean;
-    verificationTier: VerificationTier;
-    message: string;
-  }> {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-
-    if (user.phoneVerified) {
-      return {
-        verified: true,
-        phoneVerified: true,
-        emailVerified: user.emailVerified,
-        verificationTier: user.verificationTier,
-        message: 'Phone is already verified',
-      };
-    }
-
-    // Verify OTP
-    const isValid = await this.smsService.verifyOtp(user.phone, dto.otp, 'registration');
-
-    if (!isValid) {
-      throw new BadRequestException('Invalid OTP. Please try again.');
-    }
-
-    // Update user
-    user.phoneVerified = true;
-    user.phoneVerifiedAt = new Date();
-
-    // Check if user can be upgraded to Tier 0
-    if (user.phoneVerified && user.emailVerified && user.verificationTier === VerificationTier.NONE) {
-      user.verificationTier = VerificationTier.TIER_0;
-    }
-
-    await this.userRepo.save(user);
-
-    return {
-      verified: true,
-      phoneVerified: user.phoneVerified,
-      emailVerified: user.emailVerified,
-      verificationTier: user.verificationTier,
-      message: user.verificationTier === VerificationTier.TIER_0
-        ? 'Phone verified! You are now Tier 0 verified.'
-        : 'Phone verified! Please also verify your email to complete Tier 0 verification.',
-    };
-  }
-
-  async resendPhoneOtp(userId: string): Promise<{ sent: boolean; message: string; otp?: string }> {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-
-    if (user.phoneVerified) {
-      return {
-        sent: false,
-        message: 'Phone is already verified',
-      };
-    }
-
-    const result = await this.smsService.sendOtp(user.phone, 'registration');
-
-    return {
-      sent: true,
-      message: result.message,
-      otp: result.otp, // Only in development
     };
   }
 
@@ -345,7 +230,6 @@ export class AuthService {
 
   async getVerificationStatus(userId: string): Promise<{
     verificationTier: VerificationTier;
-    phoneVerified: boolean;
     emailVerified: boolean;
     canUpgradeToTier0: boolean;
   }> {
@@ -357,9 +241,8 @@ export class AuthService {
 
     return {
       verificationTier: user.verificationTier,
-      phoneVerified: user.phoneVerified,
       emailVerified: user.emailVerified,
-      canUpgradeToTier0: !user.phoneVerified || !user.emailVerified,
+      canUpgradeToTier0: !user.emailVerified && user.verificationTier === VerificationTier.NONE,
     };
   }
 

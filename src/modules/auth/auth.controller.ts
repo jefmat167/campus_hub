@@ -26,7 +26,6 @@ import {
   RegisterDto,
   LoginDto,
   RefreshTokenDto,
-  VerifyPhoneDto,
   ForgotPasswordDto,
 } from './dto';
 import { LoginPlatform } from './dto/login.dto';
@@ -47,13 +46,11 @@ export class AuthController {
   /**
    * Register a new user
    *
-   * New simplified flow:
+   * Flow:
    * 1. User submits registration data
    * 2. Account created with verificationTier = NONE
-   * 3. OTP sent to phone, verification email sent
-   * 4. User verifies phone via POST /auth/verify-phone
-   * 5. User verifies email by clicking link
-   * 6. When both verified → verificationTier = TIER_0
+   * 3. Verification email sent
+   * 4. User verifies email by clicking link → verificationTier = TIER_0
    */
   @Public()
   @Post('register')
@@ -63,13 +60,11 @@ export class AuthController {
     summary: 'Register a new user',
     description: `
       Creates a new user account with verificationTier = NONE.
-      Sends OTP to phone and verification email automatically.
-      User can browse but has limited access until verified.
+      Sends verification email automatically.
+      User can browse but has limited access until email is verified.
 
       After registration:
-      - Verify phone: POST /auth/verify-phone
-      - Email verified by clicking link
-      - When both verified → Tier 0 (can buy ≤₦30k, chat, post)
+      - Email verified by clicking link → Tier 0 (can buy ≤₦30k, chat, post)
     `,
   })
   @ApiResponse({
@@ -83,7 +78,6 @@ export class AuthController {
           fullName: 'John Doe',
           phone: '2348012345678',
           verificationTier: 'none',
-          phoneVerified: false,
           emailVerified: false,
         },
         tokens: {
@@ -91,9 +85,7 @@ export class AuthController {
           refreshToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
           expiresIn: 900,
         },
-        otpSent: true,
         emailSent: true,
-        otp: '123456 (development only)',
       },
     },
   })
@@ -102,63 +94,6 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Too many registration attempts from this IP' })
   async register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
-  }
-
-  @Post('verify-phone')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Throttle({ short: { limit: 5, ttl: 60000 } }) // 5 per minute
-  @ApiOperation({
-    summary: 'Verify phone number with OTP',
-    description: 'Verifies the phone number using the OTP sent during registration. When both phone and email are verified, user is upgraded to Tier 0.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Phone verification result',
-    schema: {
-      example: {
-        verified: true,
-        phoneVerified: true,
-        emailVerified: false,
-        verificationTier: 'none',
-        message: 'Phone verified! Please also verify your email to complete Tier 0 verification.',
-      },
-    },
-  })
-  @ApiResponse({ status: 400, description: 'Invalid OTP' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async verifyPhone(
-    @CurrentUser('id') userId: string,
-    @Body() dto: VerifyPhoneDto,
-  ) {
-    return this.authService.verifyPhone(userId, dto);
-  }
-
-  @Post('resend-phone-otp')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Throttle({ short: { limit: 3, ttl: 600000 } }) // 3 per 10 minutes
-  @ApiOperation({
-    summary: 'Resend phone OTP',
-    description: 'Resends the OTP to the user\'s registered phone number.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'OTP resent',
-    schema: {
-      example: {
-        sent: true,
-        message: 'OTP sent successfully',
-        otp: '123456 (development only)',
-      },
-    },
-  })
-  @ApiResponse({ status: 400, description: 'Phone already verified or rate limit exceeded' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async resendPhoneOtp(@CurrentUser('id') userId: string) {
-    return this.authService.resendPhoneOtp(userId);
   }
 
   @Post('resend-email-verification')
@@ -219,7 +154,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get verification status',
-    description: 'Returns the current verification status for phone and email.',
+    description: 'Returns the current verification status for email.',
   })
   @ApiResponse({
     status: 200,
@@ -227,7 +162,6 @@ export class AuthController {
     schema: {
       example: {
         verificationTier: 'tier_0',
-        phoneVerified: true,
         emailVerified: true,
         canUpgradeToTier0: false,
       },

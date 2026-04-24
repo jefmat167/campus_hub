@@ -149,9 +149,8 @@ export class EmailService {
       user.emailVerified = true;
       user.emailVerifiedAt = new Date();
 
-      // Check if user can be upgraded to Tier 0
+      // Upgrade to Tier 0 when personal email is verified
       if (
-        user.phoneVerified &&
         user.emailVerified &&
         user.verificationTier === VerificationTier.NONE
       ) {
