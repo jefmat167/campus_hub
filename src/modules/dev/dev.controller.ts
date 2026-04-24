@@ -269,11 +269,6 @@ export class DevController {
     user.phoneVerified = true;
     user.phoneVerifiedAt = new Date();
 
-    // Auto-upgrade to TIER_0 if both phone and email verified
-    if (user.emailVerified && user.verificationTier === VerificationTier.NONE) {
-      user.verificationTier = VerificationTier.TIER_0;
-    }
-
     await this.userRepo.save(user);
 
     return {
@@ -315,8 +310,8 @@ export class DevController {
     user.emailVerified = true;
     user.emailVerifiedAt = new Date();
 
-    // Auto-upgrade to TIER_0 if both phone and email verified
-    if (user.phoneVerified && user.verificationTier === VerificationTier.NONE) {
+    // Auto-upgrade to TIER_0 when email is verified
+    if (user.verificationTier === VerificationTier.NONE) {
       user.verificationTier = VerificationTier.TIER_0;
     }
 

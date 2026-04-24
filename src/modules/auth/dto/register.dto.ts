@@ -14,15 +14,13 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { YearOfStudy } from '../../../database/entities/user.entity';
 
 /**
- * Registration DTO - New flow without OTP-gated registration token
+ * Registration DTO
  *
  * Flow:
  * 1. User submits registration data (this DTO)
  * 2. Account created with verificationTier = NONE
- * 3. OTP sent to phone, verification email sent to email
- * 4. User verifies phone via POST /auth/verify-phone
- * 5. User verifies email by clicking link
- * 6. When both verified → verificationTier = TIER_0
+ * 3. Verification email sent
+ * 4. User verifies email by clicking link → verificationTier = TIER_0
  */
 export class RegisterDto {
   @ApiProperty({
