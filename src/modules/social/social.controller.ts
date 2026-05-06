@@ -9,14 +9,20 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
+import { AdminPermissions } from '../../common/constants/permissions';
 import { SocialService } from './social.service';
+import { AdminAuditService } from '../admin/admin-audit.service';
+import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
 import {
   CreatePostDto,
   CreateCommentDto,
@@ -25,6 +31,8 @@ import {
   FeedQueryDto,
   FeedFilterType,
 } from './dto';
+import { AdminListPostsDto } from './dto/admin-list-posts.dto';
+import { AdminActionDto } from './dto/admin-action.dto';
 
 @ApiTags('Social (Anonymous Forum)')
 @Controller('social')
@@ -32,7 +40,10 @@ import {
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class SocialController {
-  constructor(private readonly socialService: SocialService) {}
+  constructor(
+    private readonly socialService: SocialService,
+    private readonly auditService: AdminAuditService,
+  ) {}
 
   /**
    * Create a new anonymous post
@@ -595,6 +606,169 @@ export class SocialController {
       success: true,
       message: 'Comment deleted',
     };
+  }
+
+  // ─── Admin Endpoints ──────────────────────────────────────────
+
+  @Get('admin/posts')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.SOCIAL_READ)
+  @ApiOperation({ summary: 'List all posts (admin)', description: 'Paginated, filterable. Reveals authorId.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Posts retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            authorId: '550e8400-e29b-41d4-a716-446655440000',
+            anonymousId: 'Anon-7F3A',
+            universityId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+            visibility: 'university',
+            content: 'The new SUG president promised 24hr electricity in hostels. Let us see how long that lasts.',
+            imageUrls: [],
+            totalReactions: 34,
+            commentCount: 18,
+            viewCount: 256,
+            reportCount: 0,
+            isHidden: false,
+            hiddenReason: null,
+            isDeleted: false,
+            createdAt: '2026-04-18T07:45:00.000Z',
+          },
+        ],
+        meta: { total: 4210, page: 1, limit: 20, pages: 211 },
+      },
+    },
+  })
+  async adminListPosts(@Query() dto: AdminListPostsDto) {
+    const { posts, total } = await this.socialService.adminListPosts(dto);
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+
+    return {
+      success: true,
+      data: posts.map(p => ({
+        id: p.id,
+        authorId: p.authorId,
+        anonymousId: p.anonymousId,
+        universityId: p.universityId,
+        visibility: p.visibility,
+        content: p.content,
+        imageUrls: p.imageUrls,
+        totalReactions: p.totalReactions,
+        commentCount: p.commentCount,
+        viewCount: p.viewCount,
+        reportCount: p.reportCount,
+        isHidden: p.isHidden,
+        hiddenReason: p.hiddenReason,
+        isDeleted: p.isDeleted,
+        createdAt: p.createdAt,
+      })),
+      meta: { total, page, limit, pages: Math.ceil(total / limit) },
+    };
+  }
+
+  @Post('admin/posts/:id/hide')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.SOCIAL_MANAGE)
+  @ApiOperation({ summary: 'Hide a post (admin)' })
+  @ApiParam({ name: 'id', description: 'Post UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Post hidden',
+    schema: {
+      example: {
+        success: true,
+        message: 'Post hidden',
+      },
+    },
+  })
+  async adminHidePost(
+    @CurrentUser('id') adminId: string,
+    @Param('id', ParseUUIDPipe) postId: string,
+    @Body() dto: AdminActionDto,
+  ) {
+    await this.socialService.adminHidePost(postId, dto.reason);
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.POST_HIDE,
+      AuditTargetType.POST,
+      postId,
+      dto.reason,
+    );
+
+    return { success: true, message: 'Post hidden' };
+  }
+
+  @Post('admin/posts/:id/unhide')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.SOCIAL_MANAGE)
+  @ApiOperation({ summary: 'Unhide a post (admin)' })
+  @ApiParam({ name: 'id', description: 'Post UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Post unhidden',
+    schema: {
+      example: {
+        success: true,
+        message: 'Post unhidden',
+      },
+    },
+  })
+  async adminUnhidePost(
+    @CurrentUser('id') adminId: string,
+    @Param('id', ParseUUIDPipe) postId: string,
+  ) {
+    await this.socialService.adminUnhidePost(postId);
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.POST_UNHIDE,
+      AuditTargetType.POST,
+      postId,
+    );
+
+    return { success: true, message: 'Post unhidden' };
+  }
+
+  @Delete('admin/comments/:id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.SOCIAL_MANAGE)
+  @ApiOperation({ summary: 'Delete a comment (admin)' })
+  @ApiParam({ name: 'id', description: 'Comment UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Comment deleted',
+    schema: {
+      example: {
+        success: true,
+        message: 'Comment deleted',
+      },
+    },
+  })
+  async adminDeleteComment(
+    @CurrentUser('id') adminId: string,
+    @Param('id', ParseUUIDPipe) commentId: string,
+    @Body() dto: AdminActionDto,
+  ) {
+    await this.socialService.adminDeleteComment(commentId);
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.COMMENT_DELETE,
+      AuditTargetType.COMMENT,
+      commentId,
+      dto.reason,
+    );
+
+    return { success: true, message: 'Comment deleted' };
   }
 
   /**

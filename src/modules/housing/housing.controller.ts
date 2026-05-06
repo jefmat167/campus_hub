@@ -22,15 +22,15 @@ import {
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import {
   User,
-  UserRole,
   VerificationTier,
 } from '../../database/entities/user.entity';
+import { AdminPermissions } from '../../common/constants/permissions';
 import { HousingStatus } from '../../database/entities/housing.entity';
 import { HousingService } from './housing.service';
 import { CreateHousingDto, SearchHousingDto, ReportListingDto } from './dto';
@@ -44,12 +44,59 @@ export class HousingController {
   // ---------- Moderator / admin routes (declared before :id routes) ----------
 
   @Get('admin/reports')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.HOUSING_READ)
   @ApiOperation({
     summary: 'List housing listings currently under review',
     description:
       'Returns listings that have hit the report threshold and are awaiting moderator action, along with all their reports.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Reported listings retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: '550e8400-e29b-41d4-a716-446655440000',
+            title: '2 Bedroom Flat near UNILAG Main Gate',
+            status: 'under_review',
+            posterId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+            posterRelationship: 'CURRENT_TENANT',
+            price: 450000,
+            paymentFrequency: 'yearly',
+            area: 'Akoka',
+            reportCount: 3,
+            createdAt: '2026-04-05T12:00:00.000Z',
+            reports: [
+              {
+                id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+                reporterId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+                reason: 'FAKE_LISTING',
+                details: 'This apartment does not exist at the listed address.',
+                createdAt: '2026-04-12T09:30:00.000Z',
+              },
+              {
+                id: 'c3d4e5f6-a1b2-7890-abcd-ef1234567891',
+                reporterId: 'd4e5f6a1-b2c3-7890-abcd-ef1234567892',
+                reason: 'ALREADY_TAKEN',
+                details: 'I visited and the current tenant said someone already moved in.',
+                createdAt: '2026-04-13T15:20:00.000Z',
+              },
+              {
+                id: 'd5e6f7a2-b3c4-8901-cdef-a12345678903',
+                reporterId: 'e6f7a1b2-c3d4-8901-cdef-a12345678904',
+                reason: 'MISLEADING',
+                details: null,
+                createdAt: '2026-04-14T08:10:00.000Z',
+              },
+            ],
+          },
+        ],
+        meta: { total: 5, page: 1, limit: 20, pages: 1 },
+      },
+    },
   })
   async getReportedListings(
     @Query('page') page?: string,
@@ -72,13 +119,30 @@ export class HousingController {
   }
 
   @Post('admin/:id/dismiss-reports')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.HOUSING_MANAGE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Dismiss reports on a listing',
     description:
       'Clears all reports on a listing and returns it to AVAILABLE status.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Reports dismissed',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          title: '2 Bedroom Flat near UNILAG Main Gate',
+          status: 'available',
+          reportCount: 0,
+          updatedAt: '2026-04-15T10:00:00.000Z',
+        },
+        message: 'Reports dismissed',
+      },
+    },
   })
   async dismissReports(@Param('id', ParseUUIDPipe) id: string) {
     const listing = await this.housingService.dismissReports(id);
@@ -86,12 +150,22 @@ export class HousingController {
   }
 
   @Post('admin/:id/take-down')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.HOUSING_MANAGE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Take down a listing (moderator)',
     description: 'Soft-deletes a reported listing after moderator review.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Listing taken down',
+    schema: {
+      example: {
+        success: true,
+        message: 'Listing taken down',
+      },
+    },
   })
   async takeDownListing(@Param('id', ParseUUIDPipe) id: string) {
     await this.housingService.takeDownListing(id);

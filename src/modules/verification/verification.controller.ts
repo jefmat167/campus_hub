@@ -25,12 +25,13 @@ import { SubmitTier1DocumentsDto } from './dto/submit-tier1-documents.dto';
 import { VerifyBvnDto, VerifyNinDto, AddSecondKycDto } from './dto/verify-kyc.dto';
 import { RejectVerificationDto } from './dto/admin-review.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { Roles } from '../../common/decorators/roles.decorator';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { AdminPermissions } from '../../common/constants/permissions';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
-import { UserRole, VerificationTier } from '../../database/entities/user.entity';
+import { VerificationTier } from '../../database/entities/user.entity';
 import { KycType } from '../../database/entities/kyc-verification.entity';
 
 @ApiTags('Verification')
@@ -254,8 +255,8 @@ export class VerificationController {
   // ============ Admin Endpoints ============
 
   @Get('admin/pending')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(AdminPermissions.VERIFICATION_READ)
   @ApiOperation({
     summary: 'Get pending Tier 1 verifications (Admin)',
     description:
@@ -290,8 +291,8 @@ export class VerificationController {
   }
 
   @Get('admin/:userId')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(AdminPermissions.VERIFICATION_READ)
   @ApiOperation({
     summary: 'Get verification details for a user (Admin)',
     description: 'Returns full verification details including documents and school email status.',
@@ -310,8 +311,8 @@ export class VerificationController {
   }
 
   @Post('admin/:userId/approve')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(AdminPermissions.VERIFICATION_MANAGE)
   @ApiOperation({
     summary: 'Approve Tier 1 verification (Admin)',
     description:
@@ -338,8 +339,8 @@ export class VerificationController {
   }
 
   @Post('admin/:userId/reject')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(AdminPermissions.VERIFICATION_MANAGE)
   @ApiOperation({
     summary: 'Reject Tier 1 verification (Admin)',
     description: 'Rejects user documents with a reason. User can resubmit up to max attempts.',

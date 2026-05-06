@@ -595,4 +595,123 @@ export class WalletService {
   generateReference(): string {
     return `TXN_${Date.now()}_${uuidv4().substring(0, 8)}`;
   }
+
+  // ─── Admin Methods ───────────────────────────────────────────────
+
+  async adminListTransactions(dto: {
+    type?: WalletTransactionType;
+    status?: WalletTransactionStatus;
+    userId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    minAmount?: string;
+    maxAmount?: string;
+    sortOrder?: 'ASC' | 'DESC';
+    page?: string;
+    limit?: string;
+  }): Promise<{ transactions: WalletTransaction[]; total: number }> {
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+
+    const query = this.transactionRepo
+      .createQueryBuilder('tx')
+      .leftJoinAndSelect('tx.wallet', 'wallet')
+      .orderBy('tx.createdAt', dto.sortOrder || 'DESC');
+
+    if (dto.type) {
+      query.andWhere('tx.type = :type', { type: dto.type });
+    }
+
+    if (dto.status) {
+      query.andWhere('tx.status = :status', { status: dto.status });
+    }
+
+    if (dto.userId) {
+      query.andWhere('wallet.userId = :userId', { userId: dto.userId });
+    }
+
+    if (dto.dateFrom) {
+      query.andWhere('tx.createdAt >= :dateFrom', { dateFrom: dto.dateFrom });
+    }
+
+    if (dto.dateTo) {
+      query.andWhere('tx.createdAt <= :dateTo', { dateTo: dto.dateTo });
+    }
+
+    if (dto.minAmount) {
+      query.andWhere('tx.amount >= :minAmount', { minAmount: Number(dto.minAmount) });
+    }
+
+    if (dto.maxAmount) {
+      query.andWhere('tx.amount <= :maxAmount', { maxAmount: Number(dto.maxAmount) });
+    }
+
+    const [transactions, total] = await query
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return { transactions, total };
+  }
+
+  async adminListWithdrawals(dto: {
+    status?: WalletTransactionStatus;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: string;
+    limit?: string;
+  }): Promise<{ transactions: WalletTransaction[]; total: number }> {
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+
+    const query = this.transactionRepo
+      .createQueryBuilder('tx')
+      .leftJoinAndSelect('tx.wallet', 'wallet')
+      .where('tx.type = :type', { type: WalletTransactionType.WITHDRAWAL })
+      .orderBy('tx.createdAt', 'DESC');
+
+    if (dto.status) {
+      query.andWhere('tx.status = :status', { status: dto.status });
+    }
+
+    if (dto.dateFrom) {
+      query.andWhere('tx.createdAt >= :dateFrom', { dateFrom: dto.dateFrom });
+    }
+
+    if (dto.dateTo) {
+      query.andWhere('tx.createdAt <= :dateTo', { dateTo: dto.dateTo });
+    }
+
+    const [transactions, total] = await query
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return { transactions, total };
+  }
+
+  async adminWalletAdjustment(
+    userId: string,
+    amount: number,
+    type: 'credit' | 'debit',
+    reason: string,
+  ): Promise<WalletTransaction> {
+    const reference = `ADMIN_ADJ_${Date.now()}_${uuidv4().substring(0, 8)}`;
+
+    if (type === 'credit') {
+      return this.creditWallet(
+        userId,
+        amount,
+        reference,
+        WalletTransactionType.DEPOSIT,
+      );
+    } else {
+      return this.debitWallet(
+        userId,
+        amount,
+        reference,
+        WalletTransactionType.WITHDRAWAL,
+      );
+    }
+  }
 }

@@ -8,7 +8,7 @@ import { Department } from '../../database/entities/department.entity';
 @ApiTags('Universities')
 @Controller('universities')
 export class UniversitiesController {
-  constructor(private readonly universitiesService: UniversitiesService) {}
+  constructor(private readonly universitiesService: UniversitiesService) { }
 
   @Get()
   @ApiOperation({ summary: 'Get all universities' })

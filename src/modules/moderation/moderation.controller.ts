@@ -13,12 +13,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
-import { Roles } from '../../common/decorators/roles.decorator';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { AdminPermissions } from '../../common/constants/permissions';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
-import { User, UserRole, VerificationTier } from '../../database/entities/user.entity';
+import { User, VerificationTier } from '../../database/entities/user.entity';
 import { ReportStatus, ReportType } from '../../database/entities/report.entity';
 import { BanAppealStatus } from '../../database/entities/ban-appeal.entity';
 import { ModerationStatus } from '../../database/entities/moderation-queue.entity';
@@ -246,8 +247,8 @@ export class ModerationController {
    * Get all reports (admin)
    */
   @Get('admin/reports')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_READ)
   @ApiOperation({ summary: 'List all reports', description: 'Retrieve paginated list of content reports. Filterable by status and type. Requires MODERATOR role or above.' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20)', example: 20 })
@@ -305,8 +306,8 @@ export class ModerationController {
    * Get report details (admin)
    */
   @Get('admin/reports/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_READ)
   @ApiOperation({ summary: 'Get report details', description: 'Retrieve full details of a specific report including reporter and reported user information. Requires MODERATOR role or above.' })
   @ApiParam({ name: 'id', description: 'Report UUID', example: 'd4e5f6a7-b8c9-0123-defg-234567890123' })
   @ApiResponse({
@@ -348,8 +349,8 @@ export class ModerationController {
    * Review a report (admin)
    */
   @Patch('admin/reports/:id/review')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_MANAGE)
   @ApiOperation({ summary: 'Review a report', description: 'Review a report and take moderation action (e.g., issue warning, remove content, ban user). Requires MODERATOR role or above.' })
   @ApiParam({ name: 'id', description: 'Report UUID', example: 'd4e5f6a7-b8c9-0123-defg-234567890123' })
   @ApiResponse({
@@ -384,8 +385,8 @@ export class ModerationController {
    * Ban a user (admin)
    */
   @Post('admin/users/:userId/ban')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_MANAGE)
   @ApiOperation({ summary: 'Ban a user', description: 'Ban a user temporarily (with duration in days) or permanently. Requires ADMIN role or above.' })
   @ApiParam({ name: 'userId', description: 'User UUID to ban', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
@@ -426,8 +427,8 @@ export class ModerationController {
    * Unban a user (admin)
    */
   @Post('admin/users/:userId/unban')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_MANAGE)
   @ApiOperation({ summary: 'Unban a user', description: 'Remove an active ban from a user. Requires ADMIN role or above.' })
   @ApiParam({ name: 'userId', description: 'User UUID to unban', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
@@ -461,8 +462,8 @@ export class ModerationController {
    * Issue warning to user (admin)
    */
   @Post('admin/users/:userId/warn')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_MANAGE)
   @ApiOperation({ summary: 'Issue warning to user', description: 'Issue a moderation warning to a user with a reason and message. Requires MODERATOR role or above.' })
   @ApiParam({ name: 'userId', description: 'User UUID to warn', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
@@ -503,8 +504,8 @@ export class ModerationController {
    * Get user's warning count (admin)
    */
   @Get('admin/users/:userId/warnings')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_READ)
   @ApiOperation({ summary: 'Get user warnings (admin)', description: 'Retrieve all warnings for a specific user along with the active warning count. Requires MODERATOR role or above.' })
   @ApiParam({ name: 'userId', description: 'User UUID', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
@@ -534,8 +535,8 @@ export class ModerationController {
    * Get ban appeals (admin)
    */
   @Get('admin/appeals')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_READ)
   @ApiOperation({ summary: 'List ban appeals', description: 'Retrieve paginated list of ban appeals. Filterable by status. Requires ADMIN role or above.' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20)', example: 20 })
@@ -588,8 +589,8 @@ export class ModerationController {
    * Review ban appeal (admin)
    */
   @Patch('admin/appeals/:id/review')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_MANAGE)
   @ApiOperation({ summary: 'Review a ban appeal', description: 'Review and approve or reject a ban appeal. Approving will unban the user. Requires ADMIN role or above.' })
   @ApiParam({ name: 'id', description: 'Ban appeal UUID', example: 'f6a7b8c9-d0e1-2345-fghi-456789012345' })
   @ApiResponse({
@@ -624,8 +625,8 @@ export class ModerationController {
    * Get moderation queue (admin)
    */
   @Get('admin/queue')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_READ)
   @ApiOperation({ summary: 'Get moderation queue', description: 'Retrieve paginated list of flagged content awaiting moderation review. Filterable by status. Requires MODERATOR role or above.' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20)', example: 20 })
@@ -681,8 +682,8 @@ export class ModerationController {
    * Get queue item details (admin)
    */
   @Get('admin/queue/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_READ)
   @ApiOperation({ summary: 'Get queue item details', description: 'Retrieve full details of a specific moderation queue item including content snapshot and AI analysis. Requires MODERATOR role or above.' })
   @ApiParam({ name: 'id', description: 'Moderation queue item UUID', example: 'a7b8c9d0-e1f2-3456-ghij-567890123456' })
   @ApiResponse({
@@ -722,8 +723,8 @@ export class ModerationController {
    * Review queue item (admin)
    */
   @Patch('admin/queue/:id/review')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MODERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.MODERATION_MANAGE)
   @ApiOperation({ summary: 'Review a queue item', description: 'Review flagged content and take action (approve, reject, or remove). Requires MODERATOR role or above.' })
   @ApiParam({ name: 'id', description: 'Moderation queue item UUID', example: 'a7b8c9d0-e1f2-3456-ghij-567890123456' })
   @ApiResponse({

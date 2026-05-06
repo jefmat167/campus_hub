@@ -10,6 +10,7 @@ import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
 import { Queue } from 'bullmq';
+import * as cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { QUEUE_NAMES } from './modules/bull-board/bull-board.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -20,6 +21,9 @@ async function bootstrap() {
   });
 
   const configService = app.get(ConfigService);
+
+  app.use(cookieParser());
+  app.enableCors({ credentials: true });
 
   // Configure view engine (EJS)
   app.setBaseViewsDir(join(__dirname, 'views'));

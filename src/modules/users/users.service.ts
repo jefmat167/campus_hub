@@ -11,15 +11,23 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { User, VerificationTier } from '../../database/entities/user.entity';
+import { User, UserRole, VerificationTier } from '../../database/entities/user.entity';
 import { Listing, ListingStatus } from '../../database/entities/listing.entity';
 import { HousingListing, HousingStatus } from '../../database/entities/housing.entity';
 import { EscrowTransaction, EscrowStatus } from '../../database/entities/escrow.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { WalletTransaction } from '../../database/entities/wallet.entity';
+import { Warning } from '../../database/entities/warning.entity';
+import { Report } from '../../database/entities/report.entity';
 import { RoommateProfile, RoommateProfileStatus } from '../../database/entities/roommate.entity';
 import { SmsService } from '../sms/sms.service';
 import { EmailService } from '../email/email.service';
+import { AdminAuditService } from '../admin/admin-audit.service';
+import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { AdminListUsersDto } from './dto/admin-list-users.dto';
+import { AdminChangeRoleDto } from './dto/admin-change-role.dto';
+import { AdminAdjustTierDto } from './dto/admin-adjust-tier.dto';
 import {
   USERS_QUEUE_NAME,
   UsersJobName,
@@ -47,8 +55,15 @@ export class UsersService {
     private walletRepo: Repository<Wallet>,
     @InjectRepository(RoommateProfile)
     private roommateProfileRepo: Repository<RoommateProfile>,
+    @InjectRepository(WalletTransaction)
+    private walletTransactionRepo: Repository<WalletTransaction>,
+    @InjectRepository(Warning)
+    private warningRepo: Repository<Warning>,
+    @InjectRepository(Report)
+    private reportRepo: Repository<Report>,
     private smsService: SmsService,
     private emailService: EmailService,
+    private adminAuditService: AdminAuditService,
     private dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     @InjectQueue(USERS_QUEUE_NAME) private usersQueue: Queue,
@@ -478,6 +493,196 @@ export class UsersService {
       success: true,
       message: 'Your account deletion has been cancelled. Your listings have been paused.',
     };
+  }
+
+  // ─── Admin Methods ───────────────────────────────────────────────
+
+  async adminListUsers(dto: AdminListUsersDto): Promise<{ users: Record<string, any>[]; total: number }> {
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+
+    const query = this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.university', 'university')
+      .where('user.isDeleted = :isDeleted', { isDeleted: false });
+
+    if (dto.search) {
+      query.andWhere(
+        '(user.fullName ILIKE :search OR user.email ILIKE :search OR user.phone ILIKE :search)',
+        { search: `%${dto.search}%` },
+      );
+    }
+
+    if (dto.role) {
+      query.andWhere('user.role = :role', { role: dto.role });
+    }
+
+    if (dto.tier) {
+      query.andWhere('user.verificationTier = :tier', { tier: dto.tier });
+    }
+
+    if (dto.isBanned !== undefined) {
+      query.andWhere('user.isBanned = :isBanned', { isBanned: dto.isBanned === 'true' });
+    }
+
+    if (dto.universityId) {
+      query.andWhere('user.universityId = :universityId', { universityId: dto.universityId });
+    }
+
+    if (dto.dateFrom) {
+      query.andWhere('user.createdAt >= :dateFrom', { dateFrom: dto.dateFrom });
+    }
+
+    if (dto.dateTo) {
+      query.andWhere('user.createdAt <= :dateTo', { dateTo: dto.dateTo });
+    }
+
+    const sortBy = dto.sortBy || 'createdAt';
+    const sortOrder = dto.sortOrder || 'DESC';
+    query.orderBy(`user.${sortBy}`, sortOrder);
+
+    const [users, total] = await query
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    const sanitized = users.map((u) => {
+      const { passwordHash, refreshTokenHash, ...rest } = u;
+      return rest;
+    });
+
+    return { users: sanitized, total };
+  }
+
+  async adminGetUserDetail(userId: string): Promise<Record<string, any>> {
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['university', 'faculty', 'department'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const [wallet, recentTransactions, listingCounts, activeEscrowCount, reportCount, warningCount] =
+      await Promise.all([
+        this.walletRepo.findOne({ where: { userId } }),
+        this.walletTransactionRepo.find({
+          where: { wallet: { userId } },
+          order: { createdAt: 'DESC' },
+          take: 5,
+          relations: ['wallet'],
+        }),
+        this.listingRepo
+          .createQueryBuilder('l')
+          .select('l.status', 'status')
+          .addSelect('COUNT(*)', 'count')
+          .where('l.sellerId = :userId', { userId })
+          .groupBy('l.status')
+          .getRawMany(),
+        this.escrowRepo.count({
+          where: [
+            { buyerId: userId, status: In([EscrowStatus.AWAITING_SELLER, EscrowStatus.SELLER_READY, EscrowStatus.DELIVERED, EscrowStatus.DISPUTED]) },
+            { sellerId: userId, status: In([EscrowStatus.AWAITING_SELLER, EscrowStatus.SELLER_READY, EscrowStatus.DELIVERED, EscrowStatus.DISPUTED]) },
+          ],
+        }),
+        this.reportRepo.count({ where: { reportedUserId: userId } }),
+        this.warningRepo.count({ where: { userId, isActive: true } }),
+      ]);
+
+    const { passwordHash, refreshTokenHash, ...sanitizedUser } = user;
+
+    return {
+      ...sanitizedUser,
+      wallet: wallet
+        ? { balance: wallet.balance, lockedBalance: wallet.lockedBalance, isLocked: wallet.isLocked }
+        : null,
+      recentTransactions,
+      listingCounts: listingCounts.reduce((acc: Record<string, number>, row: any) => {
+        acc[row.status] = Number(row.count);
+        return acc;
+      }, {}),
+      activeEscrowCount,
+      reportCount,
+      activeWarningCount: warningCount,
+    };
+  }
+
+  async adminChangeRole(
+    userId: string,
+    adminId: string,
+    adminRole: UserRole,
+    dto: AdminChangeRoleDto,
+  ): Promise<Record<string, any>> {
+    if (userId === adminId) {
+      throw new BadRequestException('Cannot change your own role');
+    }
+
+    const user = await this.findById(userId);
+    const previousRole = user.role;
+
+    // Only SUPER_ADMIN can assign ADMIN or SUPER_ADMIN roles
+    if (
+      (dto.role === UserRole.ADMIN || dto.role === UserRole.SUPER_ADMIN) &&
+      adminRole !== UserRole.SUPER_ADMIN
+    ) {
+      throw new BadRequestException('Only SUPER_ADMIN can assign ADMIN or SUPER_ADMIN roles');
+    }
+
+    user.role = dto.role;
+    await this.userRepo.save(user);
+
+    await this.adminAuditService.log(
+      adminId,
+      AuditAction.USER_ROLE_CHANGE,
+      AuditTargetType.USER,
+      userId,
+      dto.reason,
+      { previousRole, newRole: dto.role },
+    );
+
+    return { message: 'Role updated', userId, previousRole, newRole: dto.role };
+  }
+
+  async adminForceLogout(userId: string, adminId: string): Promise<{ message: string }> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    await this.userRepo.update(userId, { refreshTokenHash: undefined });
+
+    await this.adminAuditService.log(
+      adminId,
+      AuditAction.USER_FORCE_LOGOUT,
+      AuditTargetType.USER,
+      userId,
+    );
+
+    return { message: 'User sessions invalidated. Access token will expire within 15 minutes.' };
+  }
+
+  async adminAdjustTier(
+    userId: string,
+    adminId: string,
+    dto: AdminAdjustTierDto,
+  ): Promise<Record<string, any>> {
+    const user = await this.findById(userId);
+    const previousTier = user.verificationTier;
+
+    user.verificationTier = dto.tier;
+    await this.userRepo.save(user);
+
+    await this.adminAuditService.log(
+      adminId,
+      AuditAction.USER_TIER_CHANGE,
+      AuditTargetType.USER,
+      userId,
+      dto.reason,
+      { previousTier, newTier: dto.tier },
+    );
+
+    return { message: 'Tier updated', userId, previousTier, newTier: dto.tier };
   }
 
   /**
