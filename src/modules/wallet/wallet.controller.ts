@@ -1,20 +1,31 @@
 import {
   Controller,
   Get,
+  Post,
   Param,
   Query,
+  Body,
   UseGuards,
   ParseIntPipe,
   ParseUUIDPipe,
   DefaultValuePipe,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { AdminPermissions } from '../../common/constants/permissions';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { VerificationTier } from '../../database/entities/user.entity';
+import { AdminAuditService } from '../admin/admin-audit.service';
+import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
+import { AdminListTransactionsDto } from './dto/admin-list-transactions.dto';
+import { AdminWalletAdjustmentDto } from './dto/admin-wallet-adjustment.dto';
 
 @ApiTags('Wallet')
 @Controller('wallet')
@@ -22,7 +33,10 @@ import { VerificationTier } from '../../database/entities/user.entity';
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class WalletController {
-  constructor(private readonly walletService: WalletService) {}
+  constructor(
+    private readonly walletService: WalletService,
+    private readonly auditService: AdminAuditService,
+  ) {}
 
   @Get('balance')
   @ApiOperation({ summary: 'Get wallet balance' })
@@ -137,5 +151,140 @@ export class WalletController {
         ? `****${wallet.bankAccountNumber.slice(-4)}`
         : null,
     };
+  }
+
+  // ─── Admin Endpoints ────────────────────────────────────────────
+
+  @Get('admin/transactions')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.WALLET_READ)
+  @ApiOperation({ summary: 'List all wallet transactions (admin)', description: 'Paginated, filterable by type, status, user, date, amount.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Transactions retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            type: 'DEPOSIT',
+            amount: 15000,
+            status: 'COMPLETED',
+            reference: 'TXN_1714123456_a1b2c3d4',
+            user: {
+              id: '550e8400-e29b-41d4-a716-446655440000',
+              fullName: 'Chidinma Eze',
+            },
+            balanceBefore: 30000,
+            balanceAfter: 45000,
+            createdAt: '2026-04-20T08:30:00.000Z',
+          },
+        ],
+        meta: { total: 1520, page: 1, limit: 20, pages: 76 },
+      },
+    },
+  })
+  async adminListTransactions(@Query() dto: AdminListTransactionsDto) {
+    const { transactions, total } = await this.walletService.adminListTransactions(dto);
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+
+    return {
+      success: true,
+      data: transactions,
+      meta: { total, page, limit, pages: Math.ceil(total / limit) },
+    };
+  }
+
+  @Get('admin/withdrawals')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.WALLET_READ)
+  @ApiOperation({ summary: 'List withdrawals (admin)', description: 'Filterable by status, date range.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Withdrawals retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+            type: 'WITHDRAWAL',
+            amount: -25000,
+            status: 'COMPLETED',
+            reference: 'TXN_1714200000_b2c3d4e5',
+            user: {
+              id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+              fullName: 'Abiodun Salami',
+            },
+            balanceBefore: 75000,
+            balanceAfter: 50000,
+            createdAt: '2026-04-22T14:45:00.000Z',
+          },
+        ],
+        meta: { total: 340, page: 1, limit: 20, pages: 17 },
+      },
+    },
+  })
+  async adminListWithdrawals(@Query() dto: AdminListTransactionsDto) {
+    const { transactions, total } = await this.walletService.adminListWithdrawals(dto);
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+
+    return {
+      success: true,
+      data: transactions,
+      meta: { total, page, limit, pages: Math.ceil(total / limit) },
+    };
+  }
+
+  @Post('admin/adjust')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.WALLET_MANAGE)
+  @ApiOperation({ summary: 'Manual wallet adjustment (admin)', description: 'Credit or debit a user\'s wallet with reason. SUPER_ADMIN only.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Adjustment applied',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'c3d4e5f6-a1b2-7890-abcd-ef1234567890',
+          type: 'DEPOSIT',
+          amount: 5000,
+          status: 'COMPLETED',
+          reference: 'TXN_1714300000_c3d4e5f6',
+          balanceBefore: 50000,
+          balanceAfter: 55000,
+          metadata: { reason: 'Refund for failed Paystack transfer on 2026-04-20', adjustedBy: 'admin' },
+          createdAt: '2026-04-23T09:00:00.000Z',
+        },
+        message: 'Wallet credit applied',
+      },
+    },
+  })
+  async adminWalletAdjustment(
+    @CurrentUser('id') adminId: string,
+    @Body() dto: AdminWalletAdjustmentDto,
+  ) {
+    const transaction = await this.walletService.adminWalletAdjustment(
+      dto.userId,
+      dto.amount,
+      dto.type,
+      dto.reason,
+    );
+
+    await this.auditService.log(
+      adminId,
+      dto.type === 'credit' ? AuditAction.WALLET_CREDIT : AuditAction.WALLET_DEBIT,
+      AuditTargetType.WALLET,
+      dto.userId,
+      dto.reason,
+      { amount: dto.amount, type: dto.type, transactionId: transaction.id },
+    );
+
+    return { success: true, data: transaction, message: `Wallet ${dto.type} applied` };
   }
 }

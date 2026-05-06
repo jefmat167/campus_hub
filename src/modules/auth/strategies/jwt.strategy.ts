@@ -6,6 +6,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
+import { Request } from 'express';
 import { User } from '../../../database/entities/user.entity';
 
 export interface JwtPayload {
@@ -15,6 +16,21 @@ export interface JwtPayload {
   jti?: string; // JWT ID for blacklisting
   iat?: number;
   exp?: number;
+}
+
+function extractJwtFromCookieOrHeader(req: Request): string | null {
+  // First try Bearer token from Authorization header
+  const fromHeader = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+  if (fromHeader) {
+    return fromHeader;
+  }
+
+  // Fall back to access_token cookie (web platform)
+  if (req.cookies?.access_token) {
+    return req.cookies.access_token;
+  }
+
+  return null;
 }
 
 @Injectable()
@@ -27,7 +43,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     private cacheManager: Cache,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: extractJwtFromCookieOrHeader,
       ignoreExpiration: false,
       secretOrKey: configService.getOrThrow<string>('JWT_SECRET'),
     });

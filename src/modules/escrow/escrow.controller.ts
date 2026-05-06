@@ -19,18 +19,18 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
   TierGuard,
   TierAmountLimit,
   TierAmountLimitGuard,
 } from '../../common/guards/tier.guard';
-import { Roles } from '../../common/decorators/roles.decorator';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { AdminPermissions } from '../../common/constants/permissions';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import {
   User,
-  UserRole,
   VerificationTier,
 } from '../../database/entities/user.entity';
 import { EscrowService } from './escrow.service';
@@ -41,6 +41,7 @@ import {
   SellerReadyDto,
   VerifyCodeDto,
 } from './dto';
+import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
@@ -524,8 +525,8 @@ export class EscrowController {
    * Get open disputes (admin only)
    */
   @Get('admin/disputes')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(AdminPermissions.ESCROW_READ)
   @ApiOperation({
     summary: 'Get open disputes (admin)',
     description: 'Retrieve all open disputes. Requires ADMIN or SUPER_ADMIN role.',
@@ -577,8 +578,8 @@ export class EscrowController {
    * Get dispute details (admin only)
    */
   @Get('admin/disputes/:disputeId')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(AdminPermissions.ESCROW_READ)
   @ApiOperation({
     summary: 'Get dispute details (admin)',
     description: 'Retrieve full details of a specific dispute including the escrow transaction.',
@@ -624,8 +625,8 @@ export class EscrowController {
    * Resolve a dispute (admin only)
    */
   @Patch('admin/disputes/:disputeId/resolve')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(AdminPermissions.ESCROW_MANAGE)
   @ApiOperation({
     summary: 'Resolve dispute (admin)',
     description:
@@ -667,6 +668,47 @@ export class EscrowController {
       success: true,
       data: dispute,
       message: `Dispute resolved: ${dto.resolution}`,
+    };
+  }
+
+  // ─── Admin: Escrow Transactions ──────────────────────────────────
+
+  @Get('admin/transactions')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.ESCROW_READ)
+  @ApiOperation({ summary: 'List all escrow transactions (admin)', description: 'Paginated, filterable by status, buyer, seller, date, amount.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Escrow transactions retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+            orderNumber: 'ORD-2026-000318',
+            buyerId: '550e8400-e29b-41d4-a716-446655440000',
+            sellerId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+            amount: '35000.00',
+            status: 'completed',
+            platformFee: '875.00',
+            sellerPayout: '34125.00',
+            createdAt: '2026-04-10T11:00:00.000Z',
+          },
+        ],
+        meta: { total: 892, page: 1, limit: 20, pages: 45 },
+      },
+    },
+  })
+  async adminListEscrow(@Query() dto: AdminListEscrowDto) {
+    const { escrows, total } = await this.escrowService.adminListEscrow(dto);
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+
+    return {
+      success: true,
+      data: escrows,
+      meta: { total, page, limit, pages: Math.ceil(total / limit) },
     };
   }
 }

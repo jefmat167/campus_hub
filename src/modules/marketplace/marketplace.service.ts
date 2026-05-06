@@ -23,6 +23,7 @@ import {
   ListingSortBy,
   PaginatedListingsResponseDto,
 } from './dto';
+import { AdminListListingsDto } from './dto/admin-list-listings.dto';
 import { UploadService } from '../upload/upload.service';
 
 @Injectable()
@@ -665,5 +666,69 @@ export class MarketplaceService {
       hasNextPage: page < totalPages,
       hasPrevPage: page > 1,
     };
+  }
+
+  // ─── Admin Methods ──────────────────────────────────────────────
+
+  async adminListListings(dto: AdminListListingsDto): Promise<{ listings: Listing[]; total: number }> {
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+    const sortOrder = dto.sortOrder || 'DESC';
+
+    const qb = this.listingRepository.createQueryBuilder('l')
+      .leftJoinAndSelect('l.seller', 'seller')
+      .leftJoinAndSelect('l.images', 'images')
+      .leftJoinAndSelect('l.university', 'university');
+
+    if (dto.search) {
+      qb.andWhere('(l.title ILIKE :search OR l.description ILIKE :search)', { search: `%${dto.search}%` });
+    }
+    if (dto.status) {
+      qb.andWhere('l.status = :status', { status: dto.status });
+    }
+    if (dto.category) {
+      qb.andWhere('l.category = :category', { category: dto.category });
+    }
+    if (dto.universityId) {
+      qb.andWhere('l.universityId = :universityId', { universityId: dto.universityId });
+    }
+    if (dto.sellerId) {
+      qb.andWhere('l.sellerId = :sellerId', { sellerId: dto.sellerId });
+    }
+    if (dto.dateFrom) {
+      qb.andWhere('l.createdAt >= :dateFrom', { dateFrom: dto.dateFrom });
+    }
+    if (dto.dateTo) {
+      qb.andWhere('l.createdAt <= :dateTo', { dateTo: dto.dateTo });
+    }
+    if (dto.minPrice) {
+      qb.andWhere('l.price >= :minPrice', { minPrice: Number(dto.minPrice) });
+    }
+    if (dto.maxPrice) {
+      qb.andWhere('l.price <= :maxPrice', { maxPrice: Number(dto.maxPrice) });
+    }
+
+    qb.orderBy('l.createdAt', sortOrder)
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [listings, total] = await qb.getManyAndCount();
+
+    return { listings: this.sanitizeListingsSellers(listings), total };
+  }
+
+  async adminTakedownListing(listingId: string): Promise<Listing> {
+    const listing = await this.listingRepository.findOne({
+      where: { id: listingId },
+      relations: ['seller', 'images'],
+    });
+
+    if (!listing) {
+      throw new NotFoundException('Listing not found');
+    }
+
+    listing.status = ListingStatus.DELETED;
+    const saved = await this.listingRepository.save(listing);
+    return this.sanitizeListingSeller(saved);
   }
 }

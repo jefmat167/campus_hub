@@ -5,6 +5,7 @@ import {
   PlatformWallet,
   PlatformWalletTransaction,
 } from '../../database/entities/platform-wallet.entity';
+import { AdminModule } from '../admin/admin.module';
 import { WalletService } from './wallet.service';
 import { PlatformWalletService } from './platform-wallet.service';
 import { WalletController } from './wallet.controller';
@@ -17,6 +18,7 @@ import { WalletController } from './wallet.controller';
       PlatformWallet,
       PlatformWalletTransaction,
     ]),
+    AdminModule,
   ],
   controllers: [WalletController],
   providers: [WalletService, PlatformWalletService],

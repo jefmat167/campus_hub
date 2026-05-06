@@ -237,6 +237,7 @@ export class AuthController {
         secure: isProduction,
         sameSite: isProduction ? 'strict' : 'lax',
         maxAge: 15 * 60 * 1000, // 15 minutes
+        path: '/'
       });
 
       res.cookie('refresh_token', result.tokens.refreshToken, {

@@ -21,6 +21,7 @@ import { ChatModule } from '../chat/chat.module';
 import { EscrowModule } from '../escrow/escrow.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { UploadModule } from '../upload/upload.module';
+import { AdminModule } from '../admin/admin.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { UploadModule } from '../upload/upload.module';
     EscrowModule,
     NotificationsModule,
     UploadModule,
+    AdminModule,
   ],
   controllers: [
     MarketplaceController,

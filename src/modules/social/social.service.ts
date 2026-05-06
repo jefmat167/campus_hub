@@ -27,6 +27,7 @@ import {
   VotePollDto,
   FeedTimePeriod,
 } from './dto';
+import { AdminListPostsDto } from './dto/admin-list-posts.dto';
 
 @Injectable()
 export class SocialService {
@@ -667,5 +668,71 @@ export class SocialService {
       post.engagementScore = this.calculateEngagementScore(post);
       await this.postRepository.save(post);
     }
+  }
+
+  // ─── Admin Methods ──────────────────────────────────────────────
+
+  async adminListPosts(dto: AdminListPostsDto): Promise<{ posts: Post[]; total: number }> {
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+    const sortOrder = dto.sortOrder || 'DESC';
+
+    const qb = this.postRepository.createQueryBuilder('p');
+
+    if (dto.universityId) {
+      qb.andWhere('p.universityId = :universityId', { universityId: dto.universityId });
+    }
+    if (dto.isHidden !== undefined) {
+      qb.andWhere('p.isHidden = :isHidden', { isHidden: dto.isHidden === 'true' });
+    }
+    if (dto.minReportCount) {
+      qb.andWhere('p.reportCount >= :minReportCount', { minReportCount: Number(dto.minReportCount) });
+    }
+    if (dto.authorId) {
+      qb.andWhere('p.authorId = :authorId', { authorId: dto.authorId });
+    }
+    if (dto.dateFrom) {
+      qb.andWhere('p.createdAt >= :dateFrom', { dateFrom: dto.dateFrom });
+    }
+    if (dto.dateTo) {
+      qb.andWhere('p.createdAt <= :dateTo', { dateTo: dto.dateTo });
+    }
+
+    qb.orderBy('p.createdAt', sortOrder)
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [posts, total] = await qb.getManyAndCount();
+    return { posts, total };
+  }
+
+  async adminHidePost(postId: string, reason: string): Promise<Post> {
+    const post = await this.postRepository.findOne({ where: { id: postId } });
+    if (!post) throw new NotFoundException('Post not found');
+
+    post.isHidden = true;
+    post.hiddenReason = reason;
+    return this.postRepository.save(post);
+  }
+
+  async adminUnhidePost(postId: string): Promise<Post> {
+    const post = await this.postRepository.findOne({ where: { id: postId } });
+    if (!post) throw new NotFoundException('Post not found');
+
+    post.isHidden = false;
+    post.hiddenReason = null;
+    return this.postRepository.save(post);
+  }
+
+  async adminDeleteComment(commentId: string): Promise<void> {
+    const comment = await this.commentRepository.findOne({ where: { id: commentId } });
+    if (!comment) throw new NotFoundException('Comment not found');
+
+    comment.isDeleted = true;
+    comment.content = '[deleted by moderator]';
+    await this.commentRepository.save(comment);
+
+    // Decrement parent post comment count
+    await this.postRepository.decrement({ id: comment.postId }, 'commentCount', 1);
   }
 }

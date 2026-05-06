@@ -40,6 +40,7 @@ import {
   ResolveDisputeDto,
   SellerReadyDto,
 } from './dto';
+import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 import {
   ESCROW_QUEUE_NAME,
   EscrowJobName,
@@ -1322,6 +1323,62 @@ export class EscrowService {
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
+    });
+
+    return { escrows, total };
+  }
+
+  /**
+   * Admin: list all escrow transactions with filters
+   */
+  async adminListEscrow(dto: AdminListEscrowDto): Promise<{ escrows: EscrowTransaction[]; total: number }> {
+    const page = Number(dto.page) || 1;
+    const limit = Math.min(Number(dto.limit) || 20, 100);
+    const sortOrder = dto.sortOrder || 'DESC';
+
+    const qb = this.escrowRepo.createQueryBuilder('e')
+      .leftJoinAndSelect('e.buyer', 'buyer')
+      .leftJoinAndSelect('e.seller', 'seller')
+      .leftJoinAndSelect('e.listing', 'listing');
+
+    if (dto.status) {
+      qb.andWhere('e.status = :status', { status: dto.status });
+    }
+    if (dto.buyerId) {
+      qb.andWhere('e.buyerId = :buyerId', { buyerId: dto.buyerId });
+    }
+    if (dto.sellerId) {
+      qb.andWhere('e.sellerId = :sellerId', { sellerId: dto.sellerId });
+    }
+    if (dto.dateFrom) {
+      qb.andWhere('e.createdAt >= :dateFrom', { dateFrom: dto.dateFrom });
+    }
+    if (dto.dateTo) {
+      qb.andWhere('e.createdAt <= :dateTo', { dateTo: dto.dateTo });
+    }
+    if (dto.minAmount) {
+      qb.andWhere('e.amount >= :minAmount', { minAmount: Number(dto.minAmount) });
+    }
+    if (dto.maxAmount) {
+      qb.andWhere('e.amount <= :maxAmount', { maxAmount: Number(dto.maxAmount) });
+    }
+
+    qb.orderBy('e.createdAt', sortOrder)
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [escrows, total] = await qb.getManyAndCount();
+
+    // Sanitize user data
+    escrows.forEach(e => {
+      if (e.buyer) {
+        delete (e.buyer as any).passwordHash;
+        delete (e.buyer as any).refreshTokenHash;
+      }
+      if (e.seller) {
+        delete (e.seller as any).passwordHash;
+        delete (e.seller as any).refreshTokenHash;
+      }
     });
 
     return { escrows, total };

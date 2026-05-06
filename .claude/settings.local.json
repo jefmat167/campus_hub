@@ -7,7 +7,12 @@
       "Bash(npm view:*)",
       "Bash(timeout 15 npm run start:dev)",
       "Bash(ls:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(npm create:*)",
+      "Bash(npx shadcn@latest:*)",
+      "Bash(mkdir:*)",
+      "Bash(node:*)",
+      "Bash(curl:*)"
     ]
   }
 }

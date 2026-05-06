@@ -32,6 +32,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { HealthModule } from './modules/health/health.module';
 import { DevModule } from './modules/dev/dev.module';
 import { BullBoardModule } from './modules/bull-board/bull-board.module';
+import { AdminModule } from './modules/admin/admin.module';
+import { PermissionsModule } from './common/modules/permissions.module';
 
 @Module({
   imports: [
@@ -110,6 +112,8 @@ import { BullBoardModule } from './modules/bull-board/bull-board.module';
     HealthModule,
     DevModule,
     BullBoardModule,
+    AdminModule,
+    PermissionsModule,
   ],
   providers: [
     {
