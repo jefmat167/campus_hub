@@ -41,9 +41,6 @@ export enum Tier1ReviewStatus {
 
 export enum UserRole {
   USER = 'user',
-  MODERATOR = 'moderator',
-  ADMIN = 'admin',
-  SUPER_ADMIN = 'super_admin',
 }
 
 export enum YearOfStudy {

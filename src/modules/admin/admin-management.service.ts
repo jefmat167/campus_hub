@@ -8,11 +8,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import * as bcrypt from 'bcrypt';
-import { User, UserRole, VerificationTier, YearOfStudy } from '../../database/entities/user.entity';
-import { Wallet } from '../../database/entities/wallet.entity';
+import { Admin, AdminRole } from '../../database/entities/admin.entity';
 import { AdminPermission as AdminPermissionEntity } from '../../database/entities/admin-permission.entity';
 import { AdminAuditService } from './admin-audit.service';
 import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
@@ -22,17 +21,14 @@ import {
   PERMISSION_DESCRIPTIONS,
   AdminPermissionType,
 } from '../../common/constants/permissions';
-import { Tier1ReviewStatus } from '../../database/entities/user.entity';
 
 @Injectable()
 export class AdminManagementService {
   private readonly logger = new Logger(AdminManagementService.name);
 
   constructor(
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
-    @InjectRepository(Wallet)
-    private readonly walletRepo: Repository<Wallet>,
+    @InjectRepository(Admin)
+    private readonly adminRepo: Repository<Admin>,
     @InjectRepository(AdminPermissionEntity)
     private readonly permRepo: Repository<AdminPermissionEntity>,
     @Inject(CACHE_MANAGER)
@@ -42,123 +38,120 @@ export class AdminManagementService {
   ) {}
 
   /**
-   * List all admins with their permissions and last login
+   * List all admins with their permissions
    */
   async listAdmins(): Promise<any[]> {
-    const admins = await this.userRepo.find({
-      where: [
-        { role: UserRole.ADMIN, isDeleted: false },
-        { role: UserRole.SUPER_ADMIN, isDeleted: false },
-      ],
+    const admins = await this.adminRepo.find({
+      where: { isActive: true },
       select: [
-        'id', 'fullName', 'email', 'phone', 'role',
-        'lastLoginAt', 'lastActiveAt', 'createdAt',
-        'verificationTier', 'profilePhotoUrl',
+        'id', 'fullName', 'email', 'role',
+        'lastLoginAt', 'isActive', 'createdAt',
       ],
       order: { role: 'DESC', createdAt: 'ASC' },
     });
 
-    // Load permissions for all admins
     const adminIds = admins.map((a) => a.id);
     const permissions = adminIds.length
       ? await this.permRepo.find({
-          where: { userId: In(adminIds) },
-          select: ['userId', 'permission', 'createdAt'],
+          where: { adminId: adminIds.length === 1 ? adminIds[0] : undefined },
+          select: ['adminId', 'permission', 'createdAt'],
         })
       : [];
 
-    const permMap = new Map<string, string[]>();
-    for (const p of permissions) {
-      const list = permMap.get(p.userId) || [];
-      list.push(p.permission);
-      permMap.set(p.userId, list);
+    // For multiple IDs, query properly
+    let permMap = new Map<string, string[]>();
+    if (adminIds.length > 1) {
+      const allPerms = await this.permRepo
+        .createQueryBuilder('p')
+        .where('p.admin_id IN (:...ids)', { ids: adminIds })
+        .select(['p.adminId', 'p.permission'])
+        .getMany();
+      for (const p of allPerms) {
+        const list = permMap.get(p.adminId) || [];
+        list.push(p.permission);
+        permMap.set(p.adminId, list);
+      }
+    } else if (adminIds.length === 1) {
+      for (const p of permissions) {
+        const list = permMap.get(p.adminId) || [];
+        list.push(p.permission);
+        permMap.set(p.adminId, list);
+      }
     }
 
     return admins.map((admin) => ({
       id: admin.id,
       fullName: admin.fullName,
       email: admin.email,
-      phone: admin.phone,
       role: admin.role,
-      permissions: admin.role === UserRole.SUPER_ADMIN
+      permissions: admin.role === AdminRole.SUPER_ADMIN
         ? ALL_PERMISSIONS
         : (permMap.get(admin.id) || []),
       lastLoginAt: admin.lastLoginAt,
-      lastActiveAt: admin.lastActiveAt,
       createdAt: admin.createdAt,
-      profilePhotoUrl: admin.profilePhotoUrl,
     }));
   }
 
   /**
-   * Get permissions for the current admin
+   * Get current admin profile with permissions
    */
-  async getMyPermissions(userId: string, role: UserRole): Promise<{ role: UserRole; permissions: string[] }> {
-    if (role === UserRole.SUPER_ADMIN) {
-      return { role, permissions: [...ALL_PERMISSIONS] };
-    }
-
-    const records = await this.permRepo.find({
-      where: { userId },
-      select: ['permission'],
+  async getMe(adminId: string, role: AdminRole) {
+    const admin = await this.adminRepo.findOne({
+      where: { id: adminId },
+      select: ['id', 'email', 'fullName', 'role', 'lastLoginAt', 'createdAt'],
     });
 
-    return { role, permissions: records.map((r) => r.permission) };
+    if (!admin) throw new NotFoundException('Admin not found');
+
+    const permissions =
+      role === AdminRole.SUPER_ADMIN
+        ? [...ALL_PERMISSIONS]
+        : (await this.permRepo.find({ where: { adminId }, select: ['permission'] })).map((r) => r.permission);
+
+    return {
+      id: admin.id,
+      email: admin.email,
+      fullName: admin.fullName,
+      role: admin.role,
+      permissions,
+      lastLoginAt: admin.lastLoginAt,
+      createdAt: admin.createdAt,
+    };
   }
 
   /**
-   * Create a new admin user
+   * Create a new admin
    */
   async createAdmin(dto: CreateAdminDto, granterId: string): Promise<any> {
-    // Check for duplicate email/phone
-    const existing = await this.userRepo.findOne({
-      where: [{ email: dto.email }, { phone: dto.phone }],
+    const existing = await this.adminRepo.findOne({
+      where: { email: dto.email },
     });
     if (existing) {
-      throw new ConflictException(
-        existing.email === dto.email
-          ? 'Email already in use'
-          : 'Phone number already in use',
-      );
+      throw new ConflictException('Email already in use');
     }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
-    let user: User;
+    let admin: Admin;
 
     try {
       const passwordHash = await bcrypt.hash(dto.password, 12);
 
-      user = this.userRepo.create({
+      admin = this.adminRepo.create({
         email: dto.email,
-        phone: dto.phone,
         passwordHash,
         fullName: dto.fullName,
-        universityId: dto.universityId,
-        facultyId: dto.facultyId,
-        departmentId: dto.departmentId,
-        yearOfStudy: dto.yearOfStudy as YearOfStudy,
-        role: UserRole.ADMIN,
-        verificationTier: VerificationTier.TIER_2,
-        phoneVerified: true,
-        emailVerified: true,
-        tier1ReviewStatus: Tier1ReviewStatus.APPROVED,
-        bvnVerified: true,
-        ninVerified: true,
+        role: AdminRole.ADMIN,
       });
 
-      await queryRunner.manager.save(user);
-
-      // Create wallet
-      const wallet = this.walletRepo.create({ userId: user.id });
-      await queryRunner.manager.save(wallet);
+      await queryRunner.manager.save(admin);
 
       // Create permissions
       const permEntities = dto.permissions.map((perm) =>
         this.permRepo.create({
-          userId: user.id,
+          adminId: admin.id,
           permission: perm,
           grantedBy: granterId,
         }),
@@ -176,77 +169,18 @@ export class AdminManagementService {
     await this.auditService.log(
       granterId,
       AuditAction.ADMIN_CREATE,
-      AuditTargetType.USER,
-      user.id,
+      AuditTargetType.ADMIN,
+      admin.id,
       undefined,
       { email: dto.email, permissions: dto.permissions },
     );
 
     return {
-      id: user.id,
-      email: user.email,
-      fullName: user.fullName,
-      role: user.role,
+      id: admin.id,
+      email: admin.email,
+      fullName: admin.fullName,
+      role: admin.role,
       permissions: dto.permissions,
-    };
-  }
-
-  /**
-   * Promote an existing user to admin
-   */
-  async promoteToAdmin(
-    userId: string,
-    permissions: string[],
-    granterId: string,
-  ): Promise<any> {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found');
-    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
-      throw new BadRequestException('User is already an admin');
-    }
-
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      user.role = UserRole.ADMIN;
-      await queryRunner.manager.save(user);
-
-      const permEntities = permissions.map((perm) =>
-        this.permRepo.create({
-          userId: user.id,
-          permission: perm,
-          grantedBy: granterId,
-        }),
-      );
-      await queryRunner.manager.save(permEntities);
-
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-      throw error;
-    } finally {
-      await queryRunner.release();
-    }
-
-    await this.invalidatePermissionCache(userId);
-
-    await this.auditService.log(
-      granterId,
-      AuditAction.ADMIN_PROMOTE,
-      AuditTargetType.USER,
-      userId,
-      undefined,
-      { previousRole: UserRole.USER, permissions },
-    );
-
-    return {
-      id: user.id,
-      email: user.email,
-      fullName: user.fullName,
-      role: UserRole.ADMIN,
-      permissions,
     };
   }
 
@@ -254,22 +188,22 @@ export class AdminManagementService {
    * Update admin permissions (replace all)
    */
   async updatePermissions(
-    userId: string,
+    adminId: string,
     permissions: string[],
     granterId: string,
   ): Promise<{ permissions: string[] }> {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found');
-    if (user.role !== UserRole.ADMIN) {
-      throw new BadRequestException('Can only update permissions for ADMIN users');
+    const admin = await this.adminRepo.findOne({ where: { id: adminId } });
+    if (!admin) throw new NotFoundException('Admin not found');
+    if (admin.role !== AdminRole.ADMIN) {
+      throw new BadRequestException('Cannot update permissions for SUPER_ADMIN');
     }
-    if (userId === granterId) {
+    if (adminId === granterId) {
       throw new ForbiddenException('Cannot update your own permissions');
     }
 
     // Get current permissions for audit
     const currentPerms = await this.permRepo.find({
-      where: { userId },
+      where: { adminId },
       select: ['permission'],
     });
     const currentPermNames = currentPerms.map((p) => p.permission);
@@ -279,14 +213,12 @@ export class AdminManagementService {
     await queryRunner.startTransaction();
 
     try {
-      // Delete all existing permissions
-      await queryRunner.manager.delete(AdminPermissionEntity, { userId });
+      await queryRunner.manager.delete(AdminPermissionEntity, { adminId });
 
-      // Insert new permissions
       if (permissions.length > 0) {
         const permEntities = permissions.map((perm) =>
           this.permRepo.create({
-            userId,
+            adminId,
             permission: perm,
             grantedBy: granterId,
           }),
@@ -302,9 +234,8 @@ export class AdminManagementService {
       await queryRunner.release();
     }
 
-    await this.invalidatePermissionCache(userId);
+    await this.invalidatePermissionCache(adminId);
 
-    // Log grants and revokes
     const granted = permissions.filter((p) => !currentPermNames.includes(p));
     const revoked = currentPermNames.filter((p) => !permissions.includes(p));
 
@@ -312,8 +243,8 @@ export class AdminManagementService {
       await this.auditService.log(
         granterId,
         AuditAction.ADMIN_PERMISSION_GRANT,
-        AuditTargetType.USER,
-        userId,
+        AuditTargetType.ADMIN,
+        adminId,
         undefined,
         { granted },
       );
@@ -322,8 +253,8 @@ export class AdminManagementService {
       await this.auditService.log(
         granterId,
         AuditAction.ADMIN_PERMISSION_REVOKE,
-        AuditTargetType.USER,
-        userId,
+        AuditTargetType.ADMIN,
+        adminId,
         undefined,
         { revoked },
       );
@@ -333,45 +264,29 @@ export class AdminManagementService {
   }
 
   /**
-   * Demote admin back to regular user
+   * Deactivate an admin account
    */
-  async demoteAdmin(userId: string, granterId: string): Promise<void> {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found');
-    if (user.role !== UserRole.ADMIN) {
-      throw new BadRequestException('Can only demote ADMIN users');
+  async deactivateAdmin(adminId: string, granterId: string): Promise<void> {
+    const admin = await this.adminRepo.findOne({ where: { id: adminId } });
+    if (!admin) throw new NotFoundException('Admin not found');
+    if (admin.role !== AdminRole.ADMIN) {
+      throw new BadRequestException('Cannot deactivate a SUPER_ADMIN');
     }
-    if (userId === granterId) {
-      throw new ForbiddenException('Cannot demote yourself');
-    }
-
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      user.role = UserRole.USER;
-      user.refreshTokenHash = null as any; // Force logout
-      await queryRunner.manager.save(user);
-
-      // Delete all permissions
-      await queryRunner.manager.delete(AdminPermissionEntity, { userId });
-
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-      throw error;
-    } finally {
-      await queryRunner.release();
+    if (adminId === granterId) {
+      throw new ForbiddenException('Cannot deactivate yourself');
     }
 
-    await this.invalidatePermissionCache(userId);
+    admin.isActive = false;
+    admin.refreshTokenHash = null; // Force logout
+    await this.adminRepo.save(admin);
+
+    await this.invalidatePermissionCache(adminId);
 
     await this.auditService.log(
       granterId,
-      AuditAction.ADMIN_DEMOTE,
-      AuditTargetType.USER,
-      userId,
+      AuditAction.ADMIN_DEACTIVATE,
+      AuditTargetType.ADMIN,
+      adminId,
     );
   }
 
@@ -385,7 +300,7 @@ export class AdminManagementService {
     }));
   }
 
-  private async invalidatePermissionCache(userId: string): Promise<void> {
-    await this.cacheManager.del(`admin_permissions:${userId}`);
+  private async invalidatePermissionCache(adminId: string): Promise<void> {
+    await this.cacheManager.del(`admin_permissions:${adminId}`);
   }
 }

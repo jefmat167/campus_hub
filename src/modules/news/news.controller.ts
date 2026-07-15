@@ -14,10 +14,12 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { AdminPermissions } from '../../common/constants/permissions';
@@ -479,10 +481,10 @@ export class NewsController {
    * Create article (admin)
    */
   @Post('admin/articles')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.NEWS_MANAGE)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create article', description: 'Create a new article. Slug, reading time, and excerpt are auto-generated if not provided. Requires ADMIN or SUPER_ADMIN role.' })
+  @ApiOperation({ summary: 'Create article', description: 'Create a new article. Slug, reading time, and excerpt are auto-generated if not provided. Requires news:read or news:manage permission.' })
   @ApiResponse({
     status: 201,
     description: 'Article created successfully',
@@ -514,10 +516,9 @@ export class NewsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   async createArticle(
-    @CurrentUser() user: User,
     @Body() dto: CreateArticleDto,
   ) {
-    const article = await this.newsService.createArticle(user.id, dto);
+    const article = await this.newsService.createArticle(null, dto);
 
     return {
       success: true,
@@ -530,10 +531,10 @@ export class NewsController {
    * Update article (admin)
    */
   @Patch('admin/articles/:id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.NEWS_MANAGE)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update article', description: 'Update an existing article by ID. Requires ADMIN or SUPER_ADMIN role.' })
+  @ApiOperation({ summary: 'Update article', description: 'Update an existing article by ID. Requires news:read or news:manage permission.' })
   @ApiParam({ name: 'id', description: 'Article UUID to update', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
   @ApiResponse({
     status: 200,
@@ -566,7 +567,7 @@ export class NewsController {
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   @ApiResponse({ status: 404, description: 'Article not found' })
   async updateArticle(
-    @CurrentUser() user: User,
+    @CurrentAdmin() user: User,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateArticleDto,
   ) {
@@ -583,10 +584,10 @@ export class NewsController {
    * Delete article (admin)
    */
   @Delete('admin/articles/:id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.NEWS_MANAGE)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete article', description: 'Soft-delete (archive) an article by ID. Requires ADMIN or SUPER_ADMIN role.' })
+  @ApiOperation({ summary: 'Delete article', description: 'Soft-delete (archive) an article by ID. Requires news:read or news:manage permission.' })
   @ApiParam({ name: 'id', description: 'Article UUID to delete', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
   @ApiResponse({
     status: 200,
@@ -602,7 +603,7 @@ export class NewsController {
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   @ApiResponse({ status: 404, description: 'Article not found' })
   async deleteArticle(
-    @CurrentUser() user: User,
+    @CurrentAdmin() user: User,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     await this.newsService.deleteArticle(id, user.id, true);
@@ -617,10 +618,10 @@ export class NewsController {
    * Get all articles including drafts (admin)
    */
   @Get('admin/articles')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.NEWS_READ)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all articles (admin)', description: 'Retrieve all articles including drafts and archived. Requires ADMIN or SUPER_ADMIN role.' })
+  @ApiOperation({ summary: 'Get all articles (admin)', description: 'Retrieve all articles including drafts and archived. Requires news:read or news:manage permission.' })
   @ApiResponse({
     status: 200,
     description: 'Admin articles retrieved successfully',
@@ -669,11 +670,11 @@ export class NewsController {
    * Publish article (admin)
    */
   @Post('admin/articles/:id/publish')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.NEWS_MANAGE)
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Publish article', description: 'Publish a draft article, setting its status to published and recording the publish date. Requires ADMIN or SUPER_ADMIN role.' })
+  @ApiOperation({ summary: 'Publish article', description: 'Publish a draft article, setting its status to published and recording the publish date. Requires news:read or news:manage permission.' })
   @ApiParam({ name: 'id', description: 'Article UUID to publish', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
   @ApiResponse({
     status: 200,
@@ -719,11 +720,11 @@ export class NewsController {
    * Unpublish article (admin)
    */
   @Post('admin/articles/:id/unpublish')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.NEWS_MANAGE)
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Unpublish article', description: 'Revert a published article back to draft status. Requires ADMIN or SUPER_ADMIN role.' })
+  @ApiOperation({ summary: 'Unpublish article', description: 'Revert a published article back to draft status. Requires news:read or news:manage permission.' })
   @ApiParam({ name: 'id', description: 'Article UUID to unpublish', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
   @ApiResponse({
     status: 200,
@@ -769,10 +770,10 @@ export class NewsController {
    * Set article as featured (admin)
    */
   @Patch('admin/articles/:id/featured')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.NEWS_MANAGE)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Set article featured status', description: 'Toggle the featured flag on an article. Requires ADMIN or SUPER_ADMIN role.' })
+  @ApiOperation({ summary: 'Set article featured status', description: 'Toggle the featured flag on an article. Requires news:read or news:manage permission.' })
   @ApiParam({ name: 'id', description: 'Article UUID to update', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
   @ApiResponse({
     status: 200,

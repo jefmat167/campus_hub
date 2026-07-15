@@ -25,12 +25,15 @@ import { SubmitTier1DocumentsDto } from './dto/submit-tier1-documents.dto';
 import { VerifyBvnDto, VerifyNinDto, AddSecondKycDto } from './dto/verify-kyc.dto';
 import { RejectVerificationDto } from './dto/admin-review.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { VerificationTier } from '../../database/entities/user.entity';
 import { KycType } from '../../database/entities/kyc-verification.entity';
 
@@ -255,7 +258,8 @@ export class VerificationController {
   // ============ Admin Endpoints ============
 
   @Get('admin/pending')
-  @UseGuards(PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.VERIFICATION_READ)
   @ApiOperation({
     summary: 'Get pending Tier 1 verifications (Admin)',
@@ -291,7 +295,8 @@ export class VerificationController {
   }
 
   @Get('admin/:userId')
-  @UseGuards(PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.VERIFICATION_READ)
   @ApiOperation({
     summary: 'Get verification details for a user (Admin)',
@@ -311,7 +316,8 @@ export class VerificationController {
   }
 
   @Post('admin/:userId/approve')
-  @UseGuards(PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.VERIFICATION_MANAGE)
   @ApiOperation({
     summary: 'Approve Tier 1 verification (Admin)',
@@ -333,13 +339,14 @@ export class VerificationController {
   })
   async approveVerification(
     @Param('userId', ParseUUIDPipe) userId: string,
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
   ) {
     return this.verificationService.approveVerification(userId, adminId);
   }
 
   @Post('admin/:userId/reject')
-  @UseGuards(PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.VERIFICATION_MANAGE)
   @ApiOperation({
     summary: 'Reject Tier 1 verification (Admin)',
@@ -360,7 +367,7 @@ export class VerificationController {
   })
   async rejectVerification(
     @Param('userId', ParseUUIDPipe) userId: string,
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Body() dto: RejectVerificationDto,
   ) {
     return this.verificationService.rejectVerification(userId, adminId, dto.reason);

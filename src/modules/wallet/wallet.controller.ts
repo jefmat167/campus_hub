@@ -15,12 +15,15 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { VerificationTier } from '../../database/entities/user.entity';
 import { AdminAuditService } from '../admin/admin-audit.service';
 import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
@@ -156,7 +159,8 @@ export class WalletController {
   // ─── Admin Endpoints ────────────────────────────────────────────
 
   @Get('admin/transactions')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.WALLET_READ)
   @ApiOperation({ summary: 'List all wallet transactions (admin)', description: 'Paginated, filterable by type, status, user, date, amount.' })
   @ApiResponse({
@@ -198,7 +202,8 @@ export class WalletController {
   }
 
   @Get('admin/withdrawals')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.WALLET_READ)
   @ApiOperation({ summary: 'List withdrawals (admin)', description: 'Filterable by status, date range.' })
   @ApiResponse({
@@ -240,10 +245,11 @@ export class WalletController {
   }
 
   @Post('admin/adjust')
+  @Public()
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.WALLET_MANAGE)
-  @ApiOperation({ summary: 'Manual wallet adjustment (admin)', description: 'Credit or debit a user\'s wallet with reason. SUPER_ADMIN only.' })
+  @ApiOperation({ summary: 'Manual wallet adjustment (admin)', description: 'Credit or debit a user\'s wallet with reason. Requires wallet:manage permission.' })
   @ApiResponse({
     status: 200,
     description: 'Adjustment applied',
@@ -266,7 +272,7 @@ export class WalletController {
     },
   })
   async adminWalletAdjustment(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Body() dto: AdminWalletAdjustmentDto,
   ) {
     const transaction = await this.walletService.adminWalletAdjustment(

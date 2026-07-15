@@ -8,21 +8,21 @@ import {
   Index,
   Unique,
 } from 'typeorm';
-import { User } from './user.entity';
+import { Admin } from './admin.entity';
 
 @Entity('admin_permissions')
-@Unique(['userId', 'permission'])
-@Index(['userId'])
+@Unique(['adminId', 'permission'])
+@Index(['adminId'])
 export class AdminPermission {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'user_id' })
-  userId: string;
+  @Column({ name: 'admin_id' })
+  adminId: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'user_id' })
-  user: User;
+  @ManyToOne(() => Admin, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'admin_id' })
+  admin: Admin;
 
   @Column({ type: 'varchar', length: 50 })
   permission: string;
@@ -30,9 +30,9 @@ export class AdminPermission {
   @Column({ name: 'granted_by' })
   grantedBy: string;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => Admin, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'granted_by' })
-  grantedByUser: User;
+  grantedByAdmin: Admin;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

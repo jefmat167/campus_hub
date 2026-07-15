@@ -25,6 +25,7 @@ export enum UploadFolder {
   PROFILES = 'profiles',
   VERIFICATION = 'verification',
   CHAT = 'chat',
+  ARTICLES = 'articles',
 }
 
 export interface UploadResult {
@@ -135,7 +136,16 @@ export class UploadService {
     const uniqueId = uuidv4();
     const fileName = `${options.folder}/${uniqueId}${ext}`;
 
-    // Try S3 first
+    // Try R2 first
+    if (this.r2Client) {
+      try {
+        return await this.uploadToR2(file, fileName);
+      } catch (error) {
+        this.logger.error('R2 upload failed, falling back', error);
+      }
+    }
+
+    // Try S3
     if (this.s3Client) {
       try {
         return await this.uploadToS3(file, fileName, options);
@@ -229,6 +239,35 @@ export class UploadService {
         `Invalid file type. Allowed types: ${allowedTypes.join(', ')}`,
       );
     }
+  }
+
+  private async uploadToR2(
+    file: Express.Multer.File,
+    key: string,
+  ): Promise<UploadResult> {
+    const command = new PutObjectCommand({
+      Bucket: this.r2BucketName,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype,
+    });
+
+    await this.r2Client!.send(command);
+
+    const url = this.r2PublicUrl
+      ? `${this.r2PublicUrl}/${key}`
+      : key;
+
+    this.logger.log(`File uploaded to R2: ${key}`);
+
+    return {
+      url,
+      publicId: key,
+      provider: 'S3', // R2 is S3-compatible
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+    };
   }
 
   private async uploadToS3(

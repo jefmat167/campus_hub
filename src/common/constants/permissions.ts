@@ -20,7 +20,6 @@ export const AdminPermissions = {
   NEWS_MANAGE: 'news:manage',
   VERIFICATION_READ: 'verification:read',
   VERIFICATION_MANAGE: 'verification:manage',
-  ADMIN_MANAGE: 'admin:manage',
 } as const;
 
 export type AdminPermissionType =
@@ -28,20 +27,10 @@ export type AdminPermissionType =
 
 export const ALL_PERMISSIONS = Object.values(AdminPermissions);
 
-/** Permissions that MODERATOR role has implicitly (no DB records needed) */
-export const MODERATOR_PERMISSIONS: AdminPermissionType[] = [
-  AdminPermissions.HOUSING_READ,
-  AdminPermissions.HOUSING_MANAGE,
-  AdminPermissions.SOCIAL_READ,
-  AdminPermissions.SOCIAL_MANAGE,
-  AdminPermissions.MODERATION_READ,
-  AdminPermissions.MODERATION_MANAGE,
-];
-
 /** Human-readable descriptions for admin UI */
 export const PERMISSION_DESCRIPTIONS: Record<AdminPermissionType, string> = {
   'users:read': 'View user list and user details',
-  'users:manage': 'Change roles, force logout, adjust verification tier',
+  'users:manage': 'Force logout, adjust verification tier',
   'dashboard:read': 'View audit logs and dashboard statistics',
   'marketplace:read': 'View all marketplace listings',
   'marketplace:manage': 'Take down marketplace listings',
@@ -61,5 +50,4 @@ export const PERMISSION_DESCRIPTIONS: Record<AdminPermissionType, string> = {
   'news:manage': 'Create, edit, delete, publish/unpublish articles',
   'verification:read': 'View pending verification requests',
   'verification:manage': 'Approve or reject verification requests',
-  'admin:manage': 'Create admins, manage admin permissions',
 };

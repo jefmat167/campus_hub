@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../database/entities/user.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
-import { WalletTransaction, WalletTransactionType, WalletTransactionStatus } from '../../database/entities/wallet.entity';
+import { WalletTransaction, WalletTransactionType } from '../../database/entities/wallet.entity';
 import { EscrowTransaction, EscrowStatus } from '../../database/entities/escrow.entity';
 import { Listing } from '../../database/entities/listing.entity';
 import { Post } from '../../database/entities/post.entity';
@@ -43,7 +43,6 @@ export class AdminStatsService {
       activeLast24h,
       activeLast7d,
       tierBreakdown,
-      roleBreakdown,
     ] = await Promise.all([
       this.userRepo.count({ where: { isDeleted: false } }),
       this.userRepo.createQueryBuilder('u').where('u.isDeleted = false').andWhere('u.createdAt >= :today', { today }).getCount(),
@@ -57,12 +56,6 @@ export class AdminStatsService {
         .where('u.isDeleted = false')
         .groupBy('u.verificationTier')
         .getRawMany(),
-      this.userRepo.createQueryBuilder('u')
-        .select('u.role', 'role')
-        .addSelect('COUNT(*)', 'count')
-        .where('u.isDeleted = false')
-        .groupBy('u.role')
-        .getRawMany(),
     ]);
 
     return {
@@ -74,10 +67,6 @@ export class AdminStatsService {
       activeLast7d,
       tierBreakdown: tierBreakdown.reduce((acc: Record<string, number>, r: any) => {
         acc[r.tier] = Number(r.count);
-        return acc;
-      }, {}),
-      roleBreakdown: roleBreakdown.reduce((acc: Record<string, number>, r: any) => {
-        acc[r.role] = Number(r.count);
         return acc;
       }, {}),
     };

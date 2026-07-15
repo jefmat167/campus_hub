@@ -11,6 +11,7 @@ import {
   TIER_LEVELS,
   tierMeetsRequirement,
 } from '../decorators/min-tier.decorator';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 /**
  * Guard that checks if the user meets the minimum verification tier requirement.
@@ -30,6 +31,13 @@ export class TierGuard implements CanActivate {
   constructor(private reflector: Reflector) { }
 
   canActivate(context: ExecutionContext): boolean {
+    // Skip tier check for routes marked @Public() (e.g. admin endpoints on user controllers)
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) return true;
+
     const requiredTier = this.reflector.getAllAndOverride<VerificationTier>(
       MIN_TIER_KEY,
       [context.getHandler(), context.getClass()],
@@ -117,6 +125,13 @@ export class TierAmountLimitGuard implements CanActivate {
   constructor(private reflector: Reflector) { }
 
   canActivate(context: ExecutionContext): boolean {
+    // Skip for routes marked @Public() (e.g. admin endpoints on user controllers)
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) return true;
+
     const config = this.reflector.getAllAndOverride<TierAmountLimitConfig>(
       TIER_AMOUNT_LIMIT_KEY,
       [context.getHandler(), context.getClass()],

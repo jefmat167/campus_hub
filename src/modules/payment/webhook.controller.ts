@@ -38,7 +38,7 @@ export class WebhookController {
   constructor(
     private readonly paystackService: PaystackService,
     private readonly walletService: WalletService,
-  ) {}
+  ) { }
 
   @Post('paystack')
   @HttpCode(HttpStatus.OK)
@@ -49,7 +49,6 @@ export class WebhookController {
   async handlePaystackWebhook(
     @Body() body: PaystackWebhookEvent,
     @Headers('x-paystack-signature') signature: string,
-    @Req() req: RawBodyRequest<Request>,
   ) {
     // Verify webhook signature
     const rawBody = JSON.stringify(body);

@@ -58,7 +58,7 @@ export class NewsService {
 
   // ============ ARTICLE CRUD ============
 
-  async createArticle(authorId: string, dto: CreateArticleDto): Promise<Article> {
+  async createArticle(authorId: string | null, dto: CreateArticleDto): Promise<Article> {
     // Generate slug from title
     const slug = await this.generateUniqueSlug(dto.title);
 
@@ -75,6 +75,9 @@ export class NewsService {
       slug,
       excerpt,
       readingTime,
+      universityIds: dto.universityIds?.length ? dto.universityIds : null,
+      imageUrls: dto.imageUrls?.length ? dto.imageUrls : null,
+      videoUrl: dto.videoUrl || null,
       publishedAt: dto.status === ArticleStatus.PUBLISHED ? new Date() : null,
     });
 
@@ -114,6 +117,21 @@ export class NewsService {
     // Set published date if status changes to published
     if (dto.status === ArticleStatus.PUBLISHED && article.status !== ArticleStatus.PUBLISHED) {
       article.publishedAt = new Date();
+    }
+
+    // Normalize universityIds: empty array = null (visible to all)
+    if (dto.universityIds !== undefined) {
+      (dto as any).universityIds = dto.universityIds?.length ? dto.universityIds : null;
+    }
+
+    // Normalize imageUrls: empty array = null
+    if (dto.imageUrls !== undefined) {
+      (dto as any).imageUrls = dto.imageUrls?.length ? dto.imageUrls : null;
+    }
+
+    // Normalize videoUrl: empty string = null
+    if (dto.videoUrl !== undefined) {
+      (dto as any).videoUrl = dto.videoUrl || null;
     }
 
     // Apply updates

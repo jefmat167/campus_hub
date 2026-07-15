@@ -8,10 +8,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import { DataSource } from 'typeorm';
-import { UserRole } from '../../database/entities/user.entity';
+import { AdminRole } from '../../database/entities/admin.entity';
 import { AdminPermission } from '../../database/entities/admin-permission.entity';
 import { PERMISSION_KEY } from '../decorators/require-permission.decorator';
-import { MODERATOR_PERMISSIONS } from '../constants/permissions';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -34,35 +33,27 @@ export class PermissionsGuard implements CanActivate {
     if (!user) throw new ForbiddenException('Not authenticated');
 
     // SUPER_ADMIN: implicit all permissions
-    if (user.role === UserRole.SUPER_ADMIN) return true;
-
-    // MODERATOR: check against hardcoded moderator permissions
-    if (user.role === UserRole.MODERATOR) {
-      if ((MODERATOR_PERMISSIONS as string[]).includes(requiredPermission)) {
-        return true;
-      }
-      throw new ForbiddenException('Insufficient permissions');
-    }
+    if (user.role === AdminRole.SUPER_ADMIN) return true;
 
     // ADMIN: check granted permissions (cached)
-    if (user.role === UserRole.ADMIN) {
-      const permissions = await this.getUserPermissions(user.id);
+    if (user.role === AdminRole.ADMIN) {
+      const permissions = await this.getAdminPermissions(user.id);
       if (permissions.includes(requiredPermission)) return true;
       throw new ForbiddenException('Insufficient permissions');
     }
 
-    // USER role: deny
+    // Not an admin
     throw new ForbiddenException('Admin access required');
   }
 
-  private async getUserPermissions(userId: string): Promise<string[]> {
-    const cacheKey = `admin_permissions:${userId}`;
+  private async getAdminPermissions(adminId: string): Promise<string[]> {
+    const cacheKey = `admin_permissions:${adminId}`;
     const cached = await this.cacheManager.get<string[]>(cacheKey);
     if (cached) return cached;
 
     const repo = this.dataSource.getRepository(AdminPermission);
     const records = await repo.find({
-      where: { userId },
+      where: { adminId },
       select: ['permission'],
     });
     const permissions = records.map((r) => r.permission);

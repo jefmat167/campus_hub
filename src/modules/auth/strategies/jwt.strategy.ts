@@ -49,7 +49,12 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     });
   }
 
-  async validate(payload: JwtPayload): Promise<User> {
+  async validate(payload: JwtPayload & { type?: string }): Promise<User> {
+    // Reject admin tokens
+    if (payload.type === 'admin') {
+      throw new UnauthorizedException('Invalid token type');
+    }
+
     // Check if token is blacklisted
     if (payload.jti) {
       const isBlacklisted = await this.cacheManager.get(`blacklist:${payload.jti}`);

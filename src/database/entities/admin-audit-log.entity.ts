@@ -7,7 +7,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { User } from './user.entity';
+import { Admin } from './admin.entity';
 
 export enum AuditAction {
   USER_ROLE_CHANGE = 'user_role_change',
@@ -28,17 +28,18 @@ export enum AuditAction {
   FACULTY_CREATE = 'faculty_create',
   FACULTY_UPDATE = 'faculty_update',
   FACULTY_DEACTIVATE = 'faculty_deactivate',
+  FACULTY_ACTIVATE = 'faculty_activate',
   DEPARTMENT_CREATE = 'department_create',
   DEPARTMENT_UPDATE = 'department_update',
   DEPARTMENT_DEACTIVATE = 'department_deactivate',
+  DEPARTMENT_ACTIVATE = 'department_activate',
   HOUSING_TAKEDOWN = 'housing_takedown',
   REPORT_REVIEW = 'report_review',
   APPEAL_REVIEW = 'appeal_review',
   ADMIN_CREATE = 'admin_create',
-  ADMIN_PROMOTE = 'admin_promote',
   ADMIN_PERMISSION_GRANT = 'admin_permission_grant',
   ADMIN_PERMISSION_REVOKE = 'admin_permission_revoke',
-  ADMIN_DEMOTE = 'admin_demote',
+  ADMIN_DEACTIVATE = 'admin_deactivate',
 }
 
 export enum AuditTargetType {
@@ -54,6 +55,7 @@ export enum AuditTargetType {
   ESCROW = 'escrow',
   REPORT = 'report',
   APPEAL = 'appeal',
+  ADMIN = 'admin',
 }
 
 @Entity('admin_audit_logs')
@@ -68,9 +70,9 @@ export class AdminAuditLog {
   @Index()
   adminId: string;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL' })
+  @ManyToOne(() => Admin, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'admin_id' })
-  admin: User;
+  admin: Admin;
 
   @Column({ type: 'enum', enum: AuditAction })
   action: AuditAction;

@@ -518,12 +518,17 @@ export class HousingService {
   async getReportedListings(
     page = 1,
     limit = 20,
+    universityId?: string,
   ): Promise<{
     listings: Array<HousingListing & { reports: HousingReport[] }>;
     total: number;
   }> {
+    const where: any = { status: HousingStatus.UNDER_REVIEW };
+    if (universityId) {
+      where.universityId = universityId;
+    }
     const [listings, total] = await this.housingRepo.findAndCount({
-      where: { status: HousingStatus.UNDER_REVIEW },
+      where,
       relations: ['poster'],
       order: { updatedAt: 'DESC' },
       skip: (page - 1) * limit,
