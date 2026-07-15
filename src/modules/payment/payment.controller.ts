@@ -361,13 +361,9 @@ export class PaymentController {
 
     const reference = this.paystackService.generateReference('WD');
 
-    // Debit wallet first
-    await this.walletService.debitWallet(
-      user.id,
-      dto.amount,
-      reference,
-      WalletTransactionType.WITHDRAWAL,
-    );
+    // Debit wallet and record a PENDING withdrawal atomically. The webhook
+    // (transfer.success/failed/reversed) transitions this same transaction.
+    await this.walletService.debitForWithdrawal(user.id, dto.amount, reference);
 
     // Initiate transfer via Paystack
     try {
@@ -391,13 +387,9 @@ export class PaymentController {
         message: 'Withdrawal initiated successfully. You will receive the funds shortly.',
       };
     } catch (error) {
-      // Reverse the debit if transfer initiation fails
-      await this.walletService.creditWallet(
-        user.id,
-        dto.amount,
-        `${reference}_reversal`,
-        WalletTransactionType.DEPOSIT,
-      );
+      // Transfer couldn't be initiated: reverse the PENDING withdrawal so the
+      // balance is refunded and the transaction is marked REVERSED.
+      await this.walletService.reverseWithdrawal(reference);
       throw error;
     }
   }

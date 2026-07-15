@@ -31,6 +31,13 @@ import {
   BuyRequestStatus,
 } from '../../database/entities/buy-request.entity';
 import { getAmountLimitForTier } from '../../common/guards/tier.guard';
+import {
+  splitFee,
+  splitByPercent,
+  percentOf,
+  toKobo,
+  toNaira,
+} from '../../common/utils/money';
 import { WalletService } from '../wallet/wallet.service';
 import { PlatformWalletService } from '../wallet/platform-wallet.service';
 import { PlatformTransactionType } from '../../database/entities/platform-wallet.entity';
@@ -825,16 +832,22 @@ export class EscrowService {
     await queryRunner.startTransaction();
 
     try {
-      // Calculate platform fee (2.5%)
-      const platformFee =
-        (Number(escrow.amount) * this.PLATFORM_FEE_PERCENTAGE) / 100;
-      const sellerPayout = Number(escrow.amount) - platformFee;
+      // Platform fee (2.5%), computed in kobo so fee + payout === amount.
+      const { fee: platformFee, payout: sellerPayout } = splitFee(
+        Number(escrow.amount),
+        this.PLATFORM_FEE_PERCENTAGE,
+      );
 
-      // Release funds to seller (minus platform fee)
-      await this.walletService.releaseFunds(
+      // Move the full amount out of the buyer's locked balance: payout to the
+      // seller, fee to the platform wallet (no refund on a completed order).
+      await this.walletService.settleEscrow(
         escrow.buyerId,
         escrow.sellerId,
-        sellerPayout,
+        {
+          total: Number(escrow.amount),
+          toSeller: sellerPayout,
+          toPlatform: platformFee,
+        },
         `ESCROW_RELEASE_${escrow.id}`,
         queryRunner,
       );
@@ -934,13 +947,18 @@ export class EscrowService {
         });
 
         if (university?.cancellationFeeEnabled && university.cancellationFeePercent > 0) {
-          const cancellationFee =
-            (Number(escrow.amount) * Number(university.cancellationFeePercent)) / 100;
+          const cancellationFee = percentOf(
+            Number(escrow.amount),
+            Number(university.cancellationFeePercent),
+          );
 
-          // Split: 60% to seller, 40% to platform
-          sellerCompensation = cancellationFee * 0.6;
-          platformShare = cancellationFee * 0.4;
-          buyerRefund = Number(escrow.amount) - cancellationFee;
+          // Split: 60% to seller, remainder to platform (kobo-exact).
+          const split = splitByPercent(cancellationFee, 60);
+          sellerCompensation = split.portion;
+          platformShare = split.remainder;
+          buyerRefund = toNaira(
+            toKobo(Number(escrow.amount)) - toKobo(cancellationFee),
+          );
 
           this.logger.log(
             `Cancellation fee applied: ₦${cancellationFee} (seller: ₦${sellerCompensation}, platform: ₦${platformShare})`,
@@ -948,35 +966,36 @@ export class EscrowService {
         }
       }
 
-      // Refund buyer
-      if (buyerRefund > 0) {
+      if (sellerCompensation > 0 || platformShare > 0) {
+        // Cancellation fee applies: fully release the buyer's hold, distribute
+        // the fee (seller compensation + platform share) and refund the rest.
+        await this.walletService.settleEscrow(
+          escrow.buyerId,
+          escrow.sellerId,
+          {
+            total: Number(escrow.amount),
+            toSeller: sellerCompensation,
+            toPlatform: platformShare,
+          },
+          `ESCROW_CANCEL_${escrow.id}`,
+          queryRunner,
+        );
+
+        if (platformShare > 0) {
+          await this.platformWalletService.creditPlatformFee(
+            platformShare,
+            escrow.id,
+            PlatformTransactionType.CANCELLATION_FEE,
+            undefined,
+            queryRunner,
+          );
+        }
+      } else {
+        // No fee: simply unlock the buyer's held funds back to available.
         await this.walletService.refundFunds(
           escrow.buyerId,
           buyerRefund,
           `ESCROW_CANCEL_${escrow.id}`,
-          queryRunner,
-        );
-      }
-
-      // Credit seller compensation
-      if (sellerCompensation > 0) {
-        await this.walletService.creditWallet(
-          escrow.sellerId,
-          sellerCompensation,
-          `CANCEL_COMPENSATION_${escrow.id}`,
-          undefined,
-          undefined,
-          queryRunner,
-        );
-      }
-
-      // Credit platform share
-      if (platformShare > 0) {
-        await this.platformWalletService.creditPlatformFee(
-          platformShare,
-          escrow.id,
-          PlatformTransactionType.CANCELLATION_FEE,
-          undefined,
           queryRunner,
         );
       }
@@ -1139,17 +1158,24 @@ export class EscrowService {
 
     const escrow = dispute.escrow;
 
-    // Validate resolution amounts for split
+    // Validate resolution amounts for split: the gross buyer refund and seller
+    // release must sum EXACTLY to the escrow amount (the platform's 1%-per-side
+    // cut is taken from these gross figures, not added on top).
     if (dto.resolution === DisputeStatus.RESOLVED_SPLIT) {
-      if (!dto.buyerRefundAmount && !dto.sellerReleaseAmount) {
+      const buyerRefundGross = Number(dto.buyerRefundAmount || 0);
+      const sellerReleaseGross = Number(dto.sellerReleaseAmount || 0);
+      if (buyerRefundGross <= 0 && sellerReleaseGross <= 0) {
         throw new BadRequestException(
           'Please specify refund/release amounts for split resolution',
         );
       }
-      const total =
-        (dto.buyerRefundAmount || 0) + (dto.sellerReleaseAmount || 0);
-      if (total > Number(escrow.amount)) {
-        throw new BadRequestException('Total exceeds escrow amount');
+      if (
+        toKobo(buyerRefundGross) + toKobo(sellerReleaseGross) !==
+        toKobo(Number(escrow.amount))
+      ) {
+        throw new BadRequestException(
+          'Buyer refund and seller release must sum exactly to the escrow amount',
+        );
       }
     }
 
@@ -1172,16 +1198,21 @@ export class EscrowService {
           escrow.refundedAt = new Date();
           break;
 
-        case DisputeStatus.RESOLVED_SELLER:
-          // Release to seller (with platform fee deduction)
-          const platformFee =
-            (Number(escrow.amount) * this.PLATFORM_FEE_PERCENTAGE) / 100;
-          const sellerPayout = Number(escrow.amount) - platformFee;
+        case DisputeStatus.RESOLVED_SELLER: {
+          // Release to seller (with 2.5% platform fee deduction).
+          const { fee: platformFee, payout: sellerPayout } = splitFee(
+            Number(escrow.amount),
+            this.PLATFORM_FEE_PERCENTAGE,
+          );
 
-          await this.walletService.releaseFunds(
+          await this.walletService.settleEscrow(
             escrow.buyerId,
             escrow.sellerId,
-            sellerPayout,
+            {
+              total: Number(escrow.amount),
+              toSeller: sellerPayout,
+              toPlatform: platformFee,
+            },
             `DISPUTE_RELEASE_${dispute.id}`,
             queryRunner,
           );
@@ -1200,31 +1231,50 @@ export class EscrowService {
           escrow.platformFee = platformFee;
           escrow.sellerPayout = sellerPayout;
           break;
+        }
 
-        case DisputeStatus.RESOLVED_SPLIT:
-          // Split between buyer and seller
-          if (dto.buyerRefundAmount && dto.buyerRefundAmount > 0) {
-            await this.walletService.refundFunds(
-              escrow.buyerId,
-              dto.buyerRefundAmount,
-              `DISPUTE_SPLIT_REFUND_${dispute.id}`,
+        case DisputeStatus.RESOLVED_SPLIT: {
+          // Gross amounts sum to escrow.amount (validated above). Platform
+          // takes 1% from each side; buyer/seller receive the remaining 99%.
+          const buyerRefundGross = Number(dto.buyerRefundAmount || 0);
+          const sellerReleaseGross = Number(dto.sellerReleaseAmount || 0);
+
+          const platformFromRefund = percentOf(buyerRefundGross, 1);
+          const platformFromRelease = percentOf(sellerReleaseGross, 1);
+          const toPlatform = toNaira(
+            toKobo(platformFromRefund) + toKobo(platformFromRelease),
+          );
+          const toSeller = toNaira(
+            toKobo(sellerReleaseGross) - toKobo(platformFromRelease),
+          );
+          // Buyer refund (= buyerRefundGross - platformFromRefund) is the
+          // implicit remainder handled inside settleEscrow.
+
+          await this.walletService.settleEscrow(
+            escrow.buyerId,
+            escrow.sellerId,
+            { total: Number(escrow.amount), toSeller, toPlatform },
+            `DISPUTE_SPLIT_${dispute.id}`,
+            queryRunner,
+          );
+
+          if (toPlatform > 0) {
+            await this.platformWalletService.creditPlatformFee(
+              toPlatform,
+              escrow.id,
+              PlatformTransactionType.ESCROW_FEE,
+              'Platform fee from disputed split resolution',
               queryRunner,
             );
           }
-          if (dto.sellerReleaseAmount && dto.sellerReleaseAmount > 0) {
-            await this.walletService.releaseFunds(
-              escrow.buyerId,
-              escrow.sellerId,
-              dto.sellerReleaseAmount,
-              `DISPUTE_SPLIT_RELEASE_${dispute.id}`,
-              queryRunner,
-            );
-          }
+
           dispute.buyerRefundAmount = dto.buyerRefundAmount || null;
           dispute.sellerReleaseAmount = dto.sellerReleaseAmount || null;
           escrow.status = EscrowStatus.COMPLETED;
           escrow.releasedAt = new Date();
+          escrow.platformFee = toPlatform;
           break;
+        }
       }
 
       // Update dispute

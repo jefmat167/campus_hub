@@ -1,7 +1,6 @@
 import {
   Controller,
   Post,
-  Body,
   Headers,
   HttpCode,
   HttpStatus,
@@ -47,16 +46,21 @@ export class WebhookController {
   @ApiResponse({ status: 200, description: 'Webhook processed', schema: { example: { received: true } } })
   @ApiResponse({ status: 401, description: 'Invalid webhook signature' })
   async handlePaystackWebhook(
-    @Body() body: PaystackWebhookEvent,
+    @Req() req: RawBodyRequest<Request>,
     @Headers('x-paystack-signature') signature: string,
   ) {
-    // Verify webhook signature
-    const rawBody = JSON.stringify(body);
-    if (!this.paystackService.verifyWebhookSignature(rawBody, signature)) {
+    // Verify signature over the exact raw bytes Paystack sent (never a
+    // re-serialized body — key order/whitespace would break the HMAC).
+    const rawBody = req.rawBody;
+    if (
+      !rawBody ||
+      !this.paystackService.verifyWebhookSignature(rawBody, signature)
+    ) {
       this.logger.warn('Invalid Paystack webhook signature');
       throw new UnauthorizedException('Invalid signature');
     }
 
+    const body = JSON.parse(rawBody.toString('utf8')) as PaystackWebhookEvent;
     const { event, data } = body;
     this.logger.log(`Received Paystack webhook: ${event}`);
 

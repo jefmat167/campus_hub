@@ -17,7 +17,8 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: new ConsoleLogger({ prefix: 'CampusHub', timestamp: true })
+    logger: new ConsoleLogger({ prefix: 'CampusHub', timestamp: true }),
+    rawBody: true, // expose req.rawBody for exact-bytes webhook signature verification
   });
 
   const configService = app.get(ConfigService);
