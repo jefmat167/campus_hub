@@ -29,7 +29,16 @@ function makeDb(wallets: Wallet[]) {
   const isTxn = (o: any) => o && o.walletId && 'status' in o;
   const record = (arg: any) => {
     const items = Array.isArray(arg) ? arg : [arg];
-    for (const it of items) if (isTxn(it) && !txns.includes(it)) txns.push(it);
+    for (const it of items) {
+      if (!isTxn(it)) continue;
+      // Model the DB's unique(reference) constraint: inserting a *different*
+      // row with an existing reference throws a Postgres 23505.
+      const dup = txns.find((t) => t !== it && t.reference === it.reference);
+      if (dup) {
+        throw Object.assign(new Error('duplicate key value'), { code: '23505' });
+      }
+      if (!txns.includes(it)) txns.push(it);
+    }
     return arg;
   };
 
@@ -192,6 +201,27 @@ describe('WalletService.settleEscrow', () => {
         db.qr as any,
       ),
     ).rejects.toThrow(/must differ/);
+  });
+});
+
+describe('WalletService.creditWallet idempotency', () => {
+  it('returns the existing transaction on a duplicate reference (no 500)', async () => {
+    const w = makeWallet('u1', 1000);
+    const db = makeDb([w]);
+    const svc = makeService(db);
+
+    const first = await svc.creditWallet('u1', 500, 'DEP_1');
+    expect(first.reference).toBe('DEP_1');
+
+    // A second credit with the same reference (e.g. webhook + /fund/verify race)
+    // hits the unique constraint; creditWallet swallows 23505 and returns the
+    // already-recorded transaction rather than throwing.
+    const second = await svc.creditWallet('u1', 500, 'DEP_1');
+    expect(second.reference).toBe('DEP_1');
+    // Only one DEP_1 transaction was ever recorded.
+    expect(db.txns.filter((t) => t.reference === 'DEP_1')).toHaveLength(1);
+    // (Balance rollback on the duplicate isn't modelled by the in-memory fake;
+    // in Postgres the wallet update rolls back with the failed insert.)
   });
 });
 

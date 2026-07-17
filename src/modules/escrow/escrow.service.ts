@@ -55,14 +55,15 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../../database/entities/notification.entity';
 import { ResendService } from '../email/resend.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class EscrowService {
   private readonly logger = new Logger(EscrowService.name);
-  private readonly PLATFORM_FEE_PERCENTAGE = 2.5; // 2.5% platform fee (deducted from seller)
-  private readonly FULFILLMENT_HOURS = 72; // 72 hours for seller to respond
-  // TODO: revert to 24 hours for production
-  private readonly DISPUTE_WINDOW_MINUTES = 5; // 5 minutes for dev/testing (production: 24 hours)
+  // Configurable via env (safe production defaults); see env.validation.ts.
+  private readonly PLATFORM_FEE_PERCENTAGE: number;
+  private readonly FULFILLMENT_HOURS: number;
+  private readonly DISPUTE_WINDOW_MINUTES: number;
 
   constructor(
     @InjectRepository(EscrowTransaction)
@@ -89,7 +90,18 @@ export class EscrowService {
     private escrowQueue: Queue,
     private notificationsService: NotificationsService,
     private resendService: ResendService,
-  ) { }
+    private readonly configService: ConfigService,
+  ) {
+    this.PLATFORM_FEE_PERCENTAGE = Number(
+      this.configService.get('ESCROW_PLATFORM_FEE_PERCENT', 2.5),
+    );
+    this.FULFILLMENT_HOURS = Number(
+      this.configService.get('ESCROW_FULFILLMENT_HOURS', 72),
+    );
+    this.DISPUTE_WINDOW_MINUTES = Number(
+      this.configService.get('ESCROW_DISPUTE_WINDOW_MINUTES', 1440),
+    );
+  }
 
   /**
    * Generate human-readable order number (ORD-YYYY-NNNNNN)

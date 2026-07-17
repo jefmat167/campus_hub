@@ -140,6 +140,20 @@ export class WalletService {
     } catch (error) {
       if (!isExternalTx) {
         await queryRunner.rollbackTransaction();
+
+        // Idempotency: a duplicate reference (unique-constraint violation) means
+        // this deposit was already credited — e.g. the webhook and /fund/verify
+        // racing, or a webhook retry. Treat it as a no-op and return the
+        // existing transaction instead of surfacing a 500.
+        const code =
+          (error as { code?: string; driverError?: { code?: string } })?.code ??
+          (error as { driverError?: { code?: string } })?.driverError?.code;
+        if (code === '23505') {
+          const existing = await this.transactionRepo.findOne({
+            where: { reference },
+          });
+          if (existing) return existing;
+        }
       }
       throw error;
     } finally {
@@ -631,8 +645,12 @@ export class WalletService {
     await queryRunner.startTransaction();
 
     try {
+      // Lock the transaction row so concurrent webhooks (e.g. transfer.failed
+      // followed by transfer.reversed) can't both pass the status gate and
+      // double-refund — the second call blocks here, then reads REVERSED.
       const transaction = await queryRunner.manager.findOne(WalletTransaction, {
         where: { reference },
+        lock: { mode: 'pessimistic_write' },
       });
 
       const reversible =

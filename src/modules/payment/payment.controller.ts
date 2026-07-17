@@ -193,6 +193,20 @@ export class PaymentController {
       throw new BadRequestException('Payment does not belong to this user');
     }
 
+    // Idempotency: if the webhook (or a prior verify) already credited this
+    // reference, return the existing state instead of crediting again.
+    const existing = await this.walletService.getTransactionByReference(
+      dto.reference,
+    );
+    if (existing) {
+      const balance = await this.walletService.getBalance(user.id);
+      return {
+        success: true,
+        data: { transaction: existing, balance },
+        message: 'Payment already credited to your wallet',
+      };
+    }
+
     // Credit wallet (amount is in kobo, convert to naira)
     const amountInNaira = result.amount / 100;
 

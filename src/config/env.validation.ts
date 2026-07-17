@@ -74,4 +74,10 @@ export const envValidationSchema = Joi.object({
 
   // MongoDB (Social features) - optional, defaults to local
   MONGODB_URI: Joi.string().allow('').optional(),
+
+  // Escrow tuning — safe production defaults; override per environment.
+  // Dispute window defaults to 24h (1440 min); set lower only in dev/test.
+  ESCROW_PLATFORM_FEE_PERCENT: Joi.number().min(0).default(2.5),
+  ESCROW_FULFILLMENT_HOURS: Joi.number().min(1).default(72),
+  ESCROW_DISPUTE_WINDOW_MINUTES: Joi.number().min(1).default(1440),
 });
