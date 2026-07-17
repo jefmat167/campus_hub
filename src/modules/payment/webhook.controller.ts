@@ -26,6 +26,9 @@ interface PaystackWebhookEvent {
     recipient?: {
       recipient_code: string;
     };
+    // Dispute/refund payloads reference the original charge differently.
+    transaction_reference?: string;
+    transaction?: { reference?: string };
   };
 }
 
@@ -80,6 +83,14 @@ export class WebhookController {
 
         case 'transfer.reversed':
           await this.handleTransferReversed(data);
+          break;
+
+        case 'charge.dispute.create':
+          await this.handleChargeDispute(data);
+          break;
+
+        case 'refund.processed':
+          await this.handleRefundProcessed(data);
           break;
 
         default:
@@ -147,5 +158,29 @@ export class WebhookController {
 
     await this.walletService.reverseWithdrawal(reference);
     this.logger.log(`Transfer ${reference} reversed`);
+  }
+
+  // A cardholder disputed a charge that funded a wallet (chargeback). Claw the
+  // deposit back and freeze the wallet.
+  private async handleChargeDispute(data: PaystackWebhookEvent['data']) {
+    const reference = data.transaction?.reference ?? data.reference;
+    if (!reference) {
+      this.logger.error('No transaction reference in dispute payload');
+      return;
+    }
+    await this.walletService.reverseDeposit(reference, 'charge dispute');
+    this.logger.warn(`Chargeback processed for deposit ${reference}`);
+  }
+
+  // A refund was processed against a charge that funded a wallet.
+  private async handleRefundProcessed(data: PaystackWebhookEvent['data']) {
+    const reference =
+      data.transaction_reference ?? data.transaction?.reference ?? data.reference;
+    if (!reference) {
+      this.logger.error('No transaction reference in refund payload');
+      return;
+    }
+    await this.walletService.reverseDeposit(reference, 'refund processed');
+    this.logger.warn(`Refund reversal processed for deposit ${reference}`);
   }
 }

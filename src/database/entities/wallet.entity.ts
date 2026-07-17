@@ -20,6 +20,7 @@ export enum WalletTransactionType {
   ESCROW_RELEASE = 'escrow_release',
   ESCROW_REFUND = 'escrow_refund',
   FEE = 'fee',
+  CHARGEBACK = 'chargeback', // deposit clawed back after a card dispute/refund
 }
 
 export enum WalletTransactionStatus {
@@ -38,7 +39,8 @@ export class Wallet {
   @Index()
   userId: string;
 
-  @OneToOne(() => User, { onDelete: 'CASCADE' })
+  // RESTRICT: a user with a wallet (financial history) must not be hard-deleted.
+  @OneToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 

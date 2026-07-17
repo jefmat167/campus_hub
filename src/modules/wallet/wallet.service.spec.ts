@@ -225,6 +225,58 @@ describe('WalletService.creditWallet idempotency', () => {
   });
 });
 
+describe('WalletService.reverseDeposit (chargeback)', () => {
+  it('claws back a fully-covered deposit and freezes the wallet', async () => {
+    const w = makeWallet('u1', 1000);
+    const db = makeDb([w]);
+    const svc = makeService(db);
+
+    await svc.creditWallet('u1', 500, 'DEP_1'); // balance 1500
+    await svc.reverseDeposit('DEP_1', 'charge dispute');
+
+    expect(w.balance).toBe(1000); // 500 recovered
+    expect(w.isLocked).toBe(true);
+    const deposit = db.txns.find((t) => t.reference === 'DEP_1');
+    expect(deposit?.status).toBe(WalletTransactionStatus.REVERSED);
+    const cb = db.txns.find((t) => t.type === WalletTransactionType.CHARGEBACK);
+    expect(cb?.amount).toBe(-500);
+    expect((cb?.metadata as any)?.shortfall).toBe(0);
+  });
+
+  it('recovers only what is available and records the shortfall', async () => {
+    const w = makeWallet('u2', 0);
+    const db = makeDb([w]);
+    const svc = makeService(db);
+
+    await svc.creditWallet('u2', 500, 'DEP_2'); // balance 500
+    w.balance = 200; // simulate most of it already spent/withdrawn
+
+    await svc.reverseDeposit('DEP_2', 'charge dispute');
+
+    expect(w.balance).toBe(0); // recovered only 200
+    expect(w.isLocked).toBe(true);
+    const cb = db.txns.find((t) => t.type === WalletTransactionType.CHARGEBACK);
+    expect(cb?.amount).toBe(-200);
+    expect((cb?.metadata as any)?.shortfall).toBe(300);
+  });
+
+  it('is idempotent — a second dispute webhook does nothing', async () => {
+    const w = makeWallet('u3', 1000);
+    const db = makeDb([w]);
+    const svc = makeService(db);
+
+    await svc.creditWallet('u3', 500, 'DEP_3');
+    await svc.reverseDeposit('DEP_3', 'charge dispute');
+    const balanceAfterFirst = w.balance;
+
+    await svc.reverseDeposit('DEP_3', 'charge dispute');
+    expect(w.balance).toBe(balanceAfterFirst);
+    expect(
+      db.txns.filter((t) => t.type === WalletTransactionType.CHARGEBACK),
+    ).toHaveLength(1);
+  });
+});
+
 describe('WalletService withdrawal lifecycle', () => {
   it('debits immediately and records a PENDING transaction', async () => {
     const w = makeWallet('u1', 5000);

@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, QueryRunner } from 'typeorm';
@@ -16,6 +17,8 @@ import { toKobo, toNaira } from '../../common/utils/money';
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
+
   constructor(
     @InjectRepository(Wallet)
     private walletRepo: Repository<Wallet>,
@@ -681,6 +684,87 @@ export class WalletService {
       await queryRunner.manager.save(transaction);
 
       await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Reverse a completed card deposit after a chargeback/refund (Paystack
+   * charge.dispute.create / refund.processed).
+   *
+   * Recovers as much of the disputed amount as the wallet balance can still
+   * cover (it can't go negative — the DB CHECK forbids it), records the
+   * shortfall, and FREEZES the wallet (a chargeback is a strong fraud signal
+   * that needs manual review). Idempotent: a deposit is only reversed once.
+   */
+  async reverseDeposit(reference: string, reason: string): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const deposit = await queryRunner.manager.findOne(WalletTransaction, {
+        where: { reference },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      // Only a completed deposit can be charged back, and only once.
+      if (
+        !deposit ||
+        deposit.type !== WalletTransactionType.DEPOSIT ||
+        deposit.status !== WalletTransactionStatus.COMPLETED
+      ) {
+        await queryRunner.commitTransaction();
+        return;
+      }
+
+      const wallet = await queryRunner.manager.findOne(Wallet, {
+        where: { id: deposit.walletId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!wallet) {
+        await queryRunner.commitTransaction();
+        return;
+      }
+
+      const disputed = Math.abs(Number(deposit.amount));
+      const balanceBefore = Number(wallet.balance);
+      const recovered = Math.min(balanceBefore, disputed); // never below 0
+      const shortfall = disputed - recovered;
+
+      wallet.balance = balanceBefore - recovered;
+      // Freeze the account pending manual review / recovery of any shortfall.
+      wallet.isLocked = true;
+      wallet.lockReason = `Chargeback on ${reference}: ${reason}`;
+      wallet.lockedAt = new Date();
+      await queryRunner.manager.save(wallet);
+
+      deposit.status = WalletTransactionStatus.REVERSED;
+      await queryRunner.manager.save(deposit);
+
+      const chargeback = this.transactionRepo.create({
+        walletId: wallet.id,
+        type: WalletTransactionType.CHARGEBACK,
+        amount: -recovered,
+        status: WalletTransactionStatus.COMPLETED,
+        reference: `${reference}_chargeback`,
+        balanceBefore,
+        balanceAfter: Number(wallet.balance),
+        metadata: { disputed, recovered, shortfall, reason, originalReference: reference },
+      });
+      await queryRunner.manager.save(chargeback);
+
+      await queryRunner.commitTransaction();
+
+      if (shortfall > 0) {
+        this.logger.warn(
+          `Chargeback shortfall of ${shortfall} on ${reference}; wallet ${wallet.id} frozen with ${recovered} recovered.`,
+        );
+      }
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;

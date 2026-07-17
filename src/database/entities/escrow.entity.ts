@@ -37,7 +37,7 @@ export class EscrowTransaction {
   @Index()
   buyerId: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'buyer_id' })
   buyer: User;
 
@@ -45,7 +45,7 @@ export class EscrowTransaction {
   @Index()
   sellerId: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'seller_id' })
   seller: User;
 

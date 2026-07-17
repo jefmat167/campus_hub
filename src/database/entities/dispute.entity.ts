@@ -49,7 +49,7 @@ export class Dispute {
   @Column({ name: 'opened_by_id' })
   openedById: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'opened_by_id' })
   openedBy: User;
 
