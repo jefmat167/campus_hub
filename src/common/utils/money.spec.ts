@@ -4,6 +4,7 @@ import {
   splitFee,
   splitByPercent,
   percentOf,
+  KoboColumnTransformer,
 } from './money';
 
 describe('money helpers', () => {
@@ -63,6 +64,33 @@ describe('money helpers', () => {
       expect(percentOf(1000, 10)).toBe(100);
       expect(percentOf(29999, 1)).toBe(299.99);
       expect(percentOf(333, 1)).toBe(3.33);
+    });
+  });
+
+  describe('KoboColumnTransformer', () => {
+    it('stores Naira as integer kobo (to DB)', () => {
+      expect(KoboColumnTransformer.to(5000)).toBe(500000);
+      expect(KoboColumnTransformer.to(324.67)).toBe(32467);
+    });
+
+    it('reads kobo back as Naira (from DB — pg returns bigint as string)', () => {
+      expect(KoboColumnTransformer.from('500000')).toBe(5000);
+      expect(KoboColumnTransformer.from('32467')).toBe(324.67);
+    });
+
+    it('passes null/undefined through untouched', () => {
+      expect(KoboColumnTransformer.to(null)).toBeNull();
+      expect(KoboColumnTransformer.to(undefined)).toBeUndefined();
+      expect(KoboColumnTransformer.from(null)).toBeNull();
+      expect(KoboColumnTransformer.from(undefined)).toBeUndefined();
+    });
+
+    it('round-trips Naira → kobo → Naira', () => {
+      for (const n of [0, 1, 5000, 324.67, 29999.99, 1000000]) {
+        const stored = KoboColumnTransformer.to(n) as number;
+        expect(Number.isInteger(stored)).toBe(true);
+        expect(KoboColumnTransformer.from(String(stored))).toBe(n);
+      }
     });
   });
 

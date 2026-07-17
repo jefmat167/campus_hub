@@ -101,13 +101,17 @@ export class AdminStatsService {
         .getRawMany(),
     ]);
 
+    // Money columns are stored as integer kobo. Raw SUM() bypasses the entity
+    // transformer, so convert kobo -> Naira here (÷100).
+    const koboToNaira = (v: unknown) => (Number(v) || 0) / 100;
+
     return {
-      totalEscrowVolume: Number(escrowVolume?.total) || 0,
-      totalPlatformFees: Number(platformFees?.total) || 0,
-      totalWalletBalance: Number(walletAggregates?.totalBalance) || 0,
-      totalLockedBalance: Number(walletAggregates?.totalLocked) || 0,
+      totalEscrowVolume: koboToNaira(escrowVolume?.total),
+      totalPlatformFees: koboToNaira(platformFees?.total),
+      totalWalletBalance: koboToNaira(walletAggregates?.totalBalance),
+      totalLockedBalance: koboToNaira(walletAggregates?.totalLocked),
       withdrawals: withdrawalsByStatus.reduce((acc: Record<string, any>, r: any) => {
-        acc[r.status] = { count: Number(r.count), total: Number(r.total) || 0 };
+        acc[r.status] = { count: Number(r.count), total: koboToNaira(r.total) };
         return acc;
       }, {}),
     };

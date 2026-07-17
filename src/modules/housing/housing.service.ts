@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
+import { toKobo } from '../../common/utils/money';
 import {
   HousingListing,
   HousingStatus,
@@ -203,8 +204,8 @@ export class HousingService {
     }
 
     if (type) queryBuilder.andWhere('housing.type = :type', { type });
-    if (minPrice !== undefined) queryBuilder.andWhere('housing.price >= :minPrice', { minPrice });
-    if (maxPrice !== undefined) queryBuilder.andWhere('housing.price <= :maxPrice', { maxPrice });
+    if (minPrice !== undefined) queryBuilder.andWhere('housing.price >= :minPrice', { minPrice: toKobo(minPrice) });
+    if (maxPrice !== undefined) queryBuilder.andWhere('housing.price <= :maxPrice', { maxPrice: toKobo(maxPrice) });
     if (area) queryBuilder.andWhere('housing.area ILIKE :area', { area: `%${area}%` });
     if (bedrooms !== undefined) queryBuilder.andWhere('housing.bedrooms >= :bedrooms', { bedrooms });
     if (bathrooms !== undefined) queryBuilder.andWhere('housing.bathrooms >= :bathrooms', { bathrooms });

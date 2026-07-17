@@ -1,3 +1,26 @@
+import type { ValueTransformer } from 'typeorm';
+
+/**
+ * TypeORM column transformer: money is stored as integer **kobo** in a
+ * `bigint` column, while the entity property stays a **Naira** number. This
+ * keeps all app/API semantics in Naira with zero service-layer churn, and
+ * guarantees exact integer-kobo storage (no fractional-kobo drift).
+ *
+ * IMPORTANT: transformers only apply to entity reads/writes. Raw SQL /
+ * queryBuilder aggregations (`SUM`, etc.) on these columns return raw kobo and
+ * must be divided by 100 in application code.
+ */
+export const KoboColumnTransformer: ValueTransformer = {
+  to(naira: number | null | undefined): number | null | undefined {
+    if (naira === null || naira === undefined) return naira;
+    return Math.round(naira * 100);
+  },
+  from(kobo: string | number | null | undefined): number | null | undefined {
+    if (kobo === null || kobo === undefined) return kobo;
+    return Number(kobo) / 100;
+  },
+};
+
 /**
  * Money helpers.
  *

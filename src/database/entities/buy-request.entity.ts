@@ -8,6 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { KoboColumnTransformer } from '../../common/utils/money';
 import { User } from './user.entity';
 import { University } from './university.entity';
 import { Faculty } from './faculty.entity';
@@ -63,15 +64,14 @@ export class BuyRequest {
   @Index()
   category: ListingCategory;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'budget_min' })
+  @Column({ type: 'bigint', name: 'budget_min', transformer: KoboColumnTransformer })
   budgetMin: number;
 
   @Column({
-    type: 'decimal',
-    precision: 12,
-    scale: 2,
+    type: 'bigint',
     nullable: true,
     name: 'budget_max',
+    transformer: KoboColumnTransformer,
   })
   budgetMax: number | null;
 

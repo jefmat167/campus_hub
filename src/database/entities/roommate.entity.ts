@@ -9,6 +9,7 @@ import {
   Index,
   OneToOne,
 } from 'typeorm';
+import { KoboColumnTransformer } from '../../common/utils/money';
 import { User } from './user.entity';
 import { University } from './university.entity';
 
@@ -98,10 +99,10 @@ export class RoommateProfile {
   bio: string | null;
 
   // Budget
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   budgetMin: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   budgetMax: number;
 
   // Preferred area/location

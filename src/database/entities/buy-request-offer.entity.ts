@@ -8,6 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { KoboColumnTransformer } from '../../common/utils/money';
 import { User } from './user.entity';
 import { BuyRequest } from './buy-request.entity';
 import { Conversation } from './conversation.entity';
@@ -54,7 +55,7 @@ export class BuyRequestOffer {
   @JoinColumn({ name: 'requester_id' })
   requester: User;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'proposed_price' })
+  @Column({ type: 'bigint', name: 'proposed_price', transformer: KoboColumnTransformer })
   proposedPrice: number;
 
   @Column({

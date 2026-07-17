@@ -9,6 +9,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { KoboColumnTransformer } from '../../common/utils/money';
 import { User } from './user.entity';
 import { University } from './university.entity';
 import { Faculty } from './faculty.entity';
@@ -112,7 +113,7 @@ export class Listing {
   })
   condition: ListingCondition;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   price: number;
 
   @Column({ default: true })

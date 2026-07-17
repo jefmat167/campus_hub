@@ -750,11 +750,11 @@ export class WalletService {
     }
 
     if (dto.minAmount) {
-      query.andWhere('tx.amount >= :minAmount', { minAmount: Number(dto.minAmount) });
+      query.andWhere('tx.amount >= :minAmount', { minAmount: toKobo(Number(dto.minAmount)) });
     }
 
     if (dto.maxAmount) {
-      query.andWhere('tx.amount <= :maxAmount', { maxAmount: Number(dto.maxAmount) });
+      query.andWhere('tx.amount <= :maxAmount', { maxAmount: toKobo(Number(dto.maxAmount)) });
     }
 
     const [transactions, total] = await query

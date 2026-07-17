@@ -11,6 +11,7 @@ import {
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
+import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum WalletTransactionType {
   DEPOSIT = 'deposit',
@@ -41,10 +42,10 @@ export class Wallet {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   balance: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   lockedBalance: number; // Funds in escrow
 
   @Column({ default: false })
@@ -111,7 +112,7 @@ export class WalletTransaction {
   })
   type: WalletTransactionType;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   amount: number;
 
   @Column({
@@ -135,10 +136,10 @@ export class WalletTransaction {
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown>;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   balanceBefore: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   balanceAfter: number;
 
   @CreateDateColumn()

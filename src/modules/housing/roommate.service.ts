@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, In } from 'typeorm';
+import { toKobo } from '../../common/utils/money';
 import {
   RoommateProfile,
   RoommateProfileStatus,
@@ -181,12 +182,12 @@ export class RoommateService {
     // Apply budget filters (find profiles with overlapping budget ranges)
     if (dto.minBudget !== undefined) {
       queryBuilder.andWhere('profile.budgetMax >= :minBudget', {
-        minBudget: dto.minBudget,
+        minBudget: toKobo(dto.minBudget),
       });
     }
     if (dto.maxBudget !== undefined) {
       queryBuilder.andWhere('profile.budgetMin <= :maxBudget', {
-        maxBudget: dto.maxBudget,
+        maxBudget: toKobo(dto.maxBudget),
       });
     }
 
@@ -253,7 +254,7 @@ export class RoommateService {
     // Apply budget overlap filter
     queryBuilder.andWhere(
       '(profile.budgetMin <= :maxBudget AND profile.budgetMax >= :minBudget)',
-      { minBudget: myProfile.budgetMin, maxBudget: myProfile.budgetMax },
+      { minBudget: toKobo(myProfile.budgetMin), maxBudget: toKobo(myProfile.budgetMax) },
     );
 
     // Apply smoking preference

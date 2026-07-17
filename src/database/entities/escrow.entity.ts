@@ -12,6 +12,7 @@ import { User } from './user.entity';
 import { Listing } from './listing.entity';
 import { Offer } from './offer.entity';
 import { BuyRequestOffer } from './buy-request-offer.entity';
+import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum EscrowStatus {
   AWAITING_SELLER = 'awaiting_seller', // Waiting for seller to click "I'm Ready"
@@ -71,7 +72,7 @@ export class EscrowTransaction {
   @JoinColumn({ name: 'offer_id' })
   offer: Offer | null;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   amount: number;
 
   @Column({
@@ -120,10 +121,10 @@ export class EscrowTransaction {
   disputeWindowExpiresAt: Date | null; // 24h after deliveredAt
 
   // Fee tracking (calculated on completion)
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   platformFee: number; // 2.5% of amount
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   sellerPayout: number; // amount - platformFee
 
   @Column({ type: 'text', nullable: true })

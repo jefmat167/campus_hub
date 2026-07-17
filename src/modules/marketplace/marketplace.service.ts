@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder, In, Brackets } from 'typeorm';
+import { toKobo } from '../../common/utils/money';
 import {
   Listing,
   ListingImage,
@@ -319,10 +320,10 @@ export class MarketplaceService {
 
     // Filter by price range
     if (query.minPrice !== undefined) {
-      qb.andWhere('listing.price >= :minPrice', { minPrice: query.minPrice });
+      qb.andWhere('listing.price >= :minPrice', { minPrice: toKobo(query.minPrice) });
     }
     if (query.maxPrice !== undefined) {
-      qb.andWhere('listing.price <= :maxPrice', { maxPrice: query.maxPrice });
+      qb.andWhere('listing.price <= :maxPrice', { maxPrice: toKobo(query.maxPrice) });
     }
 
     // Filter by negotiable
@@ -702,10 +703,10 @@ export class MarketplaceService {
       qb.andWhere('l.createdAt <= :dateTo', { dateTo: dto.dateTo });
     }
     if (dto.minPrice) {
-      qb.andWhere('l.price >= :minPrice', { minPrice: Number(dto.minPrice) });
+      qb.andWhere('l.price >= :minPrice', { minPrice: toKobo(Number(dto.minPrice)) });
     }
     if (dto.maxPrice) {
-      qb.andWhere('l.price <= :maxPrice', { maxPrice: Number(dto.maxPrice) });
+      qb.andWhere('l.price <= :maxPrice', { maxPrice: toKobo(Number(dto.maxPrice)) });
     }
 
     qb.orderBy('l.createdAt', sortOrder)

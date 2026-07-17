@@ -8,6 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { KoboColumnTransformer } from '../../common/utils/money';
 import { User } from './user.entity';
 import { Listing } from './listing.entity';
 
@@ -52,7 +53,7 @@ export class Offer {
   @JoinColumn({ name: 'seller_id' })
   seller: User;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   amount: number;
 
   @Column({
@@ -67,7 +68,7 @@ export class Offer {
   message: string | null;
 
   // For counter offers
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   counterAmount: number | null;
 
   @Column({ type: 'text', nullable: true })

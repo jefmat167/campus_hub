@@ -1407,10 +1407,10 @@ export class EscrowService {
       qb.andWhere('e.createdAt <= :dateTo', { dateTo: dto.dateTo });
     }
     if (dto.minAmount) {
-      qb.andWhere('e.amount >= :minAmount', { minAmount: Number(dto.minAmount) });
+      qb.andWhere('e.amount >= :minAmount', { minAmount: toKobo(Number(dto.minAmount)) });
     }
     if (dto.maxAmount) {
-      qb.andWhere('e.amount <= :maxAmount', { maxAmount: Number(dto.maxAmount) });
+      qb.andWhere('e.amount <= :maxAmount', { maxAmount: toKobo(Number(dto.maxAmount)) });
     }
 
     qb.orderBy('e.createdAt', sortOrder)
