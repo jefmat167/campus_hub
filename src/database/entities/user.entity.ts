@@ -53,6 +53,11 @@ export enum YearOfStudy {
   POSTGRADUATE = 'postgraduate',
 }
 
+export enum Gender {
+  MALE = 'male',
+  FEMALE = 'female',
+}
+
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn('uuid')
@@ -91,6 +96,9 @@ export class User {
 
   @Column({ type: 'varchar', length: 255 })
   fullName: string;
+
+  @Column({ type: 'enum', enum: Gender })
+  gender: Gender;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   profilePhotoUrl: string;

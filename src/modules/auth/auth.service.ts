@@ -143,6 +143,7 @@ export class AuthService {
         email,
         passwordHash,
         fullName: dto.fullName,
+        gender: dto.gender,
         universityId: dto.universityId,
         facultyId: dto.facultyId,
         departmentId: dto.departmentId,

@@ -176,6 +176,7 @@ async function seed() {
         emailVerifiedAt: new Date(),
         passwordHash,
         fullName,
+        gender,
         universityId: university.id,
         facultyId: faculty.id,
         departmentId: department.id,

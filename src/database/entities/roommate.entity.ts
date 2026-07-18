@@ -10,13 +10,12 @@ import {
   OneToOne,
 } from 'typeorm';
 import { KoboColumnTransformer } from '../../common/utils/money';
-import { User } from './user.entity';
-import { University } from './university.entity';
+import { User, Gender } from './user.entity';
 
-export enum Gender {
-  MALE = 'male',
-  FEMALE = 'female',
-}
+// Re-exported for existing importers (seeds, roommate DTOs); canonical
+// definition now lives on the User entity.
+export { Gender };
+import { University } from './university.entity';
 
 export enum CleanlinessLevel {
   VERY_CLEAN = 'very_clean',

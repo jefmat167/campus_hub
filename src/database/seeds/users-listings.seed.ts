@@ -2,7 +2,7 @@ import { DataSource } from 'typeorm';
 import { University } from '../entities/university.entity';
 import { Faculty } from '../entities/faculty.entity';
 import { Department } from '../entities/department.entity';
-import { User, VerificationTier, Tier1ReviewStatus, YearOfStudy } from '../entities/user.entity';
+import { User, VerificationTier, Tier1ReviewStatus, YearOfStudy, Gender } from '../entities/user.entity';
 import { Wallet, WalletTransaction } from '../entities/wallet.entity';
 import {
   Listing,
@@ -302,6 +302,7 @@ async function seed() {
     emailVerifiedAt: new Date(),
     passwordHash,
     fullName: 'Chukwuemeka Okonkwo',
+    gender: Gender.MALE,
     universityId: university.id,
     facultyId: faculty1.id,
     departmentId: department1.id,
@@ -333,6 +334,7 @@ async function seed() {
     emailVerifiedAt: new Date(),
     passwordHash,
     fullName: 'Adaeze Nwosu',
+    gender: Gender.FEMALE,
     universityId: university.id,
     facultyId: faculty2.id,
     departmentId: department2.id,
