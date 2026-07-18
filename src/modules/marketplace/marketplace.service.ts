@@ -116,6 +116,12 @@ export class MarketplaceService {
       }
     }
 
+    // Reject before creating anything if an uploaded image's real size differs
+    // from what was declared when its presigned URL was issued.
+    if (dto.imageUrls && dto.imageUrls.length > 0) {
+      await this.uploadService.verifyUploadedFileSizes(dto.imageUrls);
+    }
+
     // Create the listing
     // Only set facultyId/departmentId if explicitly provided in the DTO
     const listing = this.listingRepository.create({

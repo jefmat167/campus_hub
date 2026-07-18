@@ -26,6 +26,11 @@ export class PendingUpload {
   @Column({ name: 'object_key' })
   objectKey: string;
 
+  // Byte size declared when the presigned URL was generated; used to reject a
+  // mismatched (tampered) upload before the owning resource is created.
+  @Column({ name: 'declared_size', type: 'integer', nullable: true })
+  declaredSize: number | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

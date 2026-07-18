@@ -13,6 +13,7 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
@@ -343,21 +344,36 @@ export class UploadService {
 
   async generatePresignedUrls(
     userId: string,
-    files: Array<{ contentType: string; filename: string }>,
+    files: Array<{ contentType: string; filename: string; size: number }>,
   ): Promise<PresignedUrlResult[]> {
     if (!this.r2Client) {
       throw new InternalServerErrorException('R2 storage not configured');
     }
 
+    const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
+    const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50MB
+
     const results = await Promise.all(
-      files.map(async ({ contentType, filename }) => {
+      files.map(async ({ contentType, filename, size }) => {
+        const cap = contentType.startsWith('video/')
+          ? MAX_VIDEO_BYTES
+          : MAX_IMAGE_BYTES;
+        if (size > cap) {
+          throw new BadRequestException(
+            `${filename} (${size} bytes) exceeds the ${Math.round(cap / 1024 / 1024)}MB limit for ${contentType}`,
+          );
+        }
+
         const sanitizedFilename = this.sanitizeFilename(filename);
         const objectKey = `listings/${userId}/${uuidv4()}-${sanitizedFilename}`;
 
+        // ContentLength is a signed header, so R2 rejects (403) any upload
+        // whose actual byte size differs from this declared size.
         const command = new PutObjectCommand({
           Bucket: this.r2BucketName,
           Key: objectKey,
           ContentType: contentType,
+          ContentLength: size,
         });
 
         const uploadUrl = await getSignedUrl(this.r2Client!, command, {
@@ -366,15 +382,16 @@ export class UploadService {
 
         const fileUrl = `${this.r2PublicUrl}/${objectKey}`;
 
-        return { uploadUrl, fileUrl, contentType, objectKey };
+        return { uploadUrl, fileUrl, contentType, objectKey, size };
       }),
     );
 
-    // Track pending uploads for cleanup
-    const pendingUploads = results.map(({ objectKey }) =>
+    // Track pending uploads for cleanup + claim-time size verification
+    const pendingUploads = results.map(({ objectKey, size }) =>
       this.pendingUploadRepository.create({
         userId,
         objectKey,
+        declaredSize: size,
       }),
     );
     await this.pendingUploadRepository.save(pendingUploads);
@@ -392,6 +409,53 @@ export class UploadService {
     if (objectKeys.length === 0) return;
 
     await this.pendingUploadRepository.delete({ objectKey: In(objectKeys) });
+  }
+
+  /**
+   * Verify each uploaded R2 object's actual byte size matches the size declared
+   * when its presigned URL was issued. Defence-in-depth beyond R2's signed
+   * Content-Length check. Throws (and deletes the offending object) on a
+   * mismatch. Call BEFORE persisting the owning resource.
+   */
+  async verifyUploadedFileSizes(fileUrls: string[]): Promise<void> {
+    if (!this.r2Client || !this.r2PublicUrl || fileUrls.length === 0) return;
+
+    const objectKeys = fileUrls
+      .filter((url) => url.startsWith(this.r2PublicUrl))
+      .map((url) => url.replace(`${this.r2PublicUrl}/`, ''));
+
+    if (objectKeys.length === 0) return;
+
+    const pending = await this.pendingUploadRepository.find({
+      where: { objectKey: In(objectKeys) },
+    });
+    const declaredByKey = new Map(
+      pending.map((p) => [p.objectKey, p.declaredSize]),
+    );
+
+    for (const key of objectKeys) {
+      const declared = declaredByKey.get(key);
+      if (declared === undefined || declared === null) continue; // unknown/legacy
+
+      let actual: number | undefined;
+      try {
+        const head = await this.r2Client.send(
+          new HeadObjectCommand({ Bucket: this.r2BucketName, Key: key }),
+        );
+        actual = head.ContentLength;
+      } catch {
+        throw new BadRequestException(`Uploaded file not found for ${key}`);
+      }
+
+      if (actual !== declared) {
+        await this.r2Client
+          .send(new DeleteObjectCommand({ Bucket: this.r2BucketName, Key: key }))
+          .catch(() => undefined);
+        throw new BadRequestException(
+          'Uploaded file size does not match the size declared when the upload URL was generated.',
+        );
+      }
+    }
   }
 
   async cleanupOrphanedUploads(olderThanHours: number = 24): Promise<number> {
