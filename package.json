@@ -21,6 +21,7 @@
     "migration:run": "npm run typeorm -- --dataSource=src/database/data-source.ts migration:run",
     "migration:revert": "npm run typeorm -- --dataSource=src/database/data-source.ts migration:revert",
     "migration:show": "npm run typeorm -- --dataSource=src/database/data-source.ts migration:show",
+    "db:reset": "ts-node src/database/reset-db.ts",
     "schema:drop": "npm run typeorm -- --dataSource=src/database/data-source.ts schema:drop",
     "schema:sync": "npm run typeorm -- --dataSource=src/database/data-source.ts schema:sync"
   },
