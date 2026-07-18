@@ -22,6 +22,13 @@ export interface CreateNotificationParams {
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
+  // Critical, action-required notifications that users cannot mute — they
+  // bypass category toggles, quiet hours, and the push master switch. In-app
+  // record + push are always delivered (push still needs Firebase configured).
+  private static readonly NON_MUTABLE_TYPES = new Set<NotificationType>([
+    NotificationType.FULFILLMENT_REMINDER,
+  ]);
+
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
@@ -43,21 +50,26 @@ export class NotificationsService {
     // Check user preferences
     const preferences = await this.getOrCreatePreferences(params.userId);
 
-    if (!this.shouldSendNotification(preferences, params.type)) {
-      // Still create the notification but don't send push
-      const notification = this.notificationRepository.create({
-        ...params,
-        pushSent: false,
-      });
-      return this.notificationRepository.save(notification);
-    }
+    // Non-mutable types ignore category toggles + quiet hours (and, below, the
+    // push master switch). Everything else respects the user's preferences.
+    const nonMutable = NotificationsService.NON_MUTABLE_TYPES.has(params.type);
+    const allowPush =
+      nonMutable || this.shouldSendNotification(preferences, params.type);
 
-    // Create notification record
-    const notification = this.notificationRepository.create(params);
+    // Always persist the in-app record.
+    const notification = this.notificationRepository.create({
+      ...params,
+      pushSent: false,
+    });
     const savedNotification = await this.notificationRepository.save(notification);
 
-    // Queue push notification if enabled
-    if (preferences.pushEnabled && this.firebaseService.isEnabled()) {
+    // Queue push if allowed. Non-mutable types bypass pushEnabled; all types
+    // still require Firebase to be configured.
+    if (
+      allowPush &&
+      this.firebaseService.isEnabled() &&
+      (nonMutable || preferences.pushEnabled)
+    ) {
       await this.notificationQueue.add('send-push', {
         notificationId: savedNotification.id,
         userId: params.userId,

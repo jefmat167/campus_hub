@@ -64,6 +64,8 @@ export class EscrowService {
   private readonly PLATFORM_FEE_PERCENTAGE: number;
   private readonly FULFILLMENT_HOURS: number;
   private readonly DISPUTE_WINDOW_MINUTES: number;
+  // Hours after creation to nudge the seller while still AWAITING_SELLER.
+  private readonly FULFILLMENT_REMINDER_HOURS = [24, 48];
 
   constructor(
     @InjectRepository(EscrowTransaction)
@@ -100,6 +102,89 @@ export class EscrowService {
     );
     this.DISPUTE_WINDOW_MINUTES = Number(
       this.configService.get('ESCROW_DISPUTE_WINDOW_MINUTES', 1440),
+    );
+  }
+
+  /**
+   * Schedule seller nudges while the order is AWAITING_SELLER. One delayed job
+   * per offset that lands before the fulfillment window closes; each is
+   * guarded at run time and removed on state change.
+   */
+  private async scheduleFulfillmentReminders(escrowId: string): Promise<void> {
+    for (const hours of this.FULFILLMENT_REMINDER_HOURS) {
+      if (hours >= this.FULFILLMENT_HOURS) continue; // don't remind after expiry
+      await this.escrowQueue.add(
+        EscrowJobName.SEND_FULFILLMENT_REMINDER,
+        { escrowId, reminderNumber: hours },
+        {
+          delay: hours * 60 * 60 * 1000,
+          jobId: `fulfillment-reminder-${escrowId}-${hours}`,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1000 },
+        },
+      );
+    }
+  }
+
+  private async cancelFulfillmentReminders(escrowId: string): Promise<void> {
+    for (const hours of this.FULFILLMENT_REMINDER_HOURS) {
+      await this.escrowQueue.remove(`fulfillment-reminder-${escrowId}-${hours}`);
+    }
+  }
+
+  /**
+   * Notify the seller of a still-unfulfilled order (called by the reminder job).
+   * No-op if the escrow has already left AWAITING_SELLER.
+   */
+  async sendFulfillmentReminder(
+    escrowId: string,
+    reminderNumber: number,
+  ): Promise<void> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow || escrow.status !== EscrowStatus.AWAITING_SELLER) {
+      return;
+    }
+
+    const seller = await this.userRepo.findOne({
+      where: { id: escrow.sellerId },
+    });
+
+    // In-app + push. FULFILLMENT_REMINDER is non-mutable in the notifications
+    // service, so this reaches the seller regardless of their mute settings.
+    await this.notificationsService.createNotification({
+      userId: escrow.sellerId,
+      type: NotificationType.FULFILLMENT_REMINDER,
+      title: 'Action needed: confirm your order',
+      body: `Order ${escrow.orderNumber} is still awaiting your confirmation. Mark it ready before the ${this.FULFILLMENT_HOURS}h window closes, or it will be auto-cancelled.`,
+      data: {
+        escrowId: escrow.id,
+        orderNumber: escrow.orderNumber,
+        reminderHours: reminderNumber,
+        ...(escrow.listingId && { listingId: escrow.listingId }),
+        ...(escrow.buyRequestOfferId && {
+          buyRequestOfferId: escrow.buyRequestOfferId,
+        }),
+      },
+    });
+
+    // Critical "confirm or lose the sale" email — intentionally NOT gated by
+    // the user's emailEnabled preference.
+    if (seller?.email) {
+      await this.resendService.sendEmail({
+        to: seller.email,
+        subject: `Action needed: confirm order ${escrow.orderNumber}`,
+        template: 'fulfillmentReminderSeller',
+        context: {
+          sellerName: seller.fullName,
+          orderNumber: escrow.orderNumber,
+          reminderHours: reminderNumber,
+          fulfillmentHours: this.FULFILLMENT_HOURS,
+        },
+      });
+    }
+
+    this.logger.log(
+      `Sent ${reminderNumber}h fulfillment reminder to seller ${escrow.sellerId} for escrow ${escrowId}`,
     );
   }
 
@@ -193,6 +278,8 @@ export class EscrowService {
           backoff: { type: 'exponential', delay: 1000 },
         },
       );
+
+      await this.scheduleFulfillmentReminders(savedEscrow.id);
 
       this.logger.log(`Escrow ${savedEscrow.id} (${orderNumber}) initiated for ₦${dto.amount}`);
 
@@ -366,6 +453,8 @@ export class EscrowService {
       },
     );
 
+    await this.scheduleFulfillmentReminders(savedEscrow.id);
+
     this.logger.log(
       `Escrow ${savedEscrow.id} (${orderNumber}) initiated from buy request offer ${offer.id} for ₦${amount}`,
     );
@@ -494,8 +583,9 @@ export class EscrowService {
 
       await queryRunner.manager.save(deliveryCode);
 
-      // Remove fulfillment expiry job (seller responded in time)
+      // Remove fulfillment expiry job + pending reminders (seller responded)
       await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
+      await this.cancelFulfillmentReminders(escrowId);
 
       await queryRunner.commitTransaction();
 
@@ -1039,6 +1129,7 @@ export class EscrowService {
       // Remove any pending jobs
       await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
       await this.escrowQueue.remove(`auto-release-${escrowId}`);
+      await this.cancelFulfillmentReminders(escrowId);
 
       await queryRunner.commitTransaction();
 
