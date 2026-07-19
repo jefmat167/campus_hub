@@ -29,8 +29,9 @@ export const KoboColumnTransformer: ValueTransformer = {
  * Naira arithmetic (e.g. `amount * 2.5 / 100`) drifts at 2 d.p. and leaves the
  * ledger unbalanced — a fee and payout that don't add up to the principal.
  *
- * Wallet/escrow money columns are `decimal(12,2)` (exact to the kobo), so the
- * Naira values returned here (kobo / 100) map cleanly onto the schema.
+ * Wallet/escrow money columns are `bigint` storing integer kobo (via
+ * `KoboColumnTransformer`, exact to the kobo), so the Naira values returned
+ * here (kobo / 100) map cleanly onto the schema.
  */
 
 /** Naira → integer kobo. */
