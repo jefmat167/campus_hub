@@ -82,7 +82,46 @@ function makeDb(wallets: Wallet[]) {
   return { dataSource, transactionRepo, qr, txns };
 }
 
-function makeService(db: ReturnType<typeof makeDb>): WalletService {
+// Env-backed withdrawal fee config: 1.5%, floored at ₦50, capped at ₦250.
+function makeFeeConfig() {
+  const vals: Record<string, number> = {
+    WITHDRAWAL_FEE_PERCENT: 1.5,
+    WITHDRAWAL_FEE_MIN: 50,
+    WITHDRAWAL_FEE_MAX: 250,
+  };
+  return { get: (k: string, d?: any) => (k in vals ? vals[k] : d) };
+}
+
+// Records platform-wallet credits/debits so fee realisation can be asserted.
+function makePlatformSpy() {
+  const ops: Array<{
+    kind: 'credit' | 'debit';
+    amount: number;
+    type: any;
+    description?: string;
+  }> = [];
+  return {
+    ops,
+    creditPlatformFee: async (
+      amount: number,
+      _refId: any,
+      type: any,
+      description?: string,
+    ) => {
+      ops.push({ kind: 'credit', amount, type, description });
+      return {} as any;
+    },
+    debitPlatform: async (amount: number, type: any, description?: string) => {
+      ops.push({ kind: 'debit', amount, type, description });
+      return {} as any;
+    },
+  };
+}
+
+function makeService(
+  db: ReturnType<typeof makeDb>,
+  platform: ReturnType<typeof makePlatformSpy> = makePlatformSpy(),
+): WalletService {
   // Velocity caps are covered in velocity.service.spec.ts; a no-op here keeps
   // these tests focused on settlement / withdrawal money-path behaviour.
   const velocity = { assertWithinCap: async () => {} };
@@ -91,6 +130,8 @@ function makeService(db: ReturnType<typeof makeDb>): WalletService {
     db.transactionRepo as any,
     db.dataSource as any,
     velocity as any,
+    makeFeeConfig() as any,
+    platform as any,
   );
 }
 
@@ -348,5 +389,85 @@ describe('WalletService withdrawal lifecycle', () => {
       svc.debitForWithdrawal('u1', 800, 'WD_1'),
     ).rejects.toThrow(/Insufficient balance/);
     expect(w.balance).toBe(1000); // untouched
+  });
+});
+
+describe('WalletService withdrawal fee', () => {
+  it('floors the fee at the configured minimum and records net in metadata', async () => {
+    const w = makeWallet('u1', 5000);
+    const db = makeDb([w]);
+    const svc = makeService(db);
+
+    // 1.5% of ₦2,000 = ₦30, below the ₦50 floor → fee ₦50, net ₦1,950.
+    const tx = await svc.debitForWithdrawal('u1', 2000, 'WD_1');
+
+    expect(w.balance).toBe(3000); // full gross leaves the wallet
+    expect(tx.amount).toBe(-2000); // ledger row stays gross (velocity meter)
+    expect(tx.metadata).toEqual({ grossAmount: 2000, fee: 50, netAmount: 1950 });
+  });
+
+  it('charges the straight percentage between the floor and the cap', async () => {
+    const w = makeWallet('u1', 20000);
+    const db = makeDb([w]);
+    const svc = makeService(db);
+
+    // 1.5% of ₦10,000 = ₦150 (between ₦50 and ₦250).
+    const tx = await svc.debitForWithdrawal('u1', 10000, 'WD_1');
+    expect(tx.metadata).toMatchObject({ fee: 150, netAmount: 9850 });
+  });
+
+  it('caps the fee at the configured maximum', async () => {
+    const w = makeWallet('u1', 200000);
+    const db = makeDb([w]);
+    const svc = makeService(db);
+
+    // 1.5% of ₦100,000 = ₦1,500, above the ₦250 cap → fee ₦250.
+    const tx = await svc.debitForWithdrawal('u1', 100000, 'WD_1');
+    expect(tx.metadata).toMatchObject({ fee: 250, netAmount: 99750 });
+  });
+
+  it('realises the fee to the platform wallet on confirm, idempotently', async () => {
+    const w = makeWallet('u1', 5000);
+    const db = makeDb([w]);
+    const platform = makePlatformSpy();
+    const svc = makeService(db, platform);
+
+    await svc.debitForWithdrawal('u1', 2000, 'WD_1');
+    await svc.confirmWithdrawal('WD_1');
+    await svc.confirmWithdrawal('WD_1'); // duplicate webhook
+
+    const credits = platform.ops.filter((o) => o.kind === 'credit');
+    expect(credits).toHaveLength(1);
+    expect(credits[0].amount).toBe(50);
+  });
+
+  it('leaves the platform wallet untouched when a PENDING withdrawal reverses', async () => {
+    const w = makeWallet('u1', 5000);
+    const db = makeDb([w]);
+    const platform = makePlatformSpy();
+    const svc = makeService(db, platform);
+
+    await svc.debitForWithdrawal('u1', 2000, 'WD_1');
+    await svc.reverseWithdrawal('WD_1'); // never confirmed → fee never booked
+
+    expect(platform.ops).toHaveLength(0);
+    expect(w.balance).toBe(5000);
+  });
+
+  it('claws the fee back when a COMPLETED withdrawal is reversed', async () => {
+    const w = makeWallet('u1', 5000);
+    const db = makeDb([w]);
+    const platform = makePlatformSpy();
+    const svc = makeService(db, platform);
+
+    await svc.debitForWithdrawal('u1', 2000, 'WD_1');
+    await svc.confirmWithdrawal('WD_1'); // fee credited
+    await svc.reverseWithdrawal('WD_1'); // Paystack reverses after success
+
+    expect(platform.ops).toEqual([
+      expect.objectContaining({ kind: 'credit', amount: 50 }),
+      expect.objectContaining({ kind: 'debit', amount: 50 }),
+    ]);
+    expect(w.balance).toBe(5000); // user fully refunded the gross
   });
 });

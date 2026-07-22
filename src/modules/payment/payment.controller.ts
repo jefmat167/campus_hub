@@ -377,13 +377,23 @@ export class PaymentController {
 
     // Debit wallet and record a PENDING withdrawal atomically. The webhook
     // (transfer.success/failed/reversed) transitions this same transaction.
-    await this.walletService.debitForWithdrawal(user.id, dto.amount, reference);
+    // The gross `amount` leaves the wallet; a fee is withheld and only the net
+    // is transferred to the bank (the fee is realised on transfer.success).
+    const withdrawal = await this.walletService.debitForWithdrawal(
+      user.id,
+      dto.amount,
+      reference,
+    );
+    const { fee, netAmount } = withdrawal.metadata as unknown as {
+      fee: number;
+      netAmount: number;
+    };
 
-    // Initiate transfer via Paystack
+    // Initiate transfer via Paystack (net of the withdrawal fee)
     try {
       const transfer = await this.paystackService.initiateTransfer(
         wallet.paystackRecipientCode,
-        dto.amount,
+        netAmount,
         reference,
         'Wallet withdrawal',
       );
@@ -395,10 +405,12 @@ export class PaymentController {
         data: {
           reference,
           amount: dto.amount,
+          fee,
+          netAmount,
           status: transfer.status,
           balance,
         },
-        message: 'Withdrawal initiated successfully. You will receive the funds shortly.',
+        message: `Withdrawal initiated successfully. A ₦${fee.toLocaleString()} fee applies; ₦${netAmount.toLocaleString()} will be sent to your bank shortly.`,
       };
     } catch (error) {
       // Transfer couldn't be initiated: reverse the PENDING withdrawal so the

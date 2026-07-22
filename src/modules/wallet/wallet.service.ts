@@ -13,13 +13,22 @@ import {
   WalletTransactionType,
   WalletTransactionStatus,
 } from '../../database/entities/wallet.entity';
-import { toKobo, toNaira } from '../../common/utils/money';
+import { ConfigService } from '@nestjs/config';
+import { toKobo, toNaira, computeWithdrawalFee } from '../../common/utils/money';
 import { VelocityService } from './velocity.service';
+import { PlatformWalletService } from './platform-wallet.service';
 import { TransactionCapType } from '../../database/entities/transaction-cap.entity';
+import { PlatformTransactionType } from '../../database/entities/platform-wallet.entity';
 
 @Injectable()
 export class WalletService {
   private readonly logger = new Logger(WalletService.name);
+
+  // Withdrawal fee (monetisation) — hybrid percent/floor/cap, all Naira.
+  // Configurable via env (see env.validation.ts).
+  private readonly withdrawalFeePercent: number;
+  private readonly withdrawalFeeMin: number;
+  private readonly withdrawalFeeMax: number;
 
   constructor(
     @InjectRepository(Wallet)
@@ -28,7 +37,19 @@ export class WalletService {
     private transactionRepo: Repository<WalletTransaction>,
     private dataSource: DataSource,
     private readonly velocityService: VelocityService,
-  ) {}
+    private readonly configService: ConfigService,
+    private readonly platformWalletService: PlatformWalletService,
+  ) {
+    this.withdrawalFeePercent = Number(
+      this.configService.get('WITHDRAWAL_FEE_PERCENT', 1.5),
+    );
+    this.withdrawalFeeMin = Number(
+      this.configService.get('WITHDRAWAL_FEE_MIN', 50),
+    );
+    this.withdrawalFeeMax = Number(
+      this.configService.get('WITHDRAWAL_FEE_MAX', 250),
+    );
+  }
 
   /**
    * Get wallet for a user
@@ -612,6 +633,16 @@ export class WalletService {
         incomingNaira: amount,
       });
 
+      // Withdrawal fee (monetisation): the full gross `amount` leaves the
+      // wallet (so the velocity meter keeps counting gross), but only `net` is
+      // transferred to the bank; `fee` is the platform's cut, realised to the
+      // platform wallet on confirmWithdrawal.
+      const { fee, net } = computeWithdrawalFee(amount, {
+        percent: this.withdrawalFeePercent,
+        minFee: this.withdrawalFeeMin,
+        maxFee: this.withdrawalFeeMax,
+      });
+
       const balanceBefore = Number(wallet.balance);
       wallet.balance = balanceBefore - amount;
 
@@ -626,6 +657,7 @@ export class WalletService {
         externalReference,
         balanceBefore,
         balanceAfter: Number(wallet.balance),
+        metadata: { grossAmount: amount, fee, netAmount: net },
       });
 
       await queryRunner.manager.save(transaction);
@@ -641,16 +673,55 @@ export class WalletService {
   }
 
   /**
-   * Confirm withdrawal (called by webhook)
+   * Confirm a withdrawal (webhook: transfer.success). Flips the PENDING row to
+   * COMPLETED and realises the withdrawal fee to the platform wallet — both in
+   * one locked transaction. Idempotent: the row is locked and the credit is
+   * gated on the PENDING→COMPLETED transition, so duplicate webhooks can't
+   * double-credit the platform.
    */
   async confirmWithdrawal(reference: string): Promise<void> {
-    const transaction = await this.transactionRepo.findOne({
-      where: { reference, status: WalletTransactionStatus.PENDING },
-    });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    if (transaction) {
+    try {
+      const transaction = await queryRunner.manager.findOne(WalletTransaction, {
+        where: { reference },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (
+        !transaction ||
+        transaction.type !== WalletTransactionType.WITHDRAWAL ||
+        transaction.status !== WalletTransactionStatus.PENDING
+      ) {
+        // Missing, not a withdrawal, or already finalised — nothing to do.
+        await queryRunner.commitTransaction();
+        return;
+      }
+
       transaction.status = WalletTransactionStatus.COMPLETED;
-      await this.transactionRepo.save(transaction);
+      await queryRunner.manager.save(transaction);
+
+      const fee = Number(
+        (transaction.metadata as unknown as { fee?: number } | null)?.fee ?? 0,
+      );
+      if (fee > 0) {
+        await this.platformWalletService.creditPlatformFee(
+          fee,
+          null,
+          PlatformTransactionType.WITHDRAWAL_FEE,
+          `Withdrawal fee for ${reference}`,
+          queryRunner,
+        );
+      }
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
   }
 
@@ -689,7 +760,7 @@ export class WalletService {
         return;
       }
 
-      // Credit the debited amount back to the wallet.
+      // Credit the debited (gross) amount back to the wallet.
       const wallet = await queryRunner.manager.findOne(Wallet, {
         where: { id: transaction.walletId },
         lock: { mode: 'pessimistic_write' },
@@ -701,8 +772,26 @@ export class WalletService {
         await queryRunner.manager.save(wallet);
       }
 
+      // If the withdrawal had already COMPLETED, its fee was realised to the
+      // platform wallet in confirmWithdrawal — claw it back on reversal. A
+      // still-PENDING withdrawal never credited the platform, so skip it.
+      const wasCompleted =
+        transaction.status === WalletTransactionStatus.COMPLETED;
+      const fee = Number(
+        (transaction.metadata as unknown as { fee?: number } | null)?.fee ?? 0,
+      );
+
       transaction.status = WalletTransactionStatus.REVERSED;
       await queryRunner.manager.save(transaction);
+
+      if (wasCompleted && fee > 0) {
+        await this.platformWalletService.debitPlatform(
+          fee,
+          PlatformTransactionType.WITHDRAWAL_FEE,
+          `Withdrawal fee reversal for ${reference}`,
+          queryRunner,
+        );
+      }
 
       await queryRunner.commitTransaction();
     } catch (error) {

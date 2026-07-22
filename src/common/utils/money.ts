@@ -71,3 +71,21 @@ export function splitByPercent(
 export function percentOf(amountNaira: number, percent: number): number {
   return toNaira(Math.round((toKobo(amountNaira) * percent) / 100));
 }
+
+/**
+ * Withdrawal fee: `percent`% of the amount, floored at `minFee` and capped at
+ * `maxFee` (all Naira). Computed in integer kobo so `fee + net === amount` to
+ * the kobo. The fee is finally clamped so it can never exceed the amount
+ * itself (keeps `net >= 0` for pathologically small amounts).
+ */
+export function computeWithdrawalFee(
+  amountNaira: number,
+  opts: { percent: number; minFee: number; maxFee: number },
+): { fee: number; net: number } {
+  const amount = toKobo(amountNaira);
+  let fee = Math.round((amount * opts.percent) / 100);
+  fee = Math.max(fee, toKobo(opts.minFee)); // floor
+  fee = Math.min(fee, toKobo(opts.maxFee)); // cap
+  fee = Math.min(fee, amount); // never exceed the amount
+  return { fee: toNaira(fee), net: toNaira(amount - fee) };
+}

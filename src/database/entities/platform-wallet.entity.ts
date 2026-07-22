@@ -14,6 +14,7 @@ import { KoboColumnTransformer } from '../../common/utils/money';
 export enum PlatformTransactionType {
   ESCROW_FEE = 'escrow_fee',
   CANCELLATION_FEE = 'cancellation_fee',
+  WITHDRAWAL_FEE = 'withdrawal_fee',
 }
 
 @Entity('platform_wallet')
