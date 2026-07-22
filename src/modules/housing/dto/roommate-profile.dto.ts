@@ -21,13 +21,18 @@ import {
 } from '../../../database/entities/roommate.entity';
 
 export class CreateRoommateProfileDto {
-  @ApiProperty({
-    description: 'Your gender',
+  @ApiPropertyOptional({
+    description:
+      'DEPRECATED / ignored. Roommate gender is taken from your account ' +
+      '(set at registration); it cannot be set here because roommate matching ' +
+      'is gender-segregated.',
     enum: Gender,
     example: Gender.MALE,
+    deprecated: true,
   })
   @IsEnum(Gender)
-  gender: Gender;
+  @IsOptional()
+  gender?: Gender;
 
   @ApiProperty({
     description: 'Your age (16-50)',
@@ -163,9 +168,12 @@ export class CreateRoommateProfileDto {
   allowsVisitors?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Preferred roommate gender',
+    description:
+      'DEPRECATED / ignored. Roommate matching is gender-segregated, so the ' +
+      'preferred roommate gender is always your own.',
     enum: Gender,
     example: Gender.MALE,
+    deprecated: true,
   })
   @IsEnum(Gender)
   @IsOptional()
@@ -281,9 +289,12 @@ export class ExpressInterestDto {
 
 export class SearchRoommateProfilesDto {
   @ApiPropertyOptional({
-    description: 'Filter by gender',
+    description:
+      'DEPRECATED / ignored. Results are always restricted to your own gender ' +
+      '(gender-segregated matching).',
     enum: Gender,
     example: Gender.MALE,
+    deprecated: true,
   })
   @IsEnum(Gender)
   @IsOptional()

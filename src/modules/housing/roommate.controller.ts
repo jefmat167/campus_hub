@@ -109,6 +109,7 @@ export class RoommateController {
     const profile = await this.roommateService.createOrUpdateProfile(
       user.id,
       user.universityId,
+      user.gender,
       dto,
     );
 
@@ -260,6 +261,7 @@ export class RoommateController {
     const { profiles, total } = await this.roommateService.getAllProfiles(
       user.id,
       user.universityId,
+      user.gender,
       dto,
     );
 
@@ -395,8 +397,11 @@ export class RoommateController {
     status: 404,
     description: 'Roommate profile not found',
   })
-  async getProfile(@Param('id', ParseUUIDPipe) id: string) {
-    const profile = await this.roommateService.getProfile(id);
+  async getProfile(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const profile = await this.roommateService.getProfile(id, user.gender);
 
     return {
       success: true,
@@ -505,6 +510,7 @@ export class RoommateController {
   ) {
     const { matches, total } = await this.roommateService.findMatches(
       user.id,
+      user.gender,
       Number(page) || 1,
       Number(limit) || 20,
     );
@@ -578,6 +584,7 @@ export class RoommateController {
   ) {
     const interest = await this.roommateService.expressInterest(
       user.id,
+      user.gender,
       profileId,
       dto,
     );
