@@ -395,8 +395,6 @@ export class EscrowService {
 
     const buyerTier = buyer.verificationTier || VerificationTier.NONE;
     const amountLimit = getAmountLimitForTier(buyerTier, 'buying');
-    console.log("amount limit => ", amountLimit);
-    console.log("buyer tier => ", buyerTier);
 
     if (amountLimit !== null && amount > amountLimit) {
       throw new ForbiddenException({

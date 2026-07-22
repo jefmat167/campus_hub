@@ -40,6 +40,7 @@ export enum AuditAction {
   ADMIN_PERMISSION_GRANT = 'admin_permission_grant',
   ADMIN_PERMISSION_REVOKE = 'admin_permission_revoke',
   ADMIN_DEACTIVATE = 'admin_deactivate',
+  TRANSACTION_CAP_UPDATE = 'transaction_cap_update',
 }
 
 export enum AuditTargetType {

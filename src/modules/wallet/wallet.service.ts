@@ -14,6 +14,8 @@ import {
   WalletTransactionStatus,
 } from '../../database/entities/wallet.entity';
 import { toKobo, toNaira } from '../../common/utils/money';
+import { VelocityService } from './velocity.service';
+import { TransactionCapType } from '../../database/entities/transaction-cap.entity';
 
 @Injectable()
 export class WalletService {
@@ -25,6 +27,7 @@ export class WalletService {
     @InjectRepository(WalletTransaction)
     private transactionRepo: Repository<WalletTransaction>,
     private dataSource: DataSource,
+    private readonly velocityService: VelocityService,
   ) {}
 
   /**
@@ -269,6 +272,15 @@ export class WalletService {
       if (wallet.availableBalance < amount) {
         throw new BadRequestException('Insufficient balance');
       }
+
+      // Cumulative spend cap. Runs under the wallet-row pessimistic lock held
+      // above, so the windowed SUM is race-safe with concurrent escrow creates.
+      await this.velocityService.assertWithinCap(queryRunner.manager, {
+        userId,
+        walletId: wallet.id,
+        capType: TransactionCapType.SPEND,
+        incomingNaira: amount,
+      });
 
       const balanceBefore = Number(wallet.balance);
       wallet.lockedBalance = Number(wallet.lockedBalance) + amount;
@@ -590,6 +602,15 @@ export class WalletService {
       if (wallet.availableBalance < amount) {
         throw new BadRequestException('Insufficient balance');
       }
+
+      // Cumulative withdrawal cap. Runs under the wallet-row pessimistic lock
+      // held above, so the windowed SUM is race-safe with concurrent debits.
+      await this.velocityService.assertWithinCap(queryRunner.manager, {
+        userId,
+        walletId: wallet.id,
+        capType: TransactionCapType.WITHDRAWAL,
+        incomingNaira: amount,
+      });
 
       const balanceBefore = Number(wallet.balance);
       wallet.balance = balanceBefore - amount;

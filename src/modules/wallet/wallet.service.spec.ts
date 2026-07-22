@@ -83,10 +83,14 @@ function makeDb(wallets: Wallet[]) {
 }
 
 function makeService(db: ReturnType<typeof makeDb>): WalletService {
+  // Velocity caps are covered in velocity.service.spec.ts; a no-op here keeps
+  // these tests focused on settlement / withdrawal money-path behaviour.
+  const velocity = { assertWithinCap: async () => {} };
   return new WalletService(
     {} as any,
     db.transactionRepo as any,
     db.dataSource as any,
+    velocity as any,
   );
 }
 
