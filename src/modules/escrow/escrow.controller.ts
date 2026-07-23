@@ -33,6 +33,10 @@ import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import {
+  TransactionPinGuard,
+  RequireTransactionPin,
+} from '../transaction-pin/transaction-pin.guard';
+import {
   User,
   VerificationTier,
 } from '../../database/entities/user.entity';
@@ -48,7 +52,7 @@ import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
-@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard, TransactionPinGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {
@@ -60,6 +64,7 @@ export class EscrowController {
    * Seller has 72 hours to mark ready, otherwise auto-refund.
    */
   @Post()
+  @RequireTransactionPin()
   @TierAmountLimit('amount', {
     [VerificationTier.TIER_0]: 30000,
     [VerificationTier.TIER_1]: 60000,

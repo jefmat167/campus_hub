@@ -129,6 +129,8 @@ async function seed() {
   // Hash password once for all users
   const defaultPassword = 'Password123!';
   const passwordHash = await bcrypt.hash(defaultPassword, 10);
+  // Default transaction PIN (dev): 135790 — lets seeded users transact.
+  const pinHash = await bcrypt.hash('135790', 12);
 
   let userCount = 0;
   let roommateCount = 0;
@@ -175,6 +177,7 @@ async function seed() {
         emailVerified: true,
         emailVerifiedAt: new Date(),
         passwordHash,
+        pinHash,
         fullName,
         gender,
         universityId: university.id,

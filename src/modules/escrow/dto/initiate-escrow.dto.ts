@@ -4,6 +4,7 @@ import {
   IsPositive,
   IsOptional,
   IsString,
+  Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -38,4 +39,12 @@ export class InitiateEscrowDto {
   @IsString()
   @IsOptional()
   notes?: string;
+
+  @ApiProperty({
+    description: 'Your 6-digit transaction PIN',
+    example: '135790',
+  })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'PIN must be exactly 6 digits' })
+  pin: string;
 }

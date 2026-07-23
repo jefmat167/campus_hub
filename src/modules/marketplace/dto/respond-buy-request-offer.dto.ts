@@ -1,4 +1,4 @@
-import { IsEnum, IsString, IsOptional, MaxLength } from 'class-validator';
+import { IsEnum, IsString, IsOptional, MaxLength, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -26,4 +26,13 @@ export class RespondBuyRequestOfferDto {
   @MaxLength(500)
   @Transform(({ value }) => value?.trim())
   message?: string;
+
+  @ApiPropertyOptional({
+    description: 'Your 6-digit transaction PIN (required when action = accept)',
+    example: '135790',
+  })
+  @IsString()
+  @IsOptional()
+  @Matches(/^\d{6}$/, { message: 'PIN must be exactly 6 digits' })
+  pin?: string;
 }

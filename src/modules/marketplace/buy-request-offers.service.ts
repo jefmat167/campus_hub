@@ -24,6 +24,7 @@ import { ChatService } from '../chat/chat.service';
 import { EscrowService } from '../escrow/escrow.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../../database/entities/notification.entity';
+import { TransactionPinService } from '../transaction-pin/transaction-pin.service';
 import {
   CreateBuyRequestOfferDto,
   RespondBuyRequestOfferDto,
@@ -44,6 +45,7 @@ export class BuyRequestOffersService {
     private readonly chatService: ChatService,
     private readonly escrowService: EscrowService,
     private readonly notificationsService: NotificationsService,
+    private readonly transactionPinService: TransactionPinService,
     private readonly dataSource: DataSource,
   ) { }
 
@@ -226,6 +228,8 @@ export class BuyRequestOffersService {
     const now = new Date();
 
     if (dto.action === BuyRequestOfferResponseAction.ACCEPT) {
+      // Accepting locks the requester's (buyer's) funds → require the PIN.
+      await this.transactionPinService.verifyForTransaction(userId, dto.pin);
       await this.acceptOffer(offer, now);
     } else {
       await this.offerRepository.update(offerId, {

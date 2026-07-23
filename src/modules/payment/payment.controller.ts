@@ -24,6 +24,10 @@ import { PaystackService } from './paystack.service';
 import { WalletService } from '../wallet/wallet.service';
 import { SmsService } from '../sms/sms.service';
 import {
+  TransactionPinGuard,
+  RequireTransactionPin,
+} from '../transaction-pin/transaction-pin.guard';
+import {
   InitializeFundingDto,
   VerifyPaymentDto,
   AddBankAccountDto,
@@ -33,7 +37,7 @@ import {
 
 @ApiTags('Payment')
 @Controller('payment')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, TierGuard, TransactionPinGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class PaymentController {
@@ -336,6 +340,7 @@ export class PaymentController {
     status: 400,
     description: 'Insufficient balance, no bank account, or invalid OTP',
   })
+  @RequireTransactionPin()
   async initiateWithdrawal(
     @CurrentUser() user: User,
     @Body() dto: InitiateWithdrawalDto,

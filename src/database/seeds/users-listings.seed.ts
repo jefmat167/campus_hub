@@ -291,6 +291,8 @@ async function seed() {
   // Hash password
   const defaultPassword = 'Password123!';
   const passwordHash = await bcrypt.hash(defaultPassword, 10);
+  // Default transaction PIN (dev): 135790 — lets seeded users transact.
+  const pinHash = await bcrypt.hash('135790', 12);
 
   // Create User 1
   const user1 = userRepo.create({
@@ -301,6 +303,7 @@ async function seed() {
     emailVerified: true,
     emailVerifiedAt: new Date(),
     passwordHash,
+    pinHash,
     fullName: 'Chukwuemeka Okonkwo',
     gender: Gender.MALE,
     universityId: university.id,
@@ -333,6 +336,7 @@ async function seed() {
     emailVerified: true,
     emailVerifiedAt: new Date(),
     passwordHash,
+    pinHash,
     fullName: 'Adaeze Nwosu',
     gender: Gender.FEMALE,
     universityId: university.id,

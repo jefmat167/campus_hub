@@ -5,6 +5,7 @@ import { WebhookController } from './webhook.controller';
 import { PaystackService } from './paystack.service';
 import { WalletModule } from '../wallet/wallet.module';
 import { SmsModule } from '../sms/sms.module';
+import { TransactionPinModule } from '../transaction-pin/transaction-pin.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { SmsModule } from '../sms/sms.module';
     }),
     WalletModule,
     SmsModule,
+    TransactionPinModule,
   ],
   controllers: [PaymentController, WebhookController],
   providers: [PaystackService],

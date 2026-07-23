@@ -94,6 +94,19 @@ export class User {
   @Exclude()
   passwordHash: string;
 
+  // Transaction PIN (money-out step-up) — bcrypt hash + failed-attempt lockout.
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  @Exclude()
+  pinHash: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  @Exclude()
+  pinAttempts: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  @Exclude()
+  pinLockedUntil: Date | null;
+
   @Column({ type: 'varchar', length: 255 })
   fullName: string;
 

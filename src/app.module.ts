@@ -34,6 +34,7 @@ import { DevModule } from './modules/dev/dev.module';
 import { BullBoardModule } from './modules/bull-board/bull-board.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PermissionsModule } from './common/modules/permissions.module';
+import { TransactionPinModule } from './modules/transaction-pin/transaction-pin.module';
 
 @Module({
   imports: [
@@ -131,6 +132,7 @@ import { PermissionsModule } from './common/modules/permissions.module';
     BullBoardModule,
     AdminModule,
     PermissionsModule,
+    TransactionPinModule,
   ],
   providers: [
     {
