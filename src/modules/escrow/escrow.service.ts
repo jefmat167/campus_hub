@@ -11,6 +11,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { randomInt } from 'crypto';
 import {
   EscrowTransaction,
   EscrowStatus,
@@ -66,6 +67,9 @@ export class EscrowService {
   private readonly DISPUTE_WINDOW_MINUTES: number;
   // Hours after creation to nudge the seller while still AWAITING_SELLER.
   private readonly FULFILLMENT_REMINDER_HOURS = [24, 48];
+  // Delivery-code verification lockout (anti-brute-force on the 4-digit code).
+  private readonly DELIVERY_CODE_MAX_ATTEMPTS = 5;
+  private readonly DELIVERY_CODE_LOCK_MS = 15 * 60 * 1000; // 15 minutes
 
   constructor(
     @InjectRepository(EscrowTransaction)
@@ -204,7 +208,8 @@ export class EscrowService {
    * Generate 4-digit delivery code
    */
   private generateDeliveryCodeValue(): string {
-    return String(Math.floor(1000 + Math.random() * 9000));
+    // Cryptographically secure (not Math.random). 4-digit, 1000–9999.
+    return String(randomInt(1000, 10000));
   }
 
   /**
@@ -746,12 +751,38 @@ export class EscrowService {
       throw new NotFoundException('No active delivery code found');
     }
 
-    // Validate code matches
-    if (deliveryCode.code !== code) {
-      throw new BadRequestException('Invalid delivery code');
+    // Anti-brute-force: a 4-digit code is only ~9k values, so cap wrong guesses.
+    if (deliveryCode.isLocked) {
+      throw new ForbiddenException(
+        'Too many incorrect delivery-code attempts. Verification is locked; wait a few minutes or ask the buyer to resend the code.',
+      );
     }
 
-    // Validate code is within time window
+    // Validate code matches — a wrong guess counts toward the lockout.
+    if (deliveryCode.code !== code) {
+      const attempts = deliveryCode.verifyAttempts + 1;
+      if (attempts >= this.DELIVERY_CODE_MAX_ATTEMPTS) {
+        // Reset the counter and lock; a fresh window opens after the cooldown.
+        deliveryCode.verifyAttempts = 0;
+        deliveryCode.lockedUntil = new Date(
+          Date.now() + this.DELIVERY_CODE_LOCK_MS,
+        );
+        await this.deliveryCodeRepo.save(deliveryCode);
+        throw new ForbiddenException(
+          'Too many incorrect delivery-code attempts. Verification is locked for 15 minutes; ask the buyer to resend the code.',
+        );
+      }
+      deliveryCode.verifyAttempts = attempts;
+      await this.deliveryCodeRepo.save(deliveryCode);
+      throw new BadRequestException(
+        `Invalid delivery code. ${
+          this.DELIVERY_CODE_MAX_ATTEMPTS - attempts
+        } attempt(s) remaining.`,
+      );
+    }
+
+    // Validate code is within time window (a correct code at the wrong time
+    // does not burn an attempt).
     const now = new Date();
     if (now < deliveryCode.validFrom)
       throw new BadRequestException('Delivery code is not yet valid. Please wait until the delivery window.')
