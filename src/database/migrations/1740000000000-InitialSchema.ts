@@ -1,5 +1,14 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
+/**
+ * Consolidated baseline schema.
+ *
+ * This single migration builds the CURRENT FINAL schema in one pass. It is the
+ * result of folding the original InitialSchema plus every subsequent delta
+ * migration into their net final effect (money columns as bigint kobo, reviews
+ * anchored to escrow transactions, housing peer-handoff overhaul, admin tables,
+ * article media/university scoping, performance indexes, etc.).
+ */
 export class InitialSchema1740000000000 implements MigrationInterface {
     name = 'InitialSchema1740000000000';
 
@@ -9,8 +18,9 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       CREATE TYPE "university_type_enum" AS ENUM('federal', 'state', 'private')
     `);
 
+        // user_role_enum: admin/super_admin/moderator moved to dedicated admins table; users are only 'user'
         await queryRunner.query(`
-      CREATE TYPE "user_role_enum" AS ENUM('user', 'moderator', 'admin', 'super_admin')
+      CREATE TYPE "user_role_enum" AS ENUM('user')
     `);
 
         await queryRunner.query(`
@@ -61,17 +71,16 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       CREATE TYPE "platform_transaction_type_enum" AS ENUM('escrow_fee', 'cancellation_fee')
     `);
 
+        // wallet_transaction_type_enum: includes 'chargeback' (folded from 1742502600000)
         await queryRunner.query(`
-      CREATE TYPE "wallet_transaction_type_enum" AS ENUM('deposit', 'withdrawal', 'escrow_hold', 'escrow_release', 'escrow_refund', 'fee')
+      CREATE TYPE "wallet_transaction_type_enum" AS ENUM('deposit', 'withdrawal', 'escrow_hold', 'escrow_release', 'escrow_refund', 'fee', 'chargeback')
     `);
 
         await queryRunner.query(`
       CREATE TYPE "wallet_transaction_status_enum" AS ENUM('pending', 'completed', 'failed', 'reversed')
     `);
 
-        await queryRunner.query(`
-      CREATE TYPE "review_type_enum" AS ENUM('buyer_to_seller', 'seller_to_buyer')
-    `);
+        // NOTE: review_type_enum intentionally omitted (reviews became buyer-only; type column dropped)
 
         await queryRunner.query(`
       CREATE TYPE "dispute_status_enum" AS ENUM('open', 'under_review', 'resolved_buyer', 'resolved_seller', 'resolved_split', 'closed')
@@ -93,8 +102,9 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       CREATE TYPE "housing_type_enum" AS ENUM('apartment', 'room', 'shared_room', 'hostel', 'self_contain', 'flat')
     `);
 
+        // housing_status_enum: final overhaul values (rented->taken, + under_review/expired)
         await queryRunner.query(`
-      CREATE TYPE "housing_status_enum" AS ENUM('available', 'rented', 'reserved', 'paused', 'deleted')
+      CREATE TYPE "housing_status_enum" AS ENUM('available', 'taken', 'reserved', 'paused', 'under_review', 'expired', 'deleted')
     `);
 
         await queryRunner.query(`
@@ -107,6 +117,16 @@ export class InitialSchema1740000000000 implements MigrationInterface {
 
         await queryRunner.query(`
       CREATE TYPE "payment_frequency_enum" AS ENUM('monthly', 'quarterly', 'yearly')
+    `);
+
+        // poster_relationship_enum: added by housing overhaul (1742500700000)
+        await queryRunner.query(`
+      CREATE TYPE "poster_relationship_enum" AS ENUM('current_tenant', 'past_tenant', 'knows_landlord')
+    `);
+
+        // housing_report_reason_enum: added by housing overhaul (1742500700000)
+        await queryRunner.query(`
+      CREATE TYPE "housing_report_reason_enum" AS ENUM('fake_listing', 'misleading', 'already_taken', 'inappropriate', 'other')
     `);
 
         await queryRunner.query(`
@@ -229,6 +249,37 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       CREATE TYPE "warning_reason_enum" AS ENUM('spam', 'harassment', 'inappropriate_content', 'policy_violation', 'scam_attempt', 'other')
     `);
 
+        // admin_role_enum: dedicated admins table (1742502000000)
+        await queryRunner.query(`
+      CREATE TYPE "admin_role_enum" AS ENUM('admin', 'super_admin')
+    `);
+
+        // audit_action_enum: union of base (1742500900000) + all ALTER TYPE ADD VALUE deltas
+        // (1742501800000 + 1742502000000) and the AuditAction entity enum. Includes
+        // faculty_activate/department_activate/admin_promote/admin_demote to avoid regression.
+        await queryRunner.query(`
+      CREATE TYPE "audit_action_enum" AS ENUM (
+        'user_role_change', 'user_ban', 'user_unban', 'user_tier_change',
+        'user_force_logout', 'wallet_credit', 'wallet_debit',
+        'listing_takedown', 'post_hide', 'post_unhide', 'comment_delete',
+        'university_create', 'university_update', 'university_deactivate', 'university_activate',
+        'faculty_create', 'faculty_update', 'faculty_deactivate', 'faculty_activate',
+        'department_create', 'department_update', 'department_deactivate', 'department_activate',
+        'housing_takedown', 'report_review', 'appeal_review',
+        'admin_create', 'admin_promote', 'admin_demote',
+        'admin_permission_grant', 'admin_permission_revoke', 'admin_deactivate'
+      )
+    `);
+
+        // audit_target_type_enum: base (1742500900000) + 'admin' (1742502000000)
+        await queryRunner.query(`
+      CREATE TYPE "audit_target_type_enum" AS ENUM (
+        'user', 'listing', 'post', 'comment', 'housing_listing',
+        'university', 'faculty', 'department', 'wallet', 'escrow',
+        'report', 'appeal', 'admin'
+      )
+    `);
+
         // Create sequence for order numbers
         await queryRunner.query(`CREATE SEQUENCE IF NOT EXISTS order_number_seq START 1`);
 
@@ -305,6 +356,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 4. users
+        // NOTE: buyerRating / buyerRatingCount dropped (buyer-only review model, 1742500600000)
         await queryRunner.query(`
       CREATE TABLE "users" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -348,8 +400,6 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "scheduledDeletionAt" TIMESTAMP,
         "sellerRating" numeric(3,2) NOT NULL DEFAULT 0,
         "sellerRatingCount" integer NOT NULL DEFAULT 0,
-        "buyerRating" numeric(3,2) NOT NULL DEFAULT 0,
-        "buyerRatingCount" integer NOT NULL DEFAULT 0,
         "completedTransactions" integer NOT NULL DEFAULT 0,
         "refreshTokenHash" character varying(255),
         "lastLoginAt" TIMESTAMP,
@@ -365,6 +415,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_users_phone" ON "users" ("phone")`);
         await queryRunner.query(`CREATE INDEX "IDX_users_email" ON "users" ("email")`);
         await queryRunner.query(`CREATE INDEX "IDX_users_university_id" ON "users" ("university_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_users_faculty_id" ON "users" ("faculty_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_users_department_id" ON "users" ("department_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_users_verificationTier" ON "users" ("verificationTier")`);
         await queryRunner.query(`CREATE INDEX "IDX_users_tier1ReviewStatus" ON "users" ("tier1ReviewStatus")`);
         await queryRunner.query(`CREATE INDEX "IDX_users_isBanned" ON "users" ("isBanned")`);
@@ -397,12 +449,14 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 5. wallets
+        // Money columns are bigint kobo (1742502400000); CHECK constraints (1742083200000);
+        // FK to users is ON DELETE RESTRICT (1742502500000)
         await queryRunner.query(`
       CREATE TABLE "wallets" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "user_id" uuid NOT NULL,
-        "balance" numeric(12,2) NOT NULL DEFAULT 0,
-        "lockedBalance" numeric(12,2) NOT NULL DEFAULT 0,
+        "balance" bigint NOT NULL DEFAULT 0,
+        "lockedBalance" bigint NOT NULL DEFAULT 0,
         "isLocked" boolean NOT NULL DEFAULT false,
         "lockReason" text,
         "lockedAt" TIMESTAMP,
@@ -414,7 +468,9 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_wallets" PRIMARY KEY ("id"),
-        CONSTRAINT "UQ_wallets_user_id" UNIQUE ("user_id")
+        CONSTRAINT "UQ_wallets_user_id" UNIQUE ("user_id"),
+        CONSTRAINT "CHK_wallet_balance_non_negative" CHECK ("balance" >= 0),
+        CONSTRAINT "CHK_wallet_locked_balance_non_negative" CHECK ("lockedBalance" >= 0)
       )
     `);
 
@@ -425,23 +481,24 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       ADD CONSTRAINT "FK_wallets_user_id"
       FOREIGN KEY ("user_id")
       REFERENCES "users"("id")
-      ON DELETE CASCADE
+      ON DELETE RESTRICT
     `);
 
         // 6. wallet_transactions
+        // amount / balanceBefore / balanceAfter are bigint kobo (1742502400000)
         await queryRunner.query(`
       CREATE TABLE "wallet_transactions" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "wallet_id" uuid NOT NULL,
         "type" "wallet_transaction_type_enum" NOT NULL,
-        "amount" numeric(12,2) NOT NULL,
+        "amount" bigint NOT NULL,
         "status" "wallet_transaction_status_enum" NOT NULL DEFAULT 'pending',
         "reference" character varying(100) NOT NULL,
         "description" text,
         "externalReference" character varying(255),
         "metadata" jsonb,
-        "balanceBefore" numeric(12,2),
-        "balanceAfter" numeric(12,2),
+        "balanceBefore" bigint,
+        "balanceAfter" bigint,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_wallet_transactions" PRIMARY KEY ("id"),
@@ -452,6 +509,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_wallet_transactions_wallet_id" ON "wallet_transactions" ("wallet_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_wallet_transactions_reference" ON "wallet_transactions" ("reference")`);
         await queryRunner.query(`CREATE INDEX "IDX_wallet_transactions_wallet_id_createdAt" ON "wallet_transactions" ("wallet_id", "createdAt")`);
+        await queryRunner.query(`CREATE INDEX "IDX_wallet_transactions_reference_status" ON "wallet_transactions" ("reference", "status")`);
 
         await queryRunner.query(`
       ALTER TABLE "wallet_transactions"
@@ -462,6 +520,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 7. listings
+        // price is bigint kobo (1742502400000)
         await queryRunner.query(`
       CREATE TABLE "listings" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -472,7 +531,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "description" text NOT NULL,
         "category" "listing_category_enum" NOT NULL,
         "condition" "listing_condition_enum" NOT NULL,
-        "price" numeric(12,2) NOT NULL,
+        "price" bigint NOT NULL,
         "isNegotiable" boolean NOT NULL DEFAULT true,
         "visibilityScope" "visibility_scope_enum" NOT NULL DEFAULT 'university',
         "faculty_id" uuid,
@@ -552,16 +611,17 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 9. offers
+        // amount / counterAmount are bigint kobo (1742502400000)
         await queryRunner.query(`
       CREATE TABLE "offers" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "listing_id" uuid NOT NULL,
         "buyer_id" uuid NOT NULL,
         "seller_id" uuid NOT NULL,
-        "amount" numeric(12,2) NOT NULL,
+        "amount" bigint NOT NULL,
         "status" "offer_status_enum" NOT NULL DEFAULT 'pending',
         "message" text,
-        "counterAmount" numeric(12,2),
+        "counterAmount" bigint,
         "counterMessage" text,
         "respondedAt" TIMESTAMP,
         "expiresAt" TIMESTAMP NOT NULL,
@@ -573,9 +633,11 @@ export class InitialSchema1740000000000 implements MigrationInterface {
 
         await queryRunner.query(`CREATE INDEX "IDX_offers_listing_id" ON "offers" ("listing_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_offers_buyer_id" ON "offers" ("buyer_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_offers_seller_id" ON "offers" ("seller_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_offers_status" ON "offers" ("status")`);
         await queryRunner.query(`CREATE INDEX "IDX_offers_listing_id_status_createdAt" ON "offers" ("listing_id", "status", "createdAt")`);
         await queryRunner.query(`CREATE INDEX "IDX_offers_buyer_id_status" ON "offers" ("buyer_id", "status")`);
+        await queryRunner.query(`CREATE INDEX "IDX_offers_seller_status_created" ON "offers" ("seller_id", "status", "createdAt")`);
 
         await queryRunner.query(`
       ALTER TABLE "offers"
@@ -602,15 +664,19 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 10. escrow_transactions
+        // listing_id nullable + buy_request_offer_id + CHK_escrow_has_source (1742500000000);
+        // amount / platformFee / sellerPayout are bigint kobo (1742502400000);
+        // buyer/seller FKs ON DELETE RESTRICT (1742502500000)
         await queryRunner.query(`
       CREATE TABLE "escrow_transactions" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "orderNumber" character varying(20) NOT NULL,
         "buyer_id" uuid NOT NULL,
         "seller_id" uuid NOT NULL,
-        "listing_id" uuid NOT NULL,
+        "listing_id" uuid,
         "offer_id" uuid,
-        "amount" numeric(12,2) NOT NULL,
+        "buy_request_offer_id" uuid,
+        "amount" bigint NOT NULL,
         "status" "escrow_status_enum" NOT NULL DEFAULT 'awaiting_seller',
         "sellerReadyAt" TIMESTAMP,
         "deliveryDate" date,
@@ -619,8 +685,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "deliveredAt" TIMESTAMP,
         "fulfillmentExpiresAt" TIMESTAMP,
         "disputeWindowExpiresAt" TIMESTAMP,
-        "platformFee" numeric(12,2) NOT NULL DEFAULT 0,
-        "sellerPayout" numeric(12,2) NOT NULL DEFAULT 0,
+        "platformFee" bigint NOT NULL DEFAULT 0,
+        "sellerPayout" bigint NOT NULL DEFAULT 0,
         "releasedAt" TIMESTAMP,
         "refundedAt" TIMESTAMP,
         "notes" text,
@@ -628,7 +694,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_escrow_transactions" PRIMARY KEY ("id"),
-        CONSTRAINT "UQ_escrow_transactions_orderNumber" UNIQUE ("orderNumber")
+        CONSTRAINT "UQ_escrow_transactions_orderNumber" UNIQUE ("orderNumber"),
+        CONSTRAINT "CHK_escrow_has_source" CHECK ("listing_id" IS NOT NULL OR "buy_request_offer_id" IS NOT NULL)
       )
     `);
 
@@ -636,6 +703,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_escrow_transactions_buyer_id" ON "escrow_transactions" ("buyer_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_escrow_transactions_seller_id" ON "escrow_transactions" ("seller_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_escrow_transactions_listing_id" ON "escrow_transactions" ("listing_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_escrow_buy_request_offer_id" ON "escrow_transactions" ("buy_request_offer_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_escrow_transactions_status" ON "escrow_transactions" ("status")`);
         await queryRunner.query(`CREATE INDEX "IDX_escrow_transactions_status_createdAt" ON "escrow_transactions" ("status", "createdAt")`);
         await queryRunner.query(`CREATE INDEX "IDX_escrow_transactions_buyer_id_status" ON "escrow_transactions" ("buyer_id", "status")`);
@@ -646,7 +714,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       ADD CONSTRAINT "FK_escrow_transactions_buyer_id"
       FOREIGN KEY ("buyer_id")
       REFERENCES "users"("id")
-      ON DELETE CASCADE
+      ON DELETE RESTRICT
     `);
 
         await queryRunner.query(`
@@ -654,7 +722,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       ADD CONSTRAINT "FK_escrow_transactions_seller_id"
       FOREIGN KEY ("seller_id")
       REFERENCES "users"("id")
-      ON DELETE CASCADE
+      ON DELETE RESTRICT
     `);
 
         await queryRunner.query(`
@@ -672,6 +740,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       REFERENCES "offers"("id")
       ON DELETE SET NULL
     `);
+
+        // NOTE: FK_escrow_buy_request_offer is added later, after buy_request_offers is created.
 
         // 10b. delivery_codes
         await queryRunner.query(`
@@ -702,10 +772,11 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 10c. platform_wallet
+        // balance is bigint kobo (1742502400000)
         await queryRunner.query(`
       CREATE TABLE "platform_wallet" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "balance" numeric(14,2) NOT NULL DEFAULT 0,
+        "balance" bigint NOT NULL DEFAULT 0,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_platform_wallet" PRIMARY KEY ("id")
@@ -713,17 +784,20 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 10d. platform_wallet_transactions
+        // amount / balanceBefore / balanceAfter are bigint kobo (1742502400000);
+        // metadata jsonb (1742500800000)
         await queryRunner.query(`
       CREATE TABLE "platform_wallet_transactions" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "platform_wallet_id" uuid NOT NULL,
         "type" "platform_transaction_type_enum" NOT NULL,
-        "amount" numeric(12,2) NOT NULL,
+        "amount" bigint NOT NULL,
         "reference" character varying(100) NOT NULL,
         "escrow_id" uuid,
         "description" text,
-        "balanceBefore" numeric(14,2) NOT NULL,
-        "balanceAfter" numeric(14,2) NOT NULL,
+        "balanceBefore" bigint NOT NULL,
+        "balanceAfter" bigint NOT NULL,
+        "metadata" jsonb,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_platform_wallet_transactions" PRIMARY KEY ("id"),
         CONSTRAINT "UQ_platform_wallet_transactions_reference" UNIQUE ("reference")
@@ -744,27 +818,35 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 11. reviews
+        // Anchored to escrow_transactions (1742500500000); buyer-only, no "type" column (1742500600000)
         await queryRunner.query(`
       CREATE TABLE "reviews" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "transaction_id" uuid NOT NULL,
+        "escrow_transaction_id" uuid NOT NULL,
         "reviewer_id" uuid NOT NULL,
         "reviewee_id" uuid NOT NULL,
-        "type" "review_type_enum" NOT NULL,
         "rating" smallint NOT NULL,
         "comment" text,
         "isEdited" boolean NOT NULL DEFAULT false,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_reviews" PRIMARY KEY ("id"),
-        CONSTRAINT "UQ_reviews_transaction_reviewer_type" UNIQUE ("transaction_id", "reviewer_id", "type")
+        CONSTRAINT "UQ_reviews_escrow_reviewer" UNIQUE ("escrow_transaction_id", "reviewer_id")
       )
     `);
 
-        await queryRunner.query(`CREATE INDEX "IDX_reviews_transaction_id" ON "reviews" ("transaction_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_reviews_escrow_transaction_id" ON "reviews" ("escrow_transaction_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_reviews_reviewer_id" ON "reviews" ("reviewer_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_reviews_reviewee_id" ON "reviews" ("reviewee_id")`);
-        await queryRunner.query(`CREATE INDEX "IDX_reviews_reviewee_id_type_createdAt" ON "reviews" ("reviewee_id", "type", "createdAt")`);
+        await queryRunner.query(`CREATE INDEX "IDX_reviews_reviewee_id_createdAt" ON "reviews" ("reviewee_id", "createdAt")`);
+
+        await queryRunner.query(`
+      ALTER TABLE "reviews"
+      ADD CONSTRAINT "FK_reviews_escrow_transaction_id"
+      FOREIGN KEY ("escrow_transaction_id")
+      REFERENCES "escrow_transactions"("id")
+      ON DELETE CASCADE
+    `);
 
         await queryRunner.query(`
       ALTER TABLE "reviews"
@@ -815,6 +897,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 13. disputes
+        // buyerRefundAmount / sellerReleaseAmount are bigint kobo (1742502400000);
+        // opened_by FK ON DELETE RESTRICT (1742502500000)
         await queryRunner.query(`
       CREATE TABLE "disputes" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -826,8 +910,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "status" "dispute_status_enum" NOT NULL DEFAULT 'open',
         "resolved_by_id" uuid,
         "resolution" text,
-        "buyerRefundAmount" numeric(12,2),
-        "sellerReleaseAmount" numeric(12,2),
+        "buyerRefundAmount" bigint,
+        "sellerReleaseAmount" bigint,
         "resolvedAt" TIMESTAMP,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
@@ -852,7 +936,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       ADD CONSTRAINT "FK_disputes_opened_by_id"
       FOREIGN KEY ("opened_by_id")
       REFERENCES "users"("id")
-      ON DELETE CASCADE
+      ON DELETE RESTRICT
     `);
 
         await queryRunner.query(`
@@ -949,19 +1033,23 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 16. housing_listings
+        // Peer-handoff overhaul final shape (1742500700000): poster_id (not landlord_id),
+        // posterRelationship, expiresAt, reportCount, videoUrl varchar(500), no isVerified/verifiedAt;
+        // price / cautionFee / agentFee are bigint kobo (1742502400000)
         await queryRunner.query(`
       CREATE TABLE "housing_listings" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "landlord_id" uuid NOT NULL,
+        "poster_id" uuid NOT NULL,
         "university_id" uuid NOT NULL,
         "title" character varying(255) NOT NULL,
         "description" text NOT NULL,
         "type" "housing_type_enum" NOT NULL,
         "status" "housing_status_enum" NOT NULL DEFAULT 'available',
-        "price" numeric(12,2) NOT NULL,
+        "posterRelationship" "poster_relationship_enum" NOT NULL,
+        "price" bigint NOT NULL,
         "paymentFrequency" "payment_frequency_enum" NOT NULL,
-        "cautionFee" numeric(12,2),
-        "agentFee" numeric(12,2),
+        "cautionFee" bigint,
+        "agentFee" bigint,
         "address" character varying(500) NOT NULL,
         "area" character varying(255) NOT NULL,
         "latitude" numeric(10,7),
@@ -981,32 +1069,33 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "allowsPets" boolean NOT NULL DEFAULT false,
         "otherAmenities" jsonb,
         "imageUrls" jsonb NOT NULL DEFAULT '[]',
-        "videoUrl" jsonb,
+        "videoUrl" character varying(500),
         "rules" text,
         "availableFrom" date,
         "viewCount" integer NOT NULL DEFAULT 0,
         "inquiryCount" integer NOT NULL DEFAULT 0,
-        "isVerified" boolean NOT NULL DEFAULT false,
-        "verifiedAt" TIMESTAMP,
+        "reportCount" integer NOT NULL DEFAULT 0,
+        "expiresAt" TIMESTAMP,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_housing_listings" PRIMARY KEY ("id")
       )
     `);
 
-        await queryRunner.query(`CREATE INDEX "IDX_housing_listings_landlord_id" ON "housing_listings" ("landlord_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_housing_listings_poster_id" ON "housing_listings" ("poster_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_housing_listings_university_id" ON "housing_listings" ("university_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_housing_listings_type" ON "housing_listings" ("type")`);
         await queryRunner.query(`CREATE INDEX "IDX_housing_listings_status" ON "housing_listings" ("status")`);
         await queryRunner.query(`CREATE INDEX "IDX_housing_listings_price" ON "housing_listings" ("price", "status")`);
+        await queryRunner.query(`CREATE INDEX "IDX_housing_listings_expiresAt" ON "housing_listings" ("expiresAt")`);
         await queryRunner.query(`CREATE INDEX "IDX_housing_listings_university_id_status_createdAt" ON "housing_listings" ("university_id", "status", "createdAt")`);
         await queryRunner.query(`CREATE INDEX "IDX_housing_listings_university_id_type_status" ON "housing_listings" ("university_id", "type", "status")`);
-        await queryRunner.query(`CREATE INDEX "IDX_housing_listings_landlord_id_status" ON "housing_listings" ("landlord_id", "status")`);
+        await queryRunner.query(`CREATE INDEX "IDX_housing_listings_poster_id_status" ON "housing_listings" ("poster_id", "status")`);
 
         await queryRunner.query(`
       ALTER TABLE "housing_listings"
-      ADD CONSTRAINT "FK_housing_listings_landlord_id"
-      FOREIGN KEY ("landlord_id")
+      ADD CONSTRAINT "FK_housing_listings_poster_id"
+      FOREIGN KEY ("poster_id")
       REFERENCES "users"("id")
       ON DELETE CASCADE
     `);
@@ -1019,7 +1108,42 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       ON DELETE CASCADE
     `);
 
+        // 16b. housing_reports (housing overhaul 1742500700000)
+        await queryRunner.query(`
+      CREATE TABLE "housing_reports" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "listing_id" uuid NOT NULL,
+        "reporter_id" uuid NOT NULL,
+        "reason" "housing_report_reason_enum" NOT NULL,
+        "details" text,
+        "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_housing_reports" PRIMARY KEY ("id"),
+        CONSTRAINT "UQ_housing_reports_listing_reporter" UNIQUE ("listing_id", "reporter_id")
+      )
+    `);
+
+        await queryRunner.query(`CREATE INDEX "IDX_housing_reports_listing_id" ON "housing_reports" ("listing_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_housing_reports_reporter_id" ON "housing_reports" ("reporter_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_housing_reports_listing_id_createdAt" ON "housing_reports" ("listing_id", "createdAt")`);
+
+        await queryRunner.query(`
+      ALTER TABLE "housing_reports"
+      ADD CONSTRAINT "FK_housing_reports_listing_id"
+      FOREIGN KEY ("listing_id")
+      REFERENCES "housing_listings"("id")
+      ON DELETE CASCADE
+    `);
+
+        await queryRunner.query(`
+      ALTER TABLE "housing_reports"
+      ADD CONSTRAINT "FK_housing_reports_reporter_id"
+      FOREIGN KEY ("reporter_id")
+      REFERENCES "users"("id")
+      ON DELETE CASCADE
+    `);
+
         // 17. roommate_profiles
+        // budgetMin / budgetMax are bigint kobo (1742502400000)
         await queryRunner.query(`
       CREATE TABLE "roommate_profiles" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1029,8 +1153,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "gender" "gender_enum" NOT NULL,
         "age" integer NOT NULL,
         "bio" text,
-        "budgetMin" numeric(12,2) NOT NULL,
-        "budgetMax" numeric(12,2) NOT NULL,
+        "budgetMin" bigint NOT NULL,
+        "budgetMax" bigint NOT NULL,
         "preferredAreas" jsonb NOT NULL DEFAULT '[]',
         "moveInDate" date,
         "moveInFlexible" boolean NOT NULL DEFAULT false,
@@ -1104,6 +1228,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_roommate_interests_from_user_id" ON "roommate_interests" ("from_user_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_roommate_interests_to_user_id" ON "roommate_interests" ("to_user_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_roommate_interests_to_user_id_status" ON "roommate_interests" ("to_user_id", "status")`);
+        await queryRunner.query(`CREATE INDEX "IDX_roommate_interests_from_user_status" ON "roommate_interests" ("from_user_id", "status")`);
 
         await queryRunner.query(`
       ALTER TABLE "roommate_interests"
@@ -1122,6 +1247,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 19. buy_requests
+        // budget_min / budget_max are bigint kobo (1742502400000);
+        // is_budget_negotiable dropped (1742500200000)
         await queryRunner.query(`
       CREATE TABLE "buy_requests" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1130,9 +1257,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "title" character varying(255) NOT NULL,
         "description" text NOT NULL,
         "category" "listing_category_enum" NOT NULL,
-        "budget_min" numeric(12,2) NOT NULL,
-        "budget_max" numeric(12,2),
-        "is_budget_negotiable" boolean NOT NULL DEFAULT true,
+        "budget_min" bigint NOT NULL,
+        "budget_max" bigint,
         "urgency" "request_urgency_enum" NOT NULL DEFAULT 'flexible',
         "visibility_scope" "visibility_scope_enum" NOT NULL DEFAULT 'university',
         "faculty_id" uuid,
@@ -1185,7 +1311,71 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       ON DELETE SET NULL
     `);
 
-        // 20. conversations
+        // 20. buy_request_offers
+        // proposed_price is bigint kobo (1742502400000); image_urls jsonb replaces image_url (1742500100000)
+        // Created before escrow_transactions.buy_request_offer_id FK references it.
+        await queryRunner.query(`
+      CREATE TABLE "buy_request_offers" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "buy_request_id" uuid NOT NULL,
+        "responder_id" uuid NOT NULL,
+        "requester_id" uuid NOT NULL,
+        "proposed_price" bigint NOT NULL,
+        "item_condition" "listing_condition_enum" NOT NULL,
+        "message" text,
+        "image_urls" jsonb,
+        "status" "buy_request_offer_status_enum" NOT NULL DEFAULT 'pending',
+        "expires_at" TIMESTAMP NOT NULL,
+        "responded_at" TIMESTAMP,
+        "conversation_id" uuid,
+        "created_at" TIMESTAMP NOT NULL DEFAULT now(),
+        "updated_at" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_buy_request_offers" PRIMARY KEY ("id")
+      )
+    `);
+
+        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_buy_request_id" ON "buy_request_offers" ("buy_request_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_responder_id" ON "buy_request_offers" ("responder_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_requester_id" ON "buy_request_offers" ("requester_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_status" ON "buy_request_offers" ("status")`);
+        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_buy_request_id_status_created_at" ON "buy_request_offers" ("buy_request_id", "status", "created_at")`);
+        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_responder_id_status" ON "buy_request_offers" ("responder_id", "status")`);
+        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_requester_id_status" ON "buy_request_offers" ("requester_id", "status")`);
+
+        await queryRunner.query(`
+      ALTER TABLE "buy_request_offers"
+      ADD CONSTRAINT "FK_buy_request_offers_buy_request_id"
+      FOREIGN KEY ("buy_request_id")
+      REFERENCES "buy_requests"("id")
+      ON DELETE CASCADE
+    `);
+
+        await queryRunner.query(`
+      ALTER TABLE "buy_request_offers"
+      ADD CONSTRAINT "FK_buy_request_offers_responder_id"
+      FOREIGN KEY ("responder_id")
+      REFERENCES "users"("id")
+      ON DELETE CASCADE
+    `);
+
+        await queryRunner.query(`
+      ALTER TABLE "buy_request_offers"
+      ADD CONSTRAINT "FK_buy_request_offers_requester_id"
+      FOREIGN KEY ("requester_id")
+      REFERENCES "users"("id")
+      ON DELETE CASCADE
+    `);
+
+        // escrow_transactions -> buy_request_offers FK (now that buy_request_offers exists)
+        await queryRunner.query(`
+      ALTER TABLE "escrow_transactions"
+      ADD CONSTRAINT "FK_escrow_buy_request_offer"
+      FOREIGN KEY ("buy_request_offer_id")
+      REFERENCES "buy_request_offers"("id")
+      ON DELETE SET NULL
+    `);
+
+        // 21. conversations
         await queryRunner.query(`
       CREATE TABLE "conversations" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1269,7 +1459,16 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       ON DELETE CASCADE
     `);
 
-        // 21. messages
+        // buy_request_offers -> conversations FK (added after conversations exists)
+        await queryRunner.query(`
+      ALTER TABLE "buy_request_offers"
+      ADD CONSTRAINT "FK_buy_request_offers_conversation_id"
+      FOREIGN KEY ("conversation_id")
+      REFERENCES "conversations"("id")
+      ON DELETE SET NULL
+    `);
+
+        // 22. messages
         await queryRunner.query(`
       CREATE TABLE "messages" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1305,67 +1504,6 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       FOREIGN KEY ("sender_id")
       REFERENCES "users"("id")
       ON DELETE CASCADE
-    `);
-
-        // 22. buy_request_offers
-        await queryRunner.query(`
-      CREATE TABLE "buy_request_offers" (
-        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "buy_request_id" uuid NOT NULL,
-        "responder_id" uuid NOT NULL,
-        "requester_id" uuid NOT NULL,
-        "proposed_price" numeric(12,2) NOT NULL,
-        "item_condition" "listing_condition_enum" NOT NULL,
-        "message" text,
-        "image_url" character varying(500),
-        "status" "buy_request_offer_status_enum" NOT NULL DEFAULT 'pending',
-        "expires_at" TIMESTAMP NOT NULL,
-        "responded_at" TIMESTAMP,
-        "conversation_id" uuid,
-        "created_at" TIMESTAMP NOT NULL DEFAULT now(),
-        "updated_at" TIMESTAMP NOT NULL DEFAULT now(),
-        CONSTRAINT "PK_buy_request_offers" PRIMARY KEY ("id")
-      )
-    `);
-
-        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_buy_request_id" ON "buy_request_offers" ("buy_request_id")`);
-        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_responder_id" ON "buy_request_offers" ("responder_id")`);
-        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_requester_id" ON "buy_request_offers" ("requester_id")`);
-        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_status" ON "buy_request_offers" ("status")`);
-        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_buy_request_id_status_created_at" ON "buy_request_offers" ("buy_request_id", "status", "created_at")`);
-        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_responder_id_status" ON "buy_request_offers" ("responder_id", "status")`);
-        await queryRunner.query(`CREATE INDEX "IDX_buy_request_offers_requester_id_status" ON "buy_request_offers" ("requester_id", "status")`);
-
-        await queryRunner.query(`
-      ALTER TABLE "buy_request_offers"
-      ADD CONSTRAINT "FK_buy_request_offers_buy_request_id"
-      FOREIGN KEY ("buy_request_id")
-      REFERENCES "buy_requests"("id")
-      ON DELETE CASCADE
-    `);
-
-        await queryRunner.query(`
-      ALTER TABLE "buy_request_offers"
-      ADD CONSTRAINT "FK_buy_request_offers_responder_id"
-      FOREIGN KEY ("responder_id")
-      REFERENCES "users"("id")
-      ON DELETE CASCADE
-    `);
-
-        await queryRunner.query(`
-      ALTER TABLE "buy_request_offers"
-      ADD CONSTRAINT "FK_buy_request_offers_requester_id"
-      FOREIGN KEY ("requester_id")
-      REFERENCES "users"("id")
-      ON DELETE CASCADE
-    `);
-
-        await queryRunner.query(`
-      ALTER TABLE "buy_request_offers"
-      ADD CONSTRAINT "FK_buy_request_offers_conversation_id"
-      FOREIGN KEY ("conversation_id")
-      REFERENCES "conversations"("id")
-      ON DELETE SET NULL
     `);
 
         // 23. notifications
@@ -1489,6 +1627,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_verification_documents_user_id" ON "verification_documents" ("user_id")`);
         await queryRunner.query(`CREATE INDEX "IDX_verification_documents_status" ON "verification_documents" ("status")`);
         await queryRunner.query(`CREATE INDEX "IDX_verification_documents_user_id_type" ON "verification_documents" ("user_id", "type")`);
+        await queryRunner.query(`CREATE INDEX "IDX_verification_documents_user_status" ON "verification_documents" ("user_id", "status")`);
 
         await queryRunner.query(`
       ALTER TABLE "verification_documents"
@@ -1613,6 +1752,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_reports_priority" ON "reports" ("priority")`);
         await queryRunner.query(`CREATE INDEX "IDX_reports_status_createdAt" ON "reports" ("status", "createdAt")`);
         await queryRunner.query(`CREATE INDEX "IDX_reports_type_target_id" ON "reports" ("type", "target_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_reports_status_priority_created" ON "reports" ("status", "priority", "createdAt")`);
 
         await queryRunner.query(`
       ALTER TABLE "reports"
@@ -1639,6 +1779,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
     `);
 
         // 31. articles
+        // author_id nullable (1742502300000); image_urls/video_url (1742502200000);
+        // university_ids + gin index (1742502100000)
         await queryRunner.query(`
       CREATE TABLE "articles" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1647,16 +1789,19 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         "excerpt" text,
         "content" text NOT NULL,
         "coverImageUrl" character varying(500),
+        "image_urls" jsonb,
+        "video_url" character varying(500),
         "category" "article_category_enum" NOT NULL DEFAULT 'general',
         "tags" jsonb,
         "status" "article_status_enum" NOT NULL DEFAULT 'draft',
         "isFeatured" boolean NOT NULL DEFAULT false,
-        "author_id" uuid NOT NULL,
+        "author_id" uuid,
         "viewCount" integer NOT NULL DEFAULT 0,
         "bookmarkCount" integer NOT NULL DEFAULT 0,
         "publishedAt" TIMESTAMP,
         "metaDescription" character varying(160),
         "metaKeywords" jsonb,
+        "university_ids" jsonb DEFAULT NULL,
         "readingTime" integer NOT NULL DEFAULT 1,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
@@ -1672,6 +1817,7 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_articles_publishedAt" ON "articles" ("publishedAt")`);
         await queryRunner.query(`CREATE INDEX "IDX_articles_status_publishedAt" ON "articles" ("status", "publishedAt")`);
         await queryRunner.query(`CREATE INDEX "IDX_articles_category_status" ON "articles" ("category", "status")`);
+        await queryRunner.query(`CREATE INDEX "IDX_articles_university_ids" ON "articles" USING gin ("university_ids")`);
 
         await queryRunner.query(`
       ALTER TABLE "articles"
@@ -1845,10 +1991,95 @@ export class InitialSchema1740000000000 implements MigrationInterface {
       REFERENCES "reports"("id")
       ON DELETE SET NULL
     `);
+
+        // 36. pending_uploads (1742500300000)
+        await queryRunner.query(`
+      CREATE TABLE "pending_uploads" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "user_id" uuid NOT NULL,
+        "object_key" character varying NOT NULL,
+        "declared_size" integer,
+        "created_at" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_pending_uploads" PRIMARY KEY ("id"),
+        CONSTRAINT "FK_pending_uploads_user" FOREIGN KEY ("user_id")
+          REFERENCES "users"("id") ON DELETE CASCADE
+      )
+    `);
+
+        await queryRunner.query(`CREATE INDEX "IDX_pending_uploads_user_id" ON "pending_uploads" ("user_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_pending_uploads_created_at" ON "pending_uploads" ("created_at")`);
+
+        // 37. admins (1742502000000) — dedicated admin auth entity, independent of users
+        await queryRunner.query(`
+      CREATE TABLE "admins" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "email" varchar(255) NOT NULL,
+        "password_hash" varchar(255) NOT NULL,
+        "full_name" varchar(255) NOT NULL,
+        "role" "admin_role_enum" NOT NULL DEFAULT 'admin',
+        "refresh_token_hash" varchar(255),
+        "is_active" boolean NOT NULL DEFAULT true,
+        "last_login_at" TIMESTAMP,
+        "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_admins" PRIMARY KEY ("id"),
+        CONSTRAINT "UQ_admins_email" UNIQUE ("email")
+      )
+    `);
+
+        await queryRunner.query(`CREATE INDEX "IDX_admins_email" ON "admins" ("email")`);
+
+        // 38. admin_permissions
+        // Final shape (1742501800000 + 1742502000000): admin_id column, FKs to admins table
+        await queryRunner.query(`
+      CREATE TABLE "admin_permissions" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "admin_id" uuid NOT NULL,
+        "permission" varchar(50) NOT NULL,
+        "granted_by" uuid,
+        "created_at" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_admin_permissions" PRIMARY KEY ("id"),
+        CONSTRAINT "UQ_admin_permissions_admin_perm" UNIQUE ("admin_id", "permission"),
+        CONSTRAINT "FK_admin_permissions_admin" FOREIGN KEY ("admin_id")
+          REFERENCES "admins"("id") ON DELETE CASCADE,
+        CONSTRAINT "FK_admin_permissions_granter" FOREIGN KEY ("granted_by")
+          REFERENCES "admins"("id") ON DELETE SET NULL
+      )
+    `);
+
+        await queryRunner.query(`CREATE INDEX "IDX_admin_permissions_admin_id" ON "admin_permissions" ("admin_id")`);
+
+        // 39. admin_audit_logs
+        // Final shape (1742500900000 + 1742502000000): FK admin_id -> admins ON DELETE SET NULL
+        await queryRunner.query(`
+      CREATE TABLE "admin_audit_logs" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "admin_id" uuid NOT NULL,
+        "action" "audit_action_enum" NOT NULL,
+        "target_type" "audit_target_type_enum" NOT NULL,
+        "target_id" varchar NOT NULL,
+        "reason" text,
+        "metadata" jsonb,
+        "ip_address" varchar(45),
+        "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_admin_audit_logs" PRIMARY KEY ("id"),
+        CONSTRAINT "FK_admin_audit_logs_admin" FOREIGN KEY ("admin_id")
+          REFERENCES "admins"("id") ON DELETE SET NULL
+      )
+    `);
+
+        await queryRunner.query(`CREATE INDEX "IDX_audit_admin_id" ON "admin_audit_logs" ("admin_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_audit_admin_created" ON "admin_audit_logs" ("admin_id", "createdAt")`);
+        await queryRunner.query(`CREATE INDEX "IDX_audit_target" ON "admin_audit_logs" ("target_type", "target_id")`);
+        await queryRunner.query(`CREATE INDEX "IDX_audit_action_created" ON "admin_audit_logs" ("action", "createdAt")`);
     }
 
     public async down(queryRunner: QueryRunner): Promise<void> {
         // Drop tables in reverse order of creation
+        await queryRunner.query(`DROP TABLE IF EXISTS "admin_audit_logs" CASCADE`);
+        await queryRunner.query(`DROP TABLE IF EXISTS "admin_permissions" CASCADE`);
+        await queryRunner.query(`DROP TABLE IF EXISTS "admins" CASCADE`);
+        await queryRunner.query(`DROP TABLE IF EXISTS "pending_uploads" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "warnings" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "moderation_queue" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "ban_appeals" CASCADE`);
@@ -1862,12 +2093,13 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`DROP TABLE IF EXISTS "fcm_tokens" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "notification_preferences" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "notifications" CASCADE`);
-        await queryRunner.query(`DROP TABLE IF EXISTS "buy_request_offers" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "messages" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "conversations" CASCADE`);
+        await queryRunner.query(`DROP TABLE IF EXISTS "buy_request_offers" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "buy_requests" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "roommate_interests" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "roommate_profiles" CASCADE`);
+        await queryRunner.query(`DROP TABLE IF EXISTS "housing_reports" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "housing_listings" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "comments" CASCADE`);
         await queryRunner.query(`DROP TABLE IF EXISTS "posts" CASCADE`);
@@ -1889,6 +2121,9 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`DROP TABLE IF EXISTS "universities" CASCADE`);
 
         // Drop ENUM types
+        await queryRunner.query(`DROP TYPE IF EXISTS "audit_target_type_enum"`);
+        await queryRunner.query(`DROP TYPE IF EXISTS "audit_action_enum"`);
+        await queryRunner.query(`DROP TYPE IF EXISTS "admin_role_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "warning_reason_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "moderation_category_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "moderation_status_enum"`);
@@ -1919,6 +2154,8 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`DROP TYPE IF EXISTS "noise_level_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "cleanliness_level_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "gender_enum"`);
+        await queryRunner.query(`DROP TYPE IF EXISTS "housing_report_reason_enum"`);
+        await queryRunner.query(`DROP TYPE IF EXISTS "poster_relationship_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "payment_frequency_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "gender_preference_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "furnishing_status_enum"`);
@@ -1928,7 +2165,6 @@ export class InitialSchema1740000000000 implements MigrationInterface {
         await queryRunner.query(`DROP TYPE IF EXISTS "post_visibility_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "dispute_reason_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "dispute_status_enum"`);
-        await queryRunner.query(`DROP TYPE IF EXISTS "review_type_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "wallet_transaction_status_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "wallet_transaction_type_enum"`);
         await queryRunner.query(`DROP TYPE IF EXISTS "platform_transaction_type_enum"`);

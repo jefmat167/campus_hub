@@ -34,6 +34,7 @@ import { DevModule } from './modules/dev/dev.module';
 import { BullBoardModule } from './modules/bull-board/bull-board.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PermissionsModule } from './common/modules/permissions.module';
+import { TransactionPinModule } from './modules/transaction-pin/transaction-pin.module';
 
 @Module({
   imports: [
@@ -87,6 +88,23 @@ import { PermissionsModule } from './common/modules/permissions.module';
           port: configService.get<number>('REDIS_PORT', 6379),
           password: configService.get<string>('REDIS_PASSWORD'),
         },
+        // Global job defaults for every queue. Per-job options passed to
+        // `queue.add()` still override these. Without this block, completed and
+        // failed jobs accumulate in Redis indefinitely (eventual OOM), and jobs
+        // run with BullMQ's default of a single attempt — so a transient error
+        // silently drops the job (notably `send-push`, which passes no options).
+        defaultJobOptions: {
+          // Retry transient failures. Matches the per-job convention already
+          // used by the auth / users / escrow queues.
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1000 },
+          // Bound completed-job retention: keep a recent window for Bull Board.
+          removeOnComplete: { age: 24 * 3600, count: 1000 },
+          // Retain failed jobs (once retries are exhausted) as a bounded
+          // dead-letter trail to inspect/replay in Bull Board; the count cap
+          // stops a failure storm from exhausting Redis.
+          removeOnFail: { age: 7 * 24 * 3600, count: 1000 },
+        },
       }),
       inject: [ConfigService],
     }),
@@ -114,6 +132,7 @@ import { PermissionsModule } from './common/modules/permissions.module';
     BullBoardModule,
     AdminModule,
     PermissionsModule,
+    TransactionPinModule,
   ],
   providers: [
     {

@@ -12,10 +12,10 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { UniversitiesService } from './universities.service';
 import { AdminAuditService } from '../admin/admin-audit.service';
@@ -30,7 +30,7 @@ import { AdminListUniversitiesDto } from './dto/admin-list-universities.dto';
 
 @ApiTags('Universities (Admin)')
 @Controller('admin/universities')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(AdminJwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class AdminUniversitiesController {
   constructor(
@@ -161,7 +161,7 @@ export class AdminUniversitiesController {
     },
   })
   async createUniversity(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Body() dto: CreateUniversityDto,
   ) {
     const university = await this.universitiesService.adminCreateUniversity(dto);
@@ -204,7 +204,7 @@ export class AdminUniversitiesController {
     },
   })
   async updateUniversity(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUniversityDto,
   ) {
@@ -249,7 +249,7 @@ export class AdminUniversitiesController {
     },
   })
   async deactivateUniversity(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     const university = await this.universitiesService.adminDeactivateUniversity(id);
@@ -291,7 +291,7 @@ export class AdminUniversitiesController {
     },
   })
   async activateUniversity(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     const university = await this.universitiesService.adminActivateUniversity(id);
@@ -397,7 +397,7 @@ export class AdminUniversitiesController {
     },
   })
   async createFaculty(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Body() dto: CreateFacultyDto,
   ) {
     const faculty = await this.universitiesService.adminCreateFaculty(dto);
@@ -436,7 +436,7 @@ export class AdminUniversitiesController {
     },
   })
   async updateFaculty(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateFacultyDto,
   ) {
@@ -470,7 +470,7 @@ export class AdminUniversitiesController {
     },
   })
   async deactivateFaculty(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     await this.universitiesService.adminDeactivateFaculty(id);
@@ -483,6 +483,28 @@ export class AdminUniversitiesController {
     );
 
     return { success: true, message: 'Faculty deactivated' };
+  }
+
+  @Post('faculties/:id/activate')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
+  @ApiOperation({ summary: 'Activate faculty' })
+  @ApiParam({ name: 'id', description: 'Faculty UUID' })
+  @ApiResponse({ status: 200, description: 'Faculty activated' })
+  async activateFaculty(
+    @CurrentAdmin('id') adminId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.universitiesService.adminActivateFaculty(id);
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.FACULTY_ACTIVATE,
+      AuditTargetType.FACULTY,
+      id,
+    );
+
+    return { success: true, message: 'Faculty activated' };
   }
 
   // ─── Department CRUD ───────────────────────────────────────────
@@ -577,7 +599,7 @@ export class AdminUniversitiesController {
     },
   })
   async createDepartment(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Body() dto: CreateDepartmentDto,
   ) {
     const department = await this.universitiesService.adminCreateDepartment(dto);
@@ -616,7 +638,7 @@ export class AdminUniversitiesController {
     },
   })
   async updateDepartment(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDepartmentDto,
   ) {
@@ -650,7 +672,7 @@ export class AdminUniversitiesController {
     },
   })
   async deactivateDepartment(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     await this.universitiesService.adminDeactivateDepartment(id);
@@ -663,5 +685,27 @@ export class AdminUniversitiesController {
     );
 
     return { success: true, message: 'Department deactivated' };
+  }
+
+  @Post('departments/:id/activate')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
+  @ApiOperation({ summary: 'Activate department' })
+  @ApiParam({ name: 'id', description: 'Department UUID' })
+  @ApiResponse({ status: 200, description: 'Department activated' })
+  async activateDepartment(
+    @CurrentAdmin('id') adminId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.universitiesService.adminActivateDepartment(id);
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.DEPARTMENT_ACTIVATE,
+      AuditTargetType.DEPARTMENT,
+      id,
+    );
+
+    return { success: true, message: 'Department activated' };
   }
 }

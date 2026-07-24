@@ -9,9 +9,10 @@ import {
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
-import { Listing } from './listing.entity';
+import { Listing, DeliveryMethod } from './listing.entity';
 import { Offer } from './offer.entity';
 import { BuyRequestOffer } from './buy-request-offer.entity';
+import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum EscrowStatus {
   AWAITING_SELLER = 'awaiting_seller', // Waiting for seller to click "I'm Ready"
@@ -36,7 +37,7 @@ export class EscrowTransaction {
   @Index()
   buyerId: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'buyer_id' })
   buyer: User;
 
@@ -44,7 +45,7 @@ export class EscrowTransaction {
   @Index()
   sellerId: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'seller_id' })
   seller: User;
 
@@ -71,7 +72,7 @@ export class EscrowTransaction {
   @JoinColumn({ name: 'offer_id' })
   offer: Offer | null;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   amount: number;
 
   @Column({
@@ -91,7 +92,14 @@ export class EscrowTransaction {
   @Column({ type: 'timestamp', nullable: true })
   sellerReadyAt: Date | null;
 
-  // Delivery scheduling (set by seller when clicking "I'm Ready")
+  // Delivery method + resolved location, chosen by the buyer at order time
+  // (snapshotted from the listing; null for buy-request escrows).
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  deliveryMethod: DeliveryMethod | null;
+
+  // deliveryDate/deliveryTime are set by the seller at "I'm Ready" (meet-up
+  // only); deliveryLocation is the pickup address / chosen meet-up point,
+  // snapshotted at order time.
   @Column({ type: 'date', nullable: true })
   deliveryDate: Date | null;
 
@@ -120,10 +128,10 @@ export class EscrowTransaction {
   disputeWindowExpiresAt: Date | null; // 24h after deliveredAt
 
   // Fee tracking (calculated on completion)
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   platformFee: number; // 2.5% of amount
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   sellerPayout: number; // amount - platformFee
 
   @Column({ type: 'text', nullable: true })

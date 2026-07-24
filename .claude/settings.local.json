@@ -12,7 +12,8 @@
       "Bash(npx shadcn@latest:*)",
       "Bash(mkdir:*)",
       "Bash(node:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(./node_modules/.bin/tsc:*)"
     ]
   }
 }

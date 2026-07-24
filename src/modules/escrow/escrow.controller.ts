@@ -19,6 +19,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
   TierGuard,
@@ -28,7 +29,13 @@ import {
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
+import { Public } from '../../common/decorators/public.decorator';
+import {
+  TransactionPinGuard,
+  RequireTransactionPin,
+} from '../transaction-pin/transaction-pin.guard';
 import {
   User,
   VerificationTier,
@@ -45,7 +52,7 @@ import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
-@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard, TransactionPinGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {
@@ -57,6 +64,7 @@ export class EscrowController {
    * Seller has 72 hours to mark ready, otherwise auto-refund.
    */
   @Post()
+  @RequireTransactionPin()
   @TierAmountLimit('amount', {
     [VerificationTier.TIER_0]: 30000,
     [VerificationTier.TIER_1]: 60000,
@@ -525,11 +533,12 @@ export class EscrowController {
    * Get open disputes (admin only)
    */
   @Get('admin/disputes')
-  @UseGuards(PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.ESCROW_READ)
   @ApiOperation({
     summary: 'Get open disputes (admin)',
-    description: 'Retrieve all open disputes. Requires ADMIN or SUPER_ADMIN role.',
+    description: 'Retrieve all open disputes. Requires escrow:read or escrow:manage permission.',
   })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page', example: 20 })
@@ -578,7 +587,8 @@ export class EscrowController {
    * Get dispute details (admin only)
    */
   @Get('admin/disputes/:disputeId')
-  @UseGuards(PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.ESCROW_READ)
   @ApiOperation({
     summary: 'Get dispute details (admin)',
@@ -625,12 +635,13 @@ export class EscrowController {
    * Resolve a dispute (admin only)
    */
   @Patch('admin/disputes/:disputeId/resolve')
-  @UseGuards(PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.ESCROW_MANAGE)
   @ApiOperation({
     summary: 'Resolve dispute (admin)',
     description:
-      'Resolve a dispute by refunding the buyer, releasing to the seller, or splitting funds. Requires ADMIN or SUPER_ADMIN role.',
+      'Resolve a dispute by refunding the buyer, releasing to the seller, or splitting funds. Requires escrow:read or escrow:manage permission.',
   })
   @ApiResponse({
     status: 200,
@@ -654,13 +665,13 @@ export class EscrowController {
   })
   @ApiResponse({ status: 404, description: 'Dispute not found' })
   async resolveDispute(
-    @CurrentUser() user: User,
+    @CurrentAdmin() admin: any,
     @Param('disputeId', ParseUUIDPipe) disputeId: string,
     @Body() dto: ResolveDisputeDto,
   ) {
     const dispute = await this.escrowService.resolveDispute(
       disputeId,
-      user.id,
+      admin.id,
       dto,
     );
 
@@ -674,7 +685,8 @@ export class EscrowController {
   // ─── Admin: Escrow Transactions ──────────────────────────────────
 
   @Get('admin/transactions')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.ESCROW_READ)
   @ApiOperation({ summary: 'List all escrow transactions (admin)', description: 'Paginated, filterable by status, buyer, seller, date, amount.' })
   @ApiResponse({

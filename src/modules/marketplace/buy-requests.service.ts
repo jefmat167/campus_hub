@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder, Brackets } from 'typeorm';
+import { toKobo } from '../../common/utils/money';
 import {
   BuyRequest,
   BuyRequestStatus,
@@ -273,16 +274,17 @@ export class BuyRequestsService {
 
     // Filter by budget range (finds requests that overlap with the query range)
     if (query.minBudget !== undefined) {
+      const minBudget = query.minBudget;
       // Request's max budget (or min if no max) should be >= query's min
       qb.andWhere(
         new Brackets((subQb) => {
           subQb
-            .where('request.budgetMax >= :minBudget', { minBudget: query.minBudget })
+            .where('request.budgetMax >= :minBudget', { minBudget: toKobo(minBudget) })
             .orWhere(
               new Brackets((innerQb) => {
                 innerQb
                   .where('request.budgetMax IS NULL')
-                  .andWhere('request.budgetMin >= :minBudget', { minBudget: query.minBudget });
+                  .andWhere('request.budgetMin >= :minBudget', { minBudget: toKobo(minBudget) });
               }),
             );
         }),
@@ -290,7 +292,7 @@ export class BuyRequestsService {
     }
     if (query.maxBudget !== undefined) {
       // Request's min budget should be <= query's max
-      qb.andWhere('request.budgetMin <= :maxBudget', { maxBudget: query.maxBudget });
+      qb.andWhere('request.budgetMin <= :maxBudget', { maxBudget: toKobo(query.maxBudget) });
     }
 
     // Filter by university

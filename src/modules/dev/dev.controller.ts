@@ -15,6 +15,7 @@ import {
   User,
   VerificationTier,
   Tier1ReviewStatus,
+  Gender,
 } from '../../database/entities/user.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 
@@ -589,6 +590,7 @@ export class DevController {
       email?: string;
       phone?: string;
       fullName?: string;
+      gender?: Gender;
       tier?: VerificationTier;
       universityId: string;
       facultyId: string;
@@ -608,6 +610,7 @@ export class DevController {
       email,
       phone,
       fullName,
+      gender: body.gender || Gender.MALE,
       passwordHash: '$2b$12$test.hash.for.development.only', // Not a real hash
       universityId: body.universityId,
       facultyId: body.facultyId,

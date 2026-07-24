@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { EscrowTransaction } from './escrow.entity';
+import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum DisputeStatus {
   OPEN = 'open',
@@ -48,7 +49,7 @@ export class Dispute {
   @Column({ name: 'opened_by_id' })
   openedById: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'opened_by_id' })
   openedBy: User;
 
@@ -83,10 +84,10 @@ export class Dispute {
   @Column({ type: 'text', nullable: true })
   resolution: string | null;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   buyerRefundAmount: number | null;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   sellerReleaseAmount: number | null;
 
   @Column({ type: 'timestamp', nullable: true })

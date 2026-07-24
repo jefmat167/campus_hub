@@ -11,6 +11,7 @@ import {
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
+import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum WalletTransactionType {
   DEPOSIT = 'deposit',
@@ -19,6 +20,7 @@ export enum WalletTransactionType {
   ESCROW_RELEASE = 'escrow_release',
   ESCROW_REFUND = 'escrow_refund',
   FEE = 'fee',
+  CHARGEBACK = 'chargeback', // deposit clawed back after a card dispute/refund
 }
 
 export enum WalletTransactionStatus {
@@ -37,14 +39,15 @@ export class Wallet {
   @Index()
   userId: string;
 
-  @OneToOne(() => User, { onDelete: 'CASCADE' })
+  // RESTRICT: a user with a wallet (financial history) must not be hard-deleted.
+  @OneToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   balance: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   lockedBalance: number; // Funds in escrow
 
   @Column({ default: false })
@@ -111,7 +114,7 @@ export class WalletTransaction {
   })
   type: WalletTransactionType;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   amount: number;
 
   @Column({
@@ -135,10 +138,10 @@ export class WalletTransaction {
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown>;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   balanceBefore: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   balanceAfter: number;
 
   @CreateDateColumn()

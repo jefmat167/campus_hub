@@ -21,9 +21,11 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
@@ -182,8 +184,9 @@ export class MarketplaceController {
           viewCount: 125,
           favoriteCount: 15,
           isFavorited: true,
-          deliveryOption: 'meetup',
-          meetupLocation: 'Faculty of Science Building',
+          deliveryMethods: ['pickup', 'meetup'],
+          pickupAddress: 'Shop 12, Student Union Building',
+          meetupPoints: ['Faculty of Science Building', 'Main gate'],
           imageUrls: [
             'https://storage.example.com/listings/img1.jpg',
             'https://storage.example.com/listings/img2.jpg',
@@ -537,7 +540,7 @@ export class MarketplaceController {
   // ─── Admin Endpoints ──────────────────────────────────────────
 
   @Get('admin/listings')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MARKETPLACE_READ)
   @ApiOperation({ summary: 'List all listings (admin)', description: 'Paginated, filterable by status, category, seller, price, etc.' })
   @ApiResponse({
@@ -582,7 +585,7 @@ export class MarketplaceController {
 
   @Post('admin/listings/:id/takedown')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MARKETPLACE_MANAGE)
   @ApiOperation({ summary: 'Takedown a listing (admin)', description: 'Sets listing status to DELETED with reason.' })
   @ApiParam({ name: 'id', description: 'Listing UUID' })
@@ -605,7 +608,7 @@ export class MarketplaceController {
   })
   @ApiResponse({ status: 404, description: 'Listing not found' })
   async adminTakedownListing(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) listingId: string,
     @Body() dto: AdminTakedownDto,
   ) {

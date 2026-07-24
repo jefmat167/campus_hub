@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, In } from 'typeorm';
+import { toKobo } from '../../common/utils/money';
 import {
   RoommateProfile,
   RoommateProfileStatus,
@@ -15,7 +16,7 @@ import {
   NoiseLevel,
   SleepSchedule,
 } from '../../database/entities/roommate.entity';
-import { User } from '../../database/entities/user.entity';
+import { User, Gender } from '../../database/entities/user.entity';
 import {
   CreateRoommateProfileDto,
   ExpressInterestDto,
@@ -92,6 +93,7 @@ export class RoommateService {
   async createOrUpdateProfile(
     userId: string,
     universityId: string,
+    gender: Gender,
     dto: CreateRoommateProfileDto,
   ): Promise<RoommateProfile> {
     let profile = await this.profileRepo.findOne({
@@ -113,6 +115,11 @@ export class RoommateService {
         moveInDate: dto.moveInDate ? new Date(dto.moveInDate) : null,
       });
     }
+
+    // Gender is segregation-critical: always the authoritative account gender,
+    // never the client-supplied profile value (which could be spoofed to browse
+    // the opposite gender's pool). Discovery enforces same-gender on this field.
+    profile.gender = gender;
 
     const saved = await this.profileRepo.save(profile);
     this.logger.log(`Roommate profile ${saved.id} saved for user ${userId}`);
@@ -139,13 +146,22 @@ export class RoommateService {
   /**
    * Get a roommate profile by ID
    */
-  async getProfile(profileId: string): Promise<RoommateProfile> {
+  async getProfile(
+    profileId: string,
+    requesterGender: Gender,
+  ): Promise<RoommateProfile> {
     const profile = await this.profileRepo.findOne({
       where: { id: profileId, status: RoommateProfileStatus.ACTIVE },
       relations: ['user', 'university'],
     });
 
     if (!profile) {
+      throw new NotFoundException('Roommate profile not found');
+    }
+
+    // Gender-segregated: opposite-gender profiles are invisible. 404 (not 403)
+    // so their existence isn't revealed.
+    if (profile.gender !== requesterGender) {
       throw new NotFoundException('Roommate profile not found');
     }
 
@@ -161,6 +177,7 @@ export class RoommateService {
   async getAllProfiles(
     userId: string,
     universityId: string,
+    gender: Gender,
     dto: SearchRoommateProfilesDto,
   ): Promise<{ profiles: RoommateProfile[]; total: number }> {
     const page = dto.page || 1;
@@ -171,22 +188,21 @@ export class RoommateService {
       .leftJoinAndSelect('profile.user', 'user')
       .where('profile.universityId = :universityId', { universityId })
       .andWhere('profile.status = :status', { status: RoommateProfileStatus.ACTIVE })
-      .andWhere('profile.userId != :userId', { userId });
-
-    // Apply gender filter
-    if (dto.gender) {
-      queryBuilder.andWhere('profile.gender = :gender', { gender: dto.gender });
-    }
+      .andWhere('profile.userId != :userId', { userId })
+      // Same-gender only: roommate discovery is gender-segregated, keyed on the
+      // requester's authoritative account gender. The dto.gender filter is
+      // obsolete under this rule and intentionally ignored.
+      .andWhere('profile.gender = :gender', { gender });
 
     // Apply budget filters (find profiles with overlapping budget ranges)
     if (dto.minBudget !== undefined) {
       queryBuilder.andWhere('profile.budgetMax >= :minBudget', {
-        minBudget: dto.minBudget,
+        minBudget: toKobo(dto.minBudget),
       });
     }
     if (dto.maxBudget !== undefined) {
       queryBuilder.andWhere('profile.budgetMin <= :maxBudget', {
-        maxBudget: dto.maxBudget,
+        maxBudget: toKobo(dto.maxBudget),
       });
     }
 
@@ -216,6 +232,7 @@ export class RoommateService {
    */
   async findMatches(
     userId: string,
+    gender: Gender,
     page = 1,
     limit = 20,
   ): Promise<{ matches: Array<{ profile: RoommateProfile; score: number }>; total: number }> {
@@ -241,19 +258,16 @@ export class RoommateService {
       .leftJoinAndSelect('profile.user', 'user')
       .where('profile.universityId = :universityId', { universityId: myProfile.universityId })
       .andWhere('profile.status = :status', { status: RoommateProfileStatus.ACTIVE })
-      .andWhere('profile.userId NOT IN (:...excludeUserIds)', { excludeUserIds });
-
-    // Apply gender preference filter
-    if (myProfile.preferredGender) {
-      queryBuilder.andWhere('profile.gender = :gender', {
-        gender: myProfile.preferredGender,
-      });
-    }
+      .andWhere('profile.userId NOT IN (:...excludeUserIds)', { excludeUserIds })
+      // Same-gender only: roommate matching is gender-segregated, keyed on the
+      // requester's authoritative account gender. preferredGender is obsolete
+      // under this rule and intentionally ignored.
+      .andWhere('profile.gender = :gender', { gender });
 
     // Apply budget overlap filter
     queryBuilder.andWhere(
       '(profile.budgetMin <= :maxBudget AND profile.budgetMax >= :minBudget)',
-      { minBudget: myProfile.budgetMin, maxBudget: myProfile.budgetMax },
+      { minBudget: toKobo(myProfile.budgetMin), maxBudget: toKobo(myProfile.budgetMax) },
     );
 
     // Apply smoking preference
@@ -499,6 +513,7 @@ export class RoommateService {
    */
   async expressInterest(
     fromUserId: string,
+    fromUserGender: Gender,
     toProfileId: string,
     dto: ExpressInterestDto,
   ): Promise<RoommateInterest> {
@@ -512,6 +527,12 @@ export class RoommateService {
 
     if (toProfile.userId === fromUserId) {
       throw new BadRequestException('You cannot express interest in yourself');
+    }
+
+    // Gender-segregated: can't connect across genders. 404 to keep
+    // opposite-gender profiles invisible (consistent with getProfile / browse).
+    if (toProfile.gender !== fromUserGender) {
+      throw new NotFoundException('Roommate profile not found');
     }
 
     // Check for existing interest

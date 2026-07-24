@@ -24,6 +24,10 @@ import { PaystackService } from './paystack.service';
 import { WalletService } from '../wallet/wallet.service';
 import { SmsService } from '../sms/sms.service';
 import {
+  TransactionPinGuard,
+  RequireTransactionPin,
+} from '../transaction-pin/transaction-pin.guard';
+import {
   InitializeFundingDto,
   VerifyPaymentDto,
   AddBankAccountDto,
@@ -33,7 +37,7 @@ import {
 
 @ApiTags('Payment')
 @Controller('payment')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, TierGuard, TransactionPinGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class PaymentController {
@@ -193,6 +197,20 @@ export class PaymentController {
       throw new BadRequestException('Payment does not belong to this user');
     }
 
+    // Idempotency: if the webhook (or a prior verify) already credited this
+    // reference, return the existing state instead of crediting again.
+    const existing = await this.walletService.getTransactionByReference(
+      dto.reference,
+    );
+    if (existing) {
+      const balance = await this.walletService.getBalance(user.id);
+      return {
+        success: true,
+        data: { transaction: existing, balance },
+        message: 'Payment already credited to your wallet',
+      };
+    }
+
     // Credit wallet (amount is in kobo, convert to naira)
     const amountInNaira = result.amount / 100;
 
@@ -322,6 +340,7 @@ export class PaymentController {
     status: 400,
     description: 'Insufficient balance, no bank account, or invalid OTP',
   })
+  @RequireTransactionPin()
   async initiateWithdrawal(
     @CurrentUser() user: User,
     @Body() dto: InitiateWithdrawalDto,
@@ -361,19 +380,25 @@ export class PaymentController {
 
     const reference = this.paystackService.generateReference('WD');
 
-    // Debit wallet first
-    await this.walletService.debitWallet(
+    // Debit wallet and record a PENDING withdrawal atomically. The webhook
+    // (transfer.success/failed/reversed) transitions this same transaction.
+    // The gross `amount` leaves the wallet; a fee is withheld and only the net
+    // is transferred to the bank (the fee is realised on transfer.success).
+    const withdrawal = await this.walletService.debitForWithdrawal(
       user.id,
       dto.amount,
       reference,
-      WalletTransactionType.WITHDRAWAL,
     );
+    const { fee, netAmount } = withdrawal.metadata as unknown as {
+      fee: number;
+      netAmount: number;
+    };
 
-    // Initiate transfer via Paystack
+    // Initiate transfer via Paystack (net of the withdrawal fee)
     try {
       const transfer = await this.paystackService.initiateTransfer(
         wallet.paystackRecipientCode,
-        dto.amount,
+        netAmount,
         reference,
         'Wallet withdrawal',
       );
@@ -385,19 +410,17 @@ export class PaymentController {
         data: {
           reference,
           amount: dto.amount,
+          fee,
+          netAmount,
           status: transfer.status,
           balance,
         },
-        message: 'Withdrawal initiated successfully. You will receive the funds shortly.',
+        message: `Withdrawal initiated successfully. A ₦${fee.toLocaleString()} fee applies; ₦${netAmount.toLocaleString()} will be sent to your bank shortly.`,
       };
     } catch (error) {
-      // Reverse the debit if transfer initiation fails
-      await this.walletService.creditWallet(
-        user.id,
-        dto.amount,
-        `${reference}_reversal`,
-        WalletTransactionType.DEPOSIT,
-      );
+      // Transfer couldn't be initiated: reverse the PENDING withdrawal so the
+      // balance is refunded and the transaction is marked REVERSED.
+      await this.walletService.reverseWithdrawal(reference);
       throw error;
     }
   }

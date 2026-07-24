@@ -13,11 +13,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { ReportStatus, ReportType } from '../../database/entities/report.entity';
@@ -247,9 +249,9 @@ export class ModerationController {
    * Get all reports (admin)
    */
   @Get('admin/reports')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_READ)
-  @ApiOperation({ summary: 'List all reports', description: 'Retrieve paginated list of content reports. Filterable by status and type. Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'List all reports', description: 'Retrieve paginated list of content reports. Filterable by status and type. Requires moderation:read or moderation:manage permission.' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20)', example: 20 })
   @ApiQuery({ name: 'status', required: false, enum: ReportStatus, description: 'Filter by report status' })
@@ -276,7 +278,7 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   async getReports(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -306,9 +308,9 @@ export class ModerationController {
    * Get report details (admin)
    */
   @Get('admin/reports/:id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_READ)
-  @ApiOperation({ summary: 'Get report details', description: 'Retrieve full details of a specific report including reporter and reported user information. Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'Get report details', description: 'Retrieve full details of a specific report including reporter and reported user information. Requires moderation:read or moderation:manage permission.' })
   @ApiParam({ name: 'id', description: 'Report UUID', example: 'd4e5f6a7-b8c9-0123-defg-234567890123' })
   @ApiResponse({
     status: 200,
@@ -334,7 +336,7 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'Report not found.' })
   async getReport(@Param('id', ParseUUIDPipe) id: string) {
     const report = await this.moderationService.getReport(id);
@@ -349,9 +351,9 @@ export class ModerationController {
    * Review a report (admin)
    */
   @Patch('admin/reports/:id/review')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_MANAGE)
-  @ApiOperation({ summary: 'Review a report', description: 'Review a report and take moderation action (e.g., issue warning, remove content, ban user). Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'Review a report', description: 'Review a report and take moderation action (e.g., issue warning, remove content, ban user). Requires moderation:read or moderation:manage permission.' })
   @ApiParam({ name: 'id', description: 'Report UUID', example: 'd4e5f6a7-b8c9-0123-defg-234567890123' })
   @ApiResponse({
     status: 200,
@@ -365,10 +367,10 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'Report not found.' })
   async reviewReport(
-    @CurrentUser() user: User,
+    @CurrentAdmin() user: User,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReviewReportDto,
   ) {
@@ -385,9 +387,9 @@ export class ModerationController {
    * Ban a user (admin)
    */
   @Post('admin/users/:userId/ban')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_MANAGE)
-  @ApiOperation({ summary: 'Ban a user', description: 'Ban a user temporarily (with duration in days) or permanently. Requires ADMIN role or above.' })
+  @ApiOperation({ summary: 'Ban a user', description: 'Ban a user temporarily (with duration in days) or permanently. Requires moderation:manage permission.' })
   @ApiParam({ name: 'userId', description: 'User UUID to ban', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
     status: 201,
@@ -401,10 +403,10 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires ADMIN or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'User not found.' })
   async banUser(
-    @CurrentUser() admin: User,
+    @CurrentAdmin() admin: User,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() dto: BanUserDto,
   ) {
@@ -427,9 +429,9 @@ export class ModerationController {
    * Unban a user (admin)
    */
   @Post('admin/users/:userId/unban')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_MANAGE)
-  @ApiOperation({ summary: 'Unban a user', description: 'Remove an active ban from a user. Requires ADMIN role or above.' })
+  @ApiOperation({ summary: 'Unban a user', description: 'Remove an active ban from a user. Requires moderation:manage permission.' })
   @ApiParam({ name: 'userId', description: 'User UUID to unban', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
     status: 200,
@@ -443,10 +445,10 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires ADMIN or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'User not found.' })
   async unbanUser(
-    @CurrentUser() admin: User,
+    @CurrentAdmin() admin: User,
     @Param('userId', ParseUUIDPipe) userId: string,
   ) {
     const user = await this.moderationService.unbanUser(userId, admin.id);
@@ -462,9 +464,9 @@ export class ModerationController {
    * Issue warning to user (admin)
    */
   @Post('admin/users/:userId/warn')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_MANAGE)
-  @ApiOperation({ summary: 'Issue warning to user', description: 'Issue a moderation warning to a user with a reason and message. Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'Issue warning to user', description: 'Issue a moderation warning to a user with a reason and message. Requires moderation:read or moderation:manage permission.' })
   @ApiParam({ name: 'userId', description: 'User UUID to warn', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
     status: 201,
@@ -484,10 +486,10 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'User not found.' })
   async issueWarning(
-    @CurrentUser() admin: User,
+    @CurrentAdmin() admin: User,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() dto: IssueWarningDto,
   ) {
@@ -504,9 +506,9 @@ export class ModerationController {
    * Get user's warning count (admin)
    */
   @Get('admin/users/:userId/warnings')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_READ)
-  @ApiOperation({ summary: 'Get user warnings (admin)', description: 'Retrieve all warnings for a specific user along with the active warning count. Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'Get user warnings (admin)', description: 'Retrieve all warnings for a specific user along with the active warning count. Requires moderation:read or moderation:manage permission.' })
   @ApiParam({ name: 'userId', description: 'User UUID', example: '550e8400-e29b-41d4-a716-446655440000' })
   @ApiResponse({
     status: 200,
@@ -519,7 +521,7 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'User not found.' })
   async getUserWarnings(@Param('userId', ParseUUIDPipe) userId: string) {
     const warnings = await this.moderationService.getUserWarnings(userId);
@@ -535,9 +537,9 @@ export class ModerationController {
    * Get ban appeals (admin)
    */
   @Get('admin/appeals')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_READ)
-  @ApiOperation({ summary: 'List ban appeals', description: 'Retrieve paginated list of ban appeals. Filterable by status. Requires ADMIN role or above.' })
+  @ApiOperation({ summary: 'List ban appeals', description: 'Retrieve paginated list of ban appeals. Filterable by status. Requires moderation:manage permission.' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20)', example: 20 })
   @ApiQuery({ name: 'status', required: false, enum: BanAppealStatus, description: 'Filter by appeal status' })
@@ -561,7 +563,7 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires ADMIN or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   async getBanAppeals(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -589,9 +591,9 @@ export class ModerationController {
    * Review ban appeal (admin)
    */
   @Patch('admin/appeals/:id/review')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_MANAGE)
-  @ApiOperation({ summary: 'Review a ban appeal', description: 'Review and approve or reject a ban appeal. Approving will unban the user. Requires ADMIN role or above.' })
+  @ApiOperation({ summary: 'Review a ban appeal', description: 'Review and approve or reject a ban appeal. Approving will unban the user. Requires moderation:manage permission.' })
   @ApiParam({ name: 'id', description: 'Ban appeal UUID', example: 'f6a7b8c9-d0e1-2345-fghi-456789012345' })
   @ApiResponse({
     status: 200,
@@ -605,10 +607,10 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires ADMIN or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'Appeal not found.' })
   async reviewBanAppeal(
-    @CurrentUser() admin: User,
+    @CurrentAdmin() admin: User,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReviewAppealDto,
   ) {
@@ -625,9 +627,9 @@ export class ModerationController {
    * Get moderation queue (admin)
    */
   @Get('admin/queue')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_READ)
-  @ApiOperation({ summary: 'Get moderation queue', description: 'Retrieve paginated list of flagged content awaiting moderation review. Filterable by status. Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'Get moderation queue', description: 'Retrieve paginated list of flagged content awaiting moderation review. Filterable by status. Requires moderation:read or moderation:manage permission.' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20)', example: 20 })
   @ApiQuery({ name: 'status', required: false, enum: ModerationStatus, description: 'Filter by moderation queue status' })
@@ -654,7 +656,7 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   async getModerationQueue(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -682,9 +684,9 @@ export class ModerationController {
    * Get queue item details (admin)
    */
   @Get('admin/queue/:id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_READ)
-  @ApiOperation({ summary: 'Get queue item details', description: 'Retrieve full details of a specific moderation queue item including content snapshot and AI analysis. Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'Get queue item details', description: 'Retrieve full details of a specific moderation queue item including content snapshot and AI analysis. Requires moderation:read or moderation:manage permission.' })
   @ApiParam({ name: 'id', description: 'Moderation queue item UUID', example: 'a7b8c9d0-e1f2-3456-ghij-567890123456' })
   @ApiResponse({
     status: 200,
@@ -708,7 +710,7 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'Queue item not found.' })
   async getQueueItem(@Param('id', ParseUUIDPipe) id: string) {
     const item = await this.moderationService.getQueueItem(id);
@@ -723,9 +725,9 @@ export class ModerationController {
    * Review queue item (admin)
    */
   @Patch('admin/queue/:id/review')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.MODERATION_MANAGE)
-  @ApiOperation({ summary: 'Review a queue item', description: 'Review flagged content and take action (approve, reject, or remove). Requires MODERATOR role or above.' })
+  @ApiOperation({ summary: 'Review a queue item', description: 'Review flagged content and take action (approve, reject, or remove). Requires moderation:read or moderation:manage permission.' })
   @ApiParam({ name: 'id', description: 'Moderation queue item UUID', example: 'a7b8c9d0-e1f2-3456-ghij-567890123456' })
   @ApiResponse({
     status: 200,
@@ -739,10 +741,10 @@ export class ModerationController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - invalid or missing JWT token.' })
-  @ApiResponse({ status: 403, description: 'Forbidden - requires MODERATOR, ADMIN, or SUPER_ADMIN role.' })
+  @ApiResponse({ status: 403, description: 'Forbidden - insufficient admin permissions.' })
   @ApiResponse({ status: 404, description: 'Queue item not found.' })
   async reviewQueueItem(
-    @CurrentUser() admin: User,
+    @CurrentAdmin() admin: User,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReviewQueueItemDto,
   ) {

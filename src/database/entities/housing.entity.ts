@@ -8,6 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { KoboColumnTransformer } from '../../common/utils/money';
 import { User } from './user.entity';
 import { University } from './university.entity';
 
@@ -107,7 +108,7 @@ export class HousingListing {
   })
   posterRelationship: PosterRelationship;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   price: number;
 
   @Column({
@@ -116,10 +117,10 @@ export class HousingListing {
   })
   paymentFrequency: PaymentFrequency;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   cautionFee: number | null; // Security deposit
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   agentFee: number | null;
 
   @Column({ length: 500 })

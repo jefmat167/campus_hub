@@ -9,13 +9,13 @@ import {
   Index,
   OneToOne,
 } from 'typeorm';
-import { User } from './user.entity';
-import { University } from './university.entity';
+import { KoboColumnTransformer } from '../../common/utils/money';
+import { User, Gender } from './user.entity';
 
-export enum Gender {
-  MALE = 'male',
-  FEMALE = 'female',
-}
+// Re-exported for existing importers (seeds, roommate DTOs); canonical
+// definition now lives on the User entity.
+export { Gender };
+import { University } from './university.entity';
 
 export enum CleanlinessLevel {
   VERY_CLEAN = 'very_clean',
@@ -98,10 +98,10 @@ export class RoommateProfile {
   bio: string | null;
 
   // Budget
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   budgetMin: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   budgetMax: number;
 
   // Preferred area/location

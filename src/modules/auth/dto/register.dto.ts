@@ -11,7 +11,7 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { YearOfStudy } from '../../../database/entities/user.entity';
+import { YearOfStudy, Gender } from '../../../database/entities/user.entity';
 
 /**
  * Registration DTO
@@ -107,6 +107,15 @@ export class RegisterDto {
   @IsEnum(YearOfStudy)
   @IsNotEmpty()
   yearOfStudy: YearOfStudy;
+
+  @ApiProperty({
+    description: 'Gender',
+    enum: Gender,
+    example: Gender.MALE,
+  })
+  @IsEnum(Gender)
+  @IsNotEmpty()
+  gender: Gender;
 
   @ApiPropertyOptional({
     description: 'Short bio about the user',

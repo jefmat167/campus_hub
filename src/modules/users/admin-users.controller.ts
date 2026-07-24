@@ -18,20 +18,18 @@ import {
   ApiBearerAuth,
   ApiParam,
 } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { User } from '../../database/entities/user.entity';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { UsersService } from './users.service';
 import { AdminListUsersDto } from './dto/admin-list-users.dto';
-import { AdminChangeRoleDto } from './dto/admin-change-role.dto';
 import { AdminAdjustTierDto } from './dto/admin-adjust-tier.dto';
 
 @ApiTags('Admin - Users')
 @Controller('admin/users')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(AdminJwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class AdminUsersController {
   constructor(private readonly usersService: UsersService) { }
@@ -176,60 +174,6 @@ export class AdminUsersController {
     };
   }
 
-  @Patch(':userId/role')
-  @RequirePermission(AdminPermissions.USERS_MANAGE)
-  @ApiOperation({
-    summary: 'Change user role',
-    description: 'Change a user\'s role. Only SUPER_ADMIN can assign ADMIN/SUPER_ADMIN roles.',
-  })
-  @ApiParam({ name: 'userId', description: 'User UUID' })
-  @ApiResponse({
-    status: 200,
-    description: 'Role updated',
-    schema: {
-      example: {
-        success: true,
-        data: {
-          id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
-          email: 'amina.bello@buk.edu.ng',
-          fullName: 'Amina Bello',
-          phone: '2349031234567',
-          verificationTier: 'tier_0',
-          role: 'MODERATOR',
-          isBanned: false,
-          university: {
-            id: 'e8a1c3b5-49dd-4a72-b890-1d02a3c4d580',
-            name: 'Bayero University Kano',
-            shortName: 'BUK',
-          },
-          createdAt: '2025-11-02T08:15:00.000Z',
-          lastActiveAt: '2026-04-24T12:30:45.000Z',
-        },
-        message: 'User role updated to MODERATOR',
-      },
-    },
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Cannot change own role or insufficient permissions',
-    schema: {
-      example: {
-        statusCode: 400,
-        message: 'Cannot change your own role',
-        error: 'Bad Request',
-        timestamp: '2026-04-26T09:20:00.000Z',
-        path: '/api/v1/admin/users/b2c3d4e5-f6a7-8901-bcde-f12345678901/role',
-      },
-    },
-  })
-  async changeRole(
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @CurrentUser() admin: User,
-    @Body() dto: AdminChangeRoleDto,
-  ) {
-    return this.usersService.adminChangeRole(userId, admin.id, admin.role, dto);
-  }
-
   @Post(':userId/force-logout')
   @HttpCode(HttpStatus.OK)
   @RequirePermission(AdminPermissions.USERS_MANAGE)
@@ -250,7 +194,7 @@ export class AdminUsersController {
   })
   async forceLogout(
     @Param('userId', ParseUUIDPipe) userId: string,
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
   ) {
     return this.usersService.adminForceLogout(userId, adminId);
   }
@@ -290,7 +234,7 @@ export class AdminUsersController {
   })
   async adjustTier(
     @Param('userId', ParseUUIDPipe) userId: string,
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Body() dto: AdminAdjustTierDto,
   ) {
     return this.usersService.adminAdjustTier(userId, adminId, dto);

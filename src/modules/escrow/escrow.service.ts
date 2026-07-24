@@ -11,6 +11,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { randomInt } from 'crypto';
 import {
   EscrowTransaction,
   EscrowStatus,
@@ -20,7 +21,11 @@ import {
   DisputeStatus,
 } from '../../database/entities/dispute.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
-import { Listing, ListingStatus } from '../../database/entities/listing.entity';
+import {
+  Listing,
+  ListingStatus,
+  DeliveryMethod,
+} from '../../database/entities/listing.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { University } from '../../database/entities/university.entity';
 import {
@@ -31,6 +36,13 @@ import {
   BuyRequestStatus,
 } from '../../database/entities/buy-request.entity';
 import { getAmountLimitForTier } from '../../common/guards/tier.guard';
+import {
+  splitFee,
+  splitByPercent,
+  percentOf,
+  toKobo,
+  toNaira,
+} from '../../common/utils/money';
 import { WalletService } from '../wallet/wallet.service';
 import { PlatformWalletService } from '../wallet/platform-wallet.service';
 import { PlatformTransactionType } from '../../database/entities/platform-wallet.entity';
@@ -48,14 +60,20 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../../database/entities/notification.entity';
 import { ResendService } from '../email/resend.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class EscrowService {
   private readonly logger = new Logger(EscrowService.name);
-  private readonly PLATFORM_FEE_PERCENTAGE = 2.5; // 2.5% platform fee (deducted from seller)
-  private readonly FULFILLMENT_HOURS = 72; // 72 hours for seller to respond
-  // TODO: revert to 24 hours for production
-  private readonly DISPUTE_WINDOW_MINUTES = 5; // 5 minutes for dev/testing (production: 24 hours)
+  // Configurable via env (safe production defaults); see env.validation.ts.
+  private readonly PLATFORM_FEE_PERCENTAGE: number;
+  private readonly FULFILLMENT_HOURS: number;
+  private readonly DISPUTE_WINDOW_MINUTES: number;
+  // Hours after creation to nudge the seller while still AWAITING_SELLER.
+  private readonly FULFILLMENT_REMINDER_HOURS = [24, 48];
+  // Delivery-code verification lockout (anti-brute-force on the 4-digit code).
+  private readonly DELIVERY_CODE_MAX_ATTEMPTS = 5;
+  private readonly DELIVERY_CODE_LOCK_MS = 15 * 60 * 1000; // 15 minutes
 
   constructor(
     @InjectRepository(EscrowTransaction)
@@ -82,7 +100,101 @@ export class EscrowService {
     private escrowQueue: Queue,
     private notificationsService: NotificationsService,
     private resendService: ResendService,
-  ) { }
+    private readonly configService: ConfigService,
+  ) {
+    this.PLATFORM_FEE_PERCENTAGE = Number(
+      this.configService.get('ESCROW_PLATFORM_FEE_PERCENT', 2.5),
+    );
+    this.FULFILLMENT_HOURS = Number(
+      this.configService.get('ESCROW_FULFILLMENT_HOURS', 72),
+    );
+    this.DISPUTE_WINDOW_MINUTES = Number(
+      this.configService.get('ESCROW_DISPUTE_WINDOW_MINUTES', 1440),
+    );
+  }
+
+  /**
+   * Schedule seller nudges while the order is AWAITING_SELLER. One delayed job
+   * per offset that lands before the fulfillment window closes; each is
+   * guarded at run time and removed on state change.
+   */
+  private async scheduleFulfillmentReminders(escrowId: string): Promise<void> {
+    for (const hours of this.FULFILLMENT_REMINDER_HOURS) {
+      if (hours >= this.FULFILLMENT_HOURS) continue; // don't remind after expiry
+      await this.escrowQueue.add(
+        EscrowJobName.SEND_FULFILLMENT_REMINDER,
+        { escrowId, reminderNumber: hours },
+        {
+          delay: hours * 60 * 60 * 1000,
+          jobId: `fulfillment-reminder-${escrowId}-${hours}`,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1000 },
+        },
+      );
+    }
+  }
+
+  private async cancelFulfillmentReminders(escrowId: string): Promise<void> {
+    for (const hours of this.FULFILLMENT_REMINDER_HOURS) {
+      await this.escrowQueue.remove(`fulfillment-reminder-${escrowId}-${hours}`);
+    }
+  }
+
+  /**
+   * Notify the seller of a still-unfulfilled order (called by the reminder job).
+   * No-op if the escrow has already left AWAITING_SELLER.
+   */
+  async sendFulfillmentReminder(
+    escrowId: string,
+    reminderNumber: number,
+  ): Promise<void> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow || escrow.status !== EscrowStatus.AWAITING_SELLER) {
+      return;
+    }
+
+    const seller = await this.userRepo.findOne({
+      where: { id: escrow.sellerId },
+    });
+
+    // In-app + push. FULFILLMENT_REMINDER is non-mutable in the notifications
+    // service, so this reaches the seller regardless of their mute settings.
+    await this.notificationsService.createNotification({
+      userId: escrow.sellerId,
+      type: NotificationType.FULFILLMENT_REMINDER,
+      title: 'Action needed: confirm your order',
+      body: `Order ${escrow.orderNumber} is still awaiting your confirmation. Mark it ready before the ${this.FULFILLMENT_HOURS}h window closes, or it will be auto-cancelled.`,
+      data: {
+        escrowId: escrow.id,
+        orderNumber: escrow.orderNumber,
+        reminderHours: reminderNumber,
+        ...(escrow.listingId && { listingId: escrow.listingId }),
+        ...(escrow.buyRequestOfferId && {
+          buyRequestOfferId: escrow.buyRequestOfferId,
+        }),
+      },
+    });
+
+    // Critical "confirm or lose the sale" email — intentionally NOT gated by
+    // the user's emailEnabled preference.
+    if (seller?.email) {
+      await this.resendService.sendEmail({
+        to: seller.email,
+        subject: `Action needed: confirm order ${escrow.orderNumber}`,
+        template: 'fulfillmentReminderSeller',
+        context: {
+          sellerName: seller.fullName,
+          orderNumber: escrow.orderNumber,
+          reminderHours: reminderNumber,
+          fulfillmentHours: this.FULFILLMENT_HOURS,
+        },
+      });
+    }
+
+    this.logger.log(
+      `Sent ${reminderNumber}h fulfillment reminder to seller ${escrow.sellerId} for escrow ${escrowId}`,
+    );
+  }
 
   /**
    * Generate human-readable order number (ORD-YYYY-NNNNNN)
@@ -100,7 +212,8 @@ export class EscrowService {
    * Generate 4-digit delivery code
    */
   private generateDeliveryCodeValue(): string {
-    return String(Math.floor(1000 + Math.random() * 9000));
+    // Cryptographically secure (not Math.random). 4-digit, 1000–9999.
+    return String(randomInt(1000, 10000));
   }
 
   /**
@@ -131,6 +244,36 @@ export class EscrowService {
       throw new BadRequestException(`Insufficient balance. You need ₦${dto.amount.toLocaleString()}`);
     }
 
+    // Validate the buyer's chosen delivery method against the listing's offered
+    // set, and resolve the concrete location to snapshot onto the order.
+    const offeredMethods = listing.deliveryMethods ?? [];
+    if (!offeredMethods.includes(dto.deliveryMethod)) {
+      throw new BadRequestException(
+        'Selected delivery method is not offered for this listing',
+      );
+    }
+    let deliveryLocation: string;
+    if (dto.deliveryMethod === DeliveryMethod.MEETUP) {
+      const points = listing.meetupPoints ?? [];
+      if (
+        dto.meetupPointIndex === undefined ||
+        dto.meetupPointIndex < 0 ||
+        dto.meetupPointIndex >= points.length
+      ) {
+        throw new BadRequestException(
+          'A valid meet-up point selection is required for meet-up delivery',
+        );
+      }
+      deliveryLocation = points[dto.meetupPointIndex];
+    } else {
+      if (!listing.pickupAddress) {
+        throw new BadRequestException(
+          'This listing has no pickup address configured',
+        );
+      }
+      deliveryLocation = listing.pickupAddress;
+    }
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -150,6 +293,8 @@ export class EscrowService {
         status: EscrowStatus.AWAITING_SELLER,
         fulfillmentExpiresAt,
         notes: dto.notes || null,
+        deliveryMethod: dto.deliveryMethod,
+        deliveryLocation,
       });
 
       const savedEscrow = await queryRunner.manager.save(escrow);
@@ -174,6 +319,8 @@ export class EscrowService {
           backoff: { type: 'exponential', delay: 1000 },
         },
       );
+
+      await this.scheduleFulfillmentReminders(savedEscrow.id);
 
       this.logger.log(`Escrow ${savedEscrow.id} (${orderNumber}) initiated for ₦${dto.amount}`);
 
@@ -289,8 +436,6 @@ export class EscrowService {
 
     const buyerTier = buyer.verificationTier || VerificationTier.NONE;
     const amountLimit = getAmountLimitForTier(buyerTier, 'buying');
-    console.log("amount limit => ", amountLimit);
-    console.log("buyer tier => ", buyerTier);
 
     if (amountLimit !== null && amount > amountLimit) {
       throw new ForbiddenException({
@@ -346,6 +491,8 @@ export class EscrowService {
         backoff: { type: 'exponential', delay: 1000 },
       },
     );
+
+    await this.scheduleFulfillmentReminders(savedEscrow.id);
 
     this.logger.log(
       `Escrow ${savedEscrow.id} (${orderNumber}) initiated from buy request offer ${offer.id} for ₦${amount}`,
@@ -437,19 +584,45 @@ export class EscrowService {
       throw new BadRequestException(`Cannot mark ready. Order status is: ${escrow.status}`);
     }
 
-    // Parse delivery date and time
-    const deliveryDateObj = new Date(dto.deliveryDate);
-    const [hours, minutes] = dto.deliveryTime.split(':').map(Number);
-    deliveryDateObj.setHours(hours, minutes, 0, 0);
+    const isMeetup = escrow.deliveryMethod === DeliveryMethod.MEETUP;
 
-    // Validate delivery is in the future
-    if (deliveryDateObj <= new Date()) {
-      throw new BadRequestException('Delivery time must be in the future');
+    // Code validity window depends on the method:
+    //  - meet-up: ±2h around the seller's scheduled date/time (which must fall
+    //    inside the 72h delivery deadline)
+    //  - pick-up: open from now until the delivery deadline (collect any time)
+    let validFrom: Date;
+    let validUntil: Date;
+    let scheduledAt: Date | null = null;
+
+    if (isMeetup) {
+      if (!dto.deliveryDate || !dto.deliveryTime) {
+        throw new BadRequestException(
+          'Delivery date and time are required for meet-up delivery',
+        );
+      }
+      scheduledAt = new Date(dto.deliveryDate);
+      const [hours, minutes] = dto.deliveryTime.split(':').map(Number);
+      scheduledAt.setHours(hours, minutes, 0, 0);
+
+      if (scheduledAt <= new Date()) {
+        throw new BadRequestException('Delivery time must be in the future');
+      }
+      if (
+        escrow.fulfillmentExpiresAt &&
+        scheduledAt > escrow.fulfillmentExpiresAt
+      ) {
+        throw new BadRequestException(
+          'Delivery must be scheduled within the 72-hour delivery window',
+        );
+      }
+      validFrom = new Date(scheduledAt.getTime() - 2 * 60 * 60 * 1000);
+      validUntil = new Date(scheduledAt.getTime() + 2 * 60 * 60 * 1000);
+    } else {
+      validFrom = new Date();
+      validUntil =
+        escrow.fulfillmentExpiresAt ??
+        new Date(Date.now() + this.FULFILLMENT_HOURS * 60 * 60 * 1000);
     }
-
-    // Calculate code validity window (±2 hours)
-    const validFrom = new Date(deliveryDateObj.getTime() - 2 * 60 * 60 * 1000);
-    const validUntil = new Date(deliveryDateObj.getTime() + 2 * 60 * 60 * 1000);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -459,9 +632,11 @@ export class EscrowService {
       // Update escrow
       escrow.status = EscrowStatus.SELLER_READY;
       escrow.sellerReadyAt = new Date();
-      escrow.deliveryDate = new Date(dto.deliveryDate);
-      escrow.deliveryTime = dto.deliveryTime;
-      escrow.deliveryLocation = dto.deliveryLocation;
+      if (isMeetup) {
+        escrow.deliveryDate = new Date(dto.deliveryDate!);
+        escrow.deliveryTime = dto.deliveryTime!;
+      }
+      // deliveryLocation was snapshotted at order time — leave it as-is.
 
       await queryRunner.manager.save(escrow);
 
@@ -475,33 +650,44 @@ export class EscrowService {
 
       await queryRunner.manager.save(deliveryCode);
 
-      // Remove fulfillment expiry job (seller responded in time)
-      await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
+      // Keep the fulfillment-expiry job running — it now enforces the 72h
+      // *delivery* deadline through SELLER_READY (auto-refund if undelivered).
+      // Only the pre-ready "confirm your order" reminders are cancelled.
+      await this.cancelFulfillmentReminders(escrowId);
 
       await queryRunner.commitTransaction();
 
       this.logger.log(`Seller ready for escrow ${escrowId}, delivery scheduled for ${dto.deliveryDate} ${dto.deliveryTime}`);
 
-      // Format delivery date for display (e.g. "Mar 21, 2026")
-      const formattedDeliveryDate = deliveryDateObj.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
+      const location = escrow.deliveryLocation;
+      const formattedDeliveryDate = scheduledAt
+        ? scheduledAt.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          })
+        : null;
+
+      // Method-appropriate body: meet-up includes the scheduled date/time;
+      // pick-up is collect-any-time at the pickup address.
+      const body = isMeetup
+        ? `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Meet-up scheduled for ${formattedDeliveryDate} at ${dto.deliveryTime}, at ${location}.`
+        : `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Collect your item at ${location} and share the code with the seller.`;
 
       // Notify buyer — push + in-app
       await this.notificationsService.createNotification({
         userId: escrow.buyerId,
         type: NotificationType.DELIVERY_CODE_SENT,
         title: 'Your delivery code is ready',
-        body: `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Delivery scheduled for ${formattedDeliveryDate} at ${dto.deliveryTime} at ${dto.deliveryLocation}.`,
+        body,
         data: {
           escrowId,
           orderNumber: escrow.orderNumber,
           deliveryCode: deliveryCode.code,
+          deliveryMethod: escrow.deliveryMethod,
           deliveryDate: formattedDeliveryDate,
-          deliveryTime: dto.deliveryTime,
-          deliveryLocation: dto.deliveryLocation,
+          deliveryTime: dto.deliveryTime ?? null,
+          deliveryLocation: location,
         },
       });
 
@@ -516,9 +702,10 @@ export class EscrowService {
             buyerName: buyer.fullName,
             orderNumber: escrow.orderNumber,
             deliveryCode: deliveryCode.code,
-            deliveryDate: formattedDeliveryDate,
-            deliveryTime: dto.deliveryTime,
-            deliveryLocation: dto.deliveryLocation,
+            deliveryMethod: escrow.deliveryMethod,
+            deliveryDate: formattedDeliveryDate ?? '',
+            deliveryTime: dto.deliveryTime ?? '',
+            deliveryLocation: location ?? '',
           },
         });
       }
@@ -639,12 +826,38 @@ export class EscrowService {
       throw new NotFoundException('No active delivery code found');
     }
 
-    // Validate code matches
-    if (deliveryCode.code !== code) {
-      throw new BadRequestException('Invalid delivery code');
+    // Anti-brute-force: a 4-digit code is only ~9k values, so cap wrong guesses.
+    if (deliveryCode.isLocked) {
+      throw new ForbiddenException(
+        'Too many incorrect delivery-code attempts. Verification is locked; wait a few minutes or ask the buyer to resend the code.',
+      );
     }
 
-    // Validate code is within time window
+    // Validate code matches — a wrong guess counts toward the lockout.
+    if (deliveryCode.code !== code) {
+      const attempts = deliveryCode.verifyAttempts + 1;
+      if (attempts >= this.DELIVERY_CODE_MAX_ATTEMPTS) {
+        // Reset the counter and lock; a fresh window opens after the cooldown.
+        deliveryCode.verifyAttempts = 0;
+        deliveryCode.lockedUntil = new Date(
+          Date.now() + this.DELIVERY_CODE_LOCK_MS,
+        );
+        await this.deliveryCodeRepo.save(deliveryCode);
+        throw new ForbiddenException(
+          'Too many incorrect delivery-code attempts. Verification is locked for 15 minutes; ask the buyer to resend the code.',
+        );
+      }
+      deliveryCode.verifyAttempts = attempts;
+      await this.deliveryCodeRepo.save(deliveryCode);
+      throw new BadRequestException(
+        `Invalid delivery code. ${
+          this.DELIVERY_CODE_MAX_ATTEMPTS - attempts
+        } attempt(s) remaining.`,
+      );
+    }
+
+    // Validate code is within time window (a correct code at the wrong time
+    // does not burn an attempt).
     const now = new Date();
     if (now < deliveryCode.validFrom)
       throw new BadRequestException('Delivery code is not yet valid. Please wait until the delivery window.')
@@ -713,8 +926,13 @@ export class EscrowService {
       return;
     }
 
-    // Only expire if still awaiting seller
-    if (escrow.status !== EscrowStatus.AWAITING_SELLER) {
+    // Auto-refund if the order hasn't been delivered by the 72h deadline —
+    // covers both an unresponsive seller (AWAITING_SELLER) and a seller who
+    // marked ready but never completed the handoff (SELLER_READY).
+    if (
+      escrow.status !== EscrowStatus.AWAITING_SELLER &&
+      escrow.status !== EscrowStatus.SELLER_READY
+    ) {
       this.logger.log(
         `Escrow ${escrowId} status is ${escrow.status}, skipping expiry`,
       );
@@ -825,16 +1043,22 @@ export class EscrowService {
     await queryRunner.startTransaction();
 
     try {
-      // Calculate platform fee (2.5%)
-      const platformFee =
-        (Number(escrow.amount) * this.PLATFORM_FEE_PERCENTAGE) / 100;
-      const sellerPayout = Number(escrow.amount) - platformFee;
+      // Platform fee (2.5%), computed in kobo so fee + payout === amount.
+      const { fee: platformFee, payout: sellerPayout } = splitFee(
+        Number(escrow.amount),
+        this.PLATFORM_FEE_PERCENTAGE,
+      );
 
-      // Release funds to seller (minus platform fee)
-      await this.walletService.releaseFunds(
+      // Move the full amount out of the buyer's locked balance: payout to the
+      // seller, fee to the platform wallet (no refund on a completed order).
+      await this.walletService.settleEscrow(
         escrow.buyerId,
         escrow.sellerId,
-        sellerPayout,
+        {
+          total: Number(escrow.amount),
+          toSeller: sellerPayout,
+          toPlatform: platformFee,
+        },
         `ESCROW_RELEASE_${escrow.id}`,
         queryRunner,
       );
@@ -934,13 +1158,18 @@ export class EscrowService {
         });
 
         if (university?.cancellationFeeEnabled && university.cancellationFeePercent > 0) {
-          const cancellationFee =
-            (Number(escrow.amount) * Number(university.cancellationFeePercent)) / 100;
+          const cancellationFee = percentOf(
+            Number(escrow.amount),
+            Number(university.cancellationFeePercent),
+          );
 
-          // Split: 60% to seller, 40% to platform
-          sellerCompensation = cancellationFee * 0.6;
-          platformShare = cancellationFee * 0.4;
-          buyerRefund = Number(escrow.amount) - cancellationFee;
+          // Split: 60% to seller, remainder to platform (kobo-exact).
+          const split = splitByPercent(cancellationFee, 60);
+          sellerCompensation = split.portion;
+          platformShare = split.remainder;
+          buyerRefund = toNaira(
+            toKobo(Number(escrow.amount)) - toKobo(cancellationFee),
+          );
 
           this.logger.log(
             `Cancellation fee applied: ₦${cancellationFee} (seller: ₦${sellerCompensation}, platform: ₦${platformShare})`,
@@ -948,35 +1177,36 @@ export class EscrowService {
         }
       }
 
-      // Refund buyer
-      if (buyerRefund > 0) {
+      if (sellerCompensation > 0 || platformShare > 0) {
+        // Cancellation fee applies: fully release the buyer's hold, distribute
+        // the fee (seller compensation + platform share) and refund the rest.
+        await this.walletService.settleEscrow(
+          escrow.buyerId,
+          escrow.sellerId,
+          {
+            total: Number(escrow.amount),
+            toSeller: sellerCompensation,
+            toPlatform: platformShare,
+          },
+          `ESCROW_CANCEL_${escrow.id}`,
+          queryRunner,
+        );
+
+        if (platformShare > 0) {
+          await this.platformWalletService.creditPlatformFee(
+            platformShare,
+            escrow.id,
+            PlatformTransactionType.CANCELLATION_FEE,
+            undefined,
+            queryRunner,
+          );
+        }
+      } else {
+        // No fee: simply unlock the buyer's held funds back to available.
         await this.walletService.refundFunds(
           escrow.buyerId,
           buyerRefund,
           `ESCROW_CANCEL_${escrow.id}`,
-          queryRunner,
-        );
-      }
-
-      // Credit seller compensation
-      if (sellerCompensation > 0) {
-        await this.walletService.creditWallet(
-          escrow.sellerId,
-          sellerCompensation,
-          `CANCEL_COMPENSATION_${escrow.id}`,
-          undefined,
-          undefined,
-          queryRunner,
-        );
-      }
-
-      // Credit platform share
-      if (platformShare > 0) {
-        await this.platformWalletService.creditPlatformFee(
-          platformShare,
-          escrow.id,
-          PlatformTransactionType.CANCELLATION_FEE,
-          undefined,
           queryRunner,
         );
       }
@@ -1008,6 +1238,7 @@ export class EscrowService {
       // Remove any pending jobs
       await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
       await this.escrowQueue.remove(`auto-release-${escrowId}`);
+      await this.cancelFulfillmentReminders(escrowId);
 
       await queryRunner.commitTransaction();
 
@@ -1139,17 +1370,24 @@ export class EscrowService {
 
     const escrow = dispute.escrow;
 
-    // Validate resolution amounts for split
+    // Validate resolution amounts for split: the gross buyer refund and seller
+    // release must sum EXACTLY to the escrow amount (the platform's 1%-per-side
+    // cut is taken from these gross figures, not added on top).
     if (dto.resolution === DisputeStatus.RESOLVED_SPLIT) {
-      if (!dto.buyerRefundAmount && !dto.sellerReleaseAmount) {
+      const buyerRefundGross = Number(dto.buyerRefundAmount || 0);
+      const sellerReleaseGross = Number(dto.sellerReleaseAmount || 0);
+      if (buyerRefundGross <= 0 && sellerReleaseGross <= 0) {
         throw new BadRequestException(
           'Please specify refund/release amounts for split resolution',
         );
       }
-      const total =
-        (dto.buyerRefundAmount || 0) + (dto.sellerReleaseAmount || 0);
-      if (total > Number(escrow.amount)) {
-        throw new BadRequestException('Total exceeds escrow amount');
+      if (
+        toKobo(buyerRefundGross) + toKobo(sellerReleaseGross) !==
+        toKobo(Number(escrow.amount))
+      ) {
+        throw new BadRequestException(
+          'Buyer refund and seller release must sum exactly to the escrow amount',
+        );
       }
     }
 
@@ -1172,16 +1410,21 @@ export class EscrowService {
           escrow.refundedAt = new Date();
           break;
 
-        case DisputeStatus.RESOLVED_SELLER:
-          // Release to seller (with platform fee deduction)
-          const platformFee =
-            (Number(escrow.amount) * this.PLATFORM_FEE_PERCENTAGE) / 100;
-          const sellerPayout = Number(escrow.amount) - platformFee;
+        case DisputeStatus.RESOLVED_SELLER: {
+          // Release to seller (with 2.5% platform fee deduction).
+          const { fee: platformFee, payout: sellerPayout } = splitFee(
+            Number(escrow.amount),
+            this.PLATFORM_FEE_PERCENTAGE,
+          );
 
-          await this.walletService.releaseFunds(
+          await this.walletService.settleEscrow(
             escrow.buyerId,
             escrow.sellerId,
-            sellerPayout,
+            {
+              total: Number(escrow.amount),
+              toSeller: sellerPayout,
+              toPlatform: platformFee,
+            },
             `DISPUTE_RELEASE_${dispute.id}`,
             queryRunner,
           );
@@ -1200,31 +1443,50 @@ export class EscrowService {
           escrow.platformFee = platformFee;
           escrow.sellerPayout = sellerPayout;
           break;
+        }
 
-        case DisputeStatus.RESOLVED_SPLIT:
-          // Split between buyer and seller
-          if (dto.buyerRefundAmount && dto.buyerRefundAmount > 0) {
-            await this.walletService.refundFunds(
-              escrow.buyerId,
-              dto.buyerRefundAmount,
-              `DISPUTE_SPLIT_REFUND_${dispute.id}`,
+        case DisputeStatus.RESOLVED_SPLIT: {
+          // Gross amounts sum to escrow.amount (validated above). Platform
+          // takes 1% from each side; buyer/seller receive the remaining 99%.
+          const buyerRefundGross = Number(dto.buyerRefundAmount || 0);
+          const sellerReleaseGross = Number(dto.sellerReleaseAmount || 0);
+
+          const platformFromRefund = percentOf(buyerRefundGross, 1);
+          const platformFromRelease = percentOf(sellerReleaseGross, 1);
+          const toPlatform = toNaira(
+            toKobo(platformFromRefund) + toKobo(platformFromRelease),
+          );
+          const toSeller = toNaira(
+            toKobo(sellerReleaseGross) - toKobo(platformFromRelease),
+          );
+          // Buyer refund (= buyerRefundGross - platformFromRefund) is the
+          // implicit remainder handled inside settleEscrow.
+
+          await this.walletService.settleEscrow(
+            escrow.buyerId,
+            escrow.sellerId,
+            { total: Number(escrow.amount), toSeller, toPlatform },
+            `DISPUTE_SPLIT_${dispute.id}`,
+            queryRunner,
+          );
+
+          if (toPlatform > 0) {
+            await this.platformWalletService.creditPlatformFee(
+              toPlatform,
+              escrow.id,
+              PlatformTransactionType.ESCROW_FEE,
+              'Platform fee from disputed split resolution',
               queryRunner,
             );
           }
-          if (dto.sellerReleaseAmount && dto.sellerReleaseAmount > 0) {
-            await this.walletService.releaseFunds(
-              escrow.buyerId,
-              escrow.sellerId,
-              dto.sellerReleaseAmount,
-              `DISPUTE_SPLIT_RELEASE_${dispute.id}`,
-              queryRunner,
-            );
-          }
+
           dispute.buyerRefundAmount = dto.buyerRefundAmount || null;
           dispute.sellerReleaseAmount = dto.sellerReleaseAmount || null;
           escrow.status = EscrowStatus.COMPLETED;
           escrow.releasedAt = new Date();
+          escrow.platformFee = toPlatform;
           break;
+        }
       }
 
       // Update dispute
@@ -1357,10 +1619,10 @@ export class EscrowService {
       qb.andWhere('e.createdAt <= :dateTo', { dateTo: dto.dateTo });
     }
     if (dto.minAmount) {
-      qb.andWhere('e.amount >= :minAmount', { minAmount: Number(dto.minAmount) });
+      qb.andWhere('e.amount >= :minAmount', { minAmount: toKobo(Number(dto.minAmount)) });
     }
     if (dto.maxAmount) {
-      qb.andWhere('e.amount <= :maxAmount', { maxAmount: Number(dto.maxAmount) });
+      qb.andWhere('e.amount <= :maxAmount', { maxAmount: toKobo(Number(dto.maxAmount)) });
     }
 
     qb.orderBy('e.createdAt', sortOrder)

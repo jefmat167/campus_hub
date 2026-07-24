@@ -22,10 +22,15 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
+import { Public } from '../../common/decorators/public.decorator';
+import { AdminPermissions } from '../../common/constants/permissions';
 import { UploadService, UploadFolder } from './upload.service';
 import { GeneratePresignedUrlsDto } from './dto/presigned-url.dto';
 
@@ -379,6 +384,96 @@ export class UploadController {
       success: true,
       data: result,
       message: 'Attachment uploaded successfully',
+    };
+  }
+
+  // ============ ADMIN UPLOAD ENDPOINTS ============
+
+  @Post('admin/article-image')
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.NEWS_MANAGE)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Upload article image (admin)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Image file (JPEG, PNG, GIF, WEBP). Max 5MB',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadArticleImage(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: /^image\/(jpeg|png|gif|webp)$/ }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    const result = await this.uploadService.uploadFile(file, {
+      folder: UploadFolder.ARTICLES,
+      maxSizeBytes: 5 * 1024 * 1024,
+      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    });
+
+    return {
+      success: true,
+      data: result,
+      message: 'Article image uploaded successfully',
+    };
+  }
+
+  @Post('admin/article-video')
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.NEWS_MANAGE)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Upload article video (admin)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Video file (MP4, MOV, WEBM). Max 50MB',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadArticleVideo(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 50 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: /^video\/(mp4|quicktime|webm)$/ }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    const result = await this.uploadService.uploadFile(file, {
+      folder: UploadFolder.ARTICLES,
+      maxSizeBytes: 50 * 1024 * 1024,
+      allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/webm'],
+    });
+
+    return {
+      success: true,
+      data: result,
+      message: 'Article video uploaded successfully',
     };
   }
 

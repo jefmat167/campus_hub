@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
+import { toKobo } from '../../common/utils/money';
 import {
   HousingListing,
   HousingStatus,
@@ -203,8 +204,8 @@ export class HousingService {
     }
 
     if (type) queryBuilder.andWhere('housing.type = :type', { type });
-    if (minPrice !== undefined) queryBuilder.andWhere('housing.price >= :minPrice', { minPrice });
-    if (maxPrice !== undefined) queryBuilder.andWhere('housing.price <= :maxPrice', { maxPrice });
+    if (minPrice !== undefined) queryBuilder.andWhere('housing.price >= :minPrice', { minPrice: toKobo(minPrice) });
+    if (maxPrice !== undefined) queryBuilder.andWhere('housing.price <= :maxPrice', { maxPrice: toKobo(maxPrice) });
     if (area) queryBuilder.andWhere('housing.area ILIKE :area', { area: `%${area}%` });
     if (bedrooms !== undefined) queryBuilder.andWhere('housing.bedrooms >= :bedrooms', { bedrooms });
     if (bathrooms !== undefined) queryBuilder.andWhere('housing.bathrooms >= :bathrooms', { bathrooms });
@@ -518,12 +519,17 @@ export class HousingService {
   async getReportedListings(
     page = 1,
     limit = 20,
+    universityId?: string,
   ): Promise<{
     listings: Array<HousingListing & { reports: HousingReport[] }>;
     total: number;
   }> {
+    const where: any = { status: HousingStatus.UNDER_REVIEW };
+    if (universityId) {
+      where.universityId = universityId;
+    }
     const [listings, total] = await this.housingRepo.findAndCount({
-      where: { status: HousingStatus.UNDER_REVIEW },
+      where,
       relations: ['poster'],
       order: { updatedAt: 'DESC' },
       skip: (page - 1) * limit,

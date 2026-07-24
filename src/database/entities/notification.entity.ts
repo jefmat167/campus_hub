@@ -27,6 +27,7 @@ export enum NotificationType {
   DELIVERY_CONFIRMED = 'delivery_confirmed', // Code verified
   ORDER_AUTO_COMPLETED = 'order_auto_completed', // 24h auto-release
   ORDER_EXPIRED = 'order_expired', // 72h fulfillment expired
+  FULFILLMENT_REMINDER = 'fulfillment_reminder', // nudge seller while AWAITING_SELLER
   ESCROW_RELEASED = 'escrow_released',
   ESCROW_CANCELLED = 'escrow_cancelled',
   ESCROW_DISPUTED = 'escrow_disputed',

@@ -45,6 +45,13 @@ export class DeliveryCode {
   @Column({ type: 'timestamp', nullable: true })
   invalidatedAt: Date | null;
 
+  // Anti-brute-force: wrong verify attempts + a temporary lock on this code.
+  @Column({ type: 'int', default: 0 })
+  verifyAttempts: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  lockedUntil: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 
@@ -73,5 +80,12 @@ export class DeliveryCode {
    */
   get isNotYetValid(): boolean {
     return new Date() < this.validFrom;
+  }
+
+  /**
+   * Whether verification is temporarily locked after too many wrong attempts.
+   */
+  get isLocked(): boolean {
+    return !!this.lockedUntil && new Date() < this.lockedUntil;
   }
 }

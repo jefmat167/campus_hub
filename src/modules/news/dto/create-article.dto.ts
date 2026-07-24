@@ -50,6 +50,23 @@ export class CreateArticleDto {
   @IsUrl()
   coverImageUrl?: string;
 
+  @ApiPropertyOptional({
+    description: 'Array of image URLs for the article body',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUrl({}, { each: true })
+  imageUrls?: string[];
+
+  @ApiPropertyOptional({
+    description: 'URL to the article video',
+    example: 'https://storage.example.com/articles/campus-tour.mp4',
+  })
+  @IsOptional()
+  @IsUrl()
+  videoUrl?: string;
+
   @ApiProperty({
     description: 'Article category',
     enum: ArticleCategory,
@@ -106,4 +123,14 @@ export class CreateArticleDto {
   @IsArray()
   @IsString({ each: true })
   metaKeywords?: string[];
+
+  @ApiPropertyOptional({
+    description: 'University IDs this article is scoped to. If empty or not provided, the article is visible to all universities.',
+    example: ['a1b2c3d4-e5f6-7890-abcd-ef1234567890'],
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  universityIds?: string[];
 }

@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Param,
   Query,
   Body,
@@ -14,18 +15,23 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
+import { VelocityService } from './velocity.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { VerificationTier } from '../../database/entities/user.entity';
 import { AdminAuditService } from '../admin/admin-audit.service';
 import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
 import { AdminListTransactionsDto } from './dto/admin-list-transactions.dto';
 import { AdminWalletAdjustmentDto } from './dto/admin-wallet-adjustment.dto';
+import { UpdateTransactionCapDto } from './dto/update-transaction-cap.dto';
 
 @ApiTags('Wallet')
 @Controller('wallet')
@@ -35,6 +41,7 @@ import { AdminWalletAdjustmentDto } from './dto/admin-wallet-adjustment.dto';
 export class WalletController {
   constructor(
     private readonly walletService: WalletService,
+    private readonly velocityService: VelocityService,
     private readonly auditService: AdminAuditService,
   ) {}
 
@@ -156,7 +163,8 @@ export class WalletController {
   // ─── Admin Endpoints ────────────────────────────────────────────
 
   @Get('admin/transactions')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.WALLET_READ)
   @ApiOperation({ summary: 'List all wallet transactions (admin)', description: 'Paginated, filterable by type, status, user, date, amount.' })
   @ApiResponse({
@@ -198,7 +206,8 @@ export class WalletController {
   }
 
   @Get('admin/withdrawals')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.WALLET_READ)
   @ApiOperation({ summary: 'List withdrawals (admin)', description: 'Filterable by status, date range.' })
   @ApiResponse({
@@ -240,10 +249,11 @@ export class WalletController {
   }
 
   @Post('admin/adjust')
+  @Public()
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.WALLET_MANAGE)
-  @ApiOperation({ summary: 'Manual wallet adjustment (admin)', description: 'Credit or debit a user\'s wallet with reason. SUPER_ADMIN only.' })
+  @ApiOperation({ summary: 'Manual wallet adjustment (admin)', description: 'Credit or debit a user\'s wallet with reason. Requires wallet:manage permission.' })
   @ApiResponse({
     status: 200,
     description: 'Adjustment applied',
@@ -266,7 +276,7 @@ export class WalletController {
     },
   })
   async adminWalletAdjustment(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Body() dto: AdminWalletAdjustmentDto,
   ) {
     const transaction = await this.walletService.adminWalletAdjustment(
@@ -286,5 +296,82 @@ export class WalletController {
     );
 
     return { success: true, data: transaction, message: `Wallet ${dto.type} applied` };
+  }
+
+  @Get('admin/transaction-caps')
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.WALLET_READ)
+  @ApiOperation({
+    summary: 'List cumulative transaction caps (admin)',
+    description:
+      'Per-tier spend & withdrawal ceilings. `amount` is Naira; null = unlimited. Only the `daily` period is enforced in v1.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Caps retrieved',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          { tier: 'tier_0', capType: 'spend', period: 'daily', amount: 100000 },
+          { tier: 'tier_0', capType: 'withdrawal', period: 'daily', amount: 50000 },
+          { tier: 'tier_2', capType: 'spend', period: 'daily', amount: null },
+        ],
+      },
+    },
+  })
+  async adminListTransactionCaps() {
+    const caps = await this.velocityService.listCaps();
+    return { success: true, data: caps };
+  }
+
+  @Patch('admin/transaction-caps')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
+  @RequirePermission(AdminPermissions.WALLET_MANAGE)
+  @ApiOperation({
+    summary: 'Update a cumulative transaction cap (admin)',
+    description:
+      'Set the ceiling for one (tier, capType, period). Send `amount: null` for unlimited. Requires wallet:manage; audit-logged. Takes effect immediately (cache is busted).',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Cap updated',
+    schema: {
+      example: {
+        success: true,
+        data: { tier: 'tier_1', capType: 'withdrawal', period: 'daily', amount: 250000 },
+        message: 'Transaction cap updated',
+      },
+    },
+  })
+  async adminUpdateTransactionCap(
+    @CurrentAdmin('id') adminId: string,
+    @Body() dto: UpdateTransactionCapDto,
+  ) {
+    const cap = await this.velocityService.updateCap(
+      dto.tier,
+      dto.capType,
+      dto.period,
+      dto.amount,
+    );
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.TRANSACTION_CAP_UPDATE,
+      AuditTargetType.WALLET,
+      `cap:${dto.tier}:${dto.capType}:${dto.period}`,
+      undefined,
+      {
+        tier: dto.tier,
+        capType: dto.capType,
+        period: dto.period,
+        amount: dto.amount,
+      },
+    );
+
+    return { success: true, data: cap, message: 'Transaction cap updated' };
   }
 }

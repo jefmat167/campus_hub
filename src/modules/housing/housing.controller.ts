@@ -21,6 +21,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -44,7 +45,7 @@ export class HousingController {
   // ---------- Moderator / admin routes (declared before :id routes) ----------
 
   @Get('admin/reports')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.HOUSING_READ)
   @ApiOperation({
     summary: 'List housing listings currently under review',
@@ -101,10 +102,12 @@ export class HousingController {
   async getReportedListings(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('universityId') universityId?: string,
   ) {
     const { listings, total } = await this.housingService.getReportedListings(
       Number(page) || 1,
       Number(limit) || 20,
+      universityId,
     );
     return {
       success: true,
@@ -119,7 +122,7 @@ export class HousingController {
   }
 
   @Post('admin/:id/dismiss-reports')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.HOUSING_MANAGE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -150,7 +153,7 @@ export class HousingController {
   }
 
   @Post('admin/:id/take-down')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.HOUSING_MANAGE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

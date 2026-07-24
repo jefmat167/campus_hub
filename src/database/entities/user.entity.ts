@@ -41,9 +41,6 @@ export enum Tier1ReviewStatus {
 
 export enum UserRole {
   USER = 'user',
-  MODERATOR = 'moderator',
-  ADMIN = 'admin',
-  SUPER_ADMIN = 'super_admin',
 }
 
 export enum YearOfStudy {
@@ -54,6 +51,11 @@ export enum YearOfStudy {
   YEAR_5 = '5',
   YEAR_6 = '6',
   POSTGRADUATE = 'postgraduate',
+}
+
+export enum Gender {
+  MALE = 'male',
+  FEMALE = 'female',
 }
 
 @Entity('users')
@@ -92,8 +94,24 @@ export class User {
   @Exclude()
   passwordHash: string;
 
+  // Transaction PIN (money-out step-up) — bcrypt hash + failed-attempt lockout.
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  @Exclude()
+  pinHash: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  @Exclude()
+  pinAttempts: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  @Exclude()
+  pinLockedUntil: Date | null;
+
   @Column({ type: 'varchar', length: 255 })
   fullName: string;
+
+  @Column({ type: 'enum', enum: Gender })
+  gender: Gender;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   profilePhotoUrl: string;

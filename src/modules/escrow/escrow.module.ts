@@ -16,6 +16,7 @@ import { WalletModule } from '../wallet/wallet.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { EmailModule } from '../email/email.module';
 import { AdminModule } from '../admin/admin.module';
+import { TransactionPinModule } from '../transaction-pin/transaction-pin.module';
 import { ESCROW_QUEUE_NAME } from './interfaces/escrow-jobs.interface';
 
 @Module({
@@ -37,6 +38,7 @@ import { ESCROW_QUEUE_NAME } from './interfaces/escrow-jobs.interface';
     forwardRef(() => NotificationsModule),
     EmailModule,
     AdminModule,
+    TransactionPinModule,
   ],
   controllers: [EscrowController],
   providers: [EscrowService, EscrowProcessor],

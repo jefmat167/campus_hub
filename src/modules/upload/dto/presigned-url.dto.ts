@@ -7,6 +7,9 @@ import {
   ArrayMaxSize,
   ValidateNested,
   MaxLength,
+  IsInt,
+  Min,
+  Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
@@ -40,6 +43,18 @@ export class PresignedUrlItemDto {
   @IsNotEmpty()
   @MaxLength(255)
   filename: string;
+
+  @ApiProperty({
+    description:
+      'Exact file size in bytes. Bound into the presigned URL so R2 rejects an upload of any other size.',
+    example: 204800,
+    minimum: 1,
+    maximum: 52428800,
+  })
+  @IsInt()
+  @Min(1)
+  @Max(52428800) // 50MB hard ceiling; per-type caps applied server-side
+  size: number;
 }
 
 export class GeneratePresignedUrlsDto {

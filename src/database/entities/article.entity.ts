@@ -51,6 +51,12 @@ export class Article {
   @Column({ type: 'varchar', length: 500, nullable: true })
   coverImageUrl: string | null;
 
+  @Column({ name: 'image_urls', type: 'jsonb', nullable: true })
+  imageUrls: string[] | null;
+
+  @Column({ name: 'video_url', type: 'varchar', length: 500, nullable: true })
+  videoUrl: string | null;
+
   @Column({
     type: 'enum',
     enum: ArticleCategory,
@@ -74,11 +80,11 @@ export class Article {
   @Index()
   isFeatured: boolean;
 
-  // Author
-  @Column({ name: 'author_id' })
-  authorId: string;
+  // Author (nullable — admin-created articles have no user author)
+  @Column({ name: 'author_id', nullable: true })
+  authorId: string | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL' })
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'author_id' })
   author: User;
 
@@ -100,6 +106,10 @@ export class Article {
 
   @Column({ type: 'jsonb', nullable: true })
   metaKeywords: string[];
+
+  // University scoping: null/empty = visible to all universities
+  @Column({ name: 'university_ids', type: 'jsonb', nullable: true })
+  universityIds: string[] | null;
 
   // Reading time in minutes (auto-calculated)
   @Column({ type: 'int', default: 1 })

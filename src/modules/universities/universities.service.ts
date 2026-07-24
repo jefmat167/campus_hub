@@ -332,6 +332,14 @@ export class UniversitiesService {
     return this.facultyRepo.save(faculty);
   }
 
+  async adminActivateFaculty(id: string): Promise<Faculty> {
+    const faculty = await this.facultyRepo.findOne({ where: { id } });
+    if (!faculty) throw new NotFoundException('Faculty not found');
+
+    faculty.isActive = true;
+    return this.facultyRepo.save(faculty);
+  }
+
   async adminCreateDepartment(dto: CreateDepartmentDto): Promise<Department> {
     const faculty = await this.facultyRepo.findOne({ where: { id: dto.facultyId } });
     if (!faculty) throw new NotFoundException('Faculty not found');
@@ -358,6 +366,14 @@ export class UniversitiesService {
     if (!department) throw new NotFoundException('Department not found');
 
     department.isActive = false;
+    return this.departmentRepo.save(department);
+  }
+
+  async adminActivateDepartment(id: string): Promise<Department> {
+    const department = await this.departmentRepo.findOne({ where: { id } });
+    if (!department) throw new NotFoundException('Department not found');
+
+    department.isActive = true;
     return this.departmentRepo.save(department);
   }
 }

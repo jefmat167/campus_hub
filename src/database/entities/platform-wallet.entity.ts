@@ -9,10 +9,12 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum PlatformTransactionType {
   ESCROW_FEE = 'escrow_fee',
   CANCELLATION_FEE = 'cancellation_fee',
+  WITHDRAWAL_FEE = 'withdrawal_fee',
 }
 
 @Entity('platform_wallet')
@@ -20,7 +22,7 @@ export class PlatformWallet {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
   balance: number;
 
   @OneToMany(
@@ -59,7 +61,7 @@ export class PlatformWalletTransaction {
   })
   type: PlatformTransactionType;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   amount: number;
 
   @Column({ length: 100, unique: true })
@@ -72,10 +74,10 @@ export class PlatformWalletTransaction {
   @Column({ name: 'escrow_id', type: 'uuid', nullable: true })
   escrowId: string | null;
 
-  @Column({ type: 'decimal', precision: 14, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   balanceBefore: number;
 
-  @Column({ type: 'decimal', precision: 14, scale: 2 })
+  @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   balanceAfter: number;
 
   @Column({ type: 'jsonb', nullable: true })

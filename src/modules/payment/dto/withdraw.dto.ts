@@ -5,6 +5,7 @@ import {
   Min,
   Max,
   Length,
+  Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -65,6 +66,14 @@ export class InitiateWithdrawalDto {
   @IsString()
   @IsOptional()
   otp?: string; // Required for amounts >= ₦50,000
+
+  @ApiProperty({
+    description: 'Your 6-digit transaction PIN',
+    example: '135790',
+  })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'PIN must be exactly 6 digits' })
+  pin: string;
 }
 
 export class VerifyOtpDto {

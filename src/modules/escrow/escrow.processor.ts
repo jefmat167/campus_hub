@@ -6,6 +6,7 @@ import {
   EscrowJobName,
   CheckFulfillmentExpiryPayload,
   CheckAutoReleasePayload,
+  SendFulfillmentReminderPayload,
 } from './interfaces/escrow-jobs.interface';
 import { EscrowService } from './escrow.service';
 
@@ -21,7 +22,11 @@ export class EscrowProcessor extends WorkerHost {
   }
 
   async process(
-    job: Job<CheckFulfillmentExpiryPayload | CheckAutoReleasePayload>,
+    job: Job<
+      | CheckFulfillmentExpiryPayload
+      | CheckAutoReleasePayload
+      | SendFulfillmentReminderPayload
+    >,
   ): Promise<any> {
     this.logger.log(`Processing escrow job: ${job.name} (${job.id})`);
 
@@ -34,6 +39,16 @@ export class EscrowProcessor extends WorkerHost {
 
         case EscrowJobName.CHECK_AUTO_RELEASE:
           return this.handleAutoRelease(job.data as CheckAutoReleasePayload);
+
+        case EscrowJobName.SEND_FULFILLMENT_REMINDER: {
+          const { escrowId, reminderNumber } =
+            job.data as SendFulfillmentReminderPayload;
+          await this.escrowService.sendFulfillmentReminder(
+            escrowId,
+            reminderNumber,
+          );
+          return { success: true };
+        }
 
         default:
           this.logger.warn(`Unknown job type: ${job.name}`);

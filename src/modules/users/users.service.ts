@@ -11,7 +11,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { User, UserRole, VerificationTier } from '../../database/entities/user.entity';
+import { User, VerificationTier } from '../../database/entities/user.entity';
 import { Listing, ListingStatus } from '../../database/entities/listing.entity';
 import { HousingListing, HousingStatus } from '../../database/entities/housing.entity';
 import { EscrowTransaction, EscrowStatus } from '../../database/entities/escrow.entity';
@@ -26,7 +26,6 @@ import { AdminAuditService } from '../admin/admin-audit.service';
 import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AdminListUsersDto } from './dto/admin-list-users.dto';
-import { AdminChangeRoleDto } from './dto/admin-change-role.dto';
 import { AdminAdjustTierDto } from './dto/admin-adjust-tier.dto';
 import {
   USERS_QUEUE_NAME,
@@ -606,42 +605,6 @@ export class UsersService {
       reportCount,
       activeWarningCount: warningCount,
     };
-  }
-
-  async adminChangeRole(
-    userId: string,
-    adminId: string,
-    adminRole: UserRole,
-    dto: AdminChangeRoleDto,
-  ): Promise<Record<string, any>> {
-    if (userId === adminId) {
-      throw new BadRequestException('Cannot change your own role');
-    }
-
-    const user = await this.findById(userId);
-    const previousRole = user.role;
-
-    // Only SUPER_ADMIN can assign ADMIN or SUPER_ADMIN roles
-    if (
-      (dto.role === UserRole.ADMIN || dto.role === UserRole.SUPER_ADMIN) &&
-      adminRole !== UserRole.SUPER_ADMIN
-    ) {
-      throw new BadRequestException('Only SUPER_ADMIN can assign ADMIN or SUPER_ADMIN roles');
-    }
-
-    user.role = dto.role;
-    await this.userRepo.save(user);
-
-    await this.adminAuditService.log(
-      adminId,
-      AuditAction.USER_ROLE_CHANGE,
-      AuditTargetType.USER,
-      userId,
-      dto.reason,
-      { previousRole, newRole: dto.role },
-    );
-
-    return { message: 'Role updated', userId, previousRole, newRole: dto.role };
   }
 
   async adminForceLogout(userId: string, adminId: string): Promise<{ message: string }> {

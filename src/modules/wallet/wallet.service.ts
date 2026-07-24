@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, QueryRunner } from 'typeorm';
@@ -12,16 +13,43 @@ import {
   WalletTransactionType,
   WalletTransactionStatus,
 } from '../../database/entities/wallet.entity';
+import { ConfigService } from '@nestjs/config';
+import { toKobo, toNaira, computeWithdrawalFee } from '../../common/utils/money';
+import { VelocityService } from './velocity.service';
+import { PlatformWalletService } from './platform-wallet.service';
+import { TransactionCapType } from '../../database/entities/transaction-cap.entity';
+import { PlatformTransactionType } from '../../database/entities/platform-wallet.entity';
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
+
+  // Withdrawal fee (monetisation) — hybrid percent/floor/cap, all Naira.
+  // Configurable via env (see env.validation.ts).
+  private readonly withdrawalFeePercent: number;
+  private readonly withdrawalFeeMin: number;
+  private readonly withdrawalFeeMax: number;
+
   constructor(
     @InjectRepository(Wallet)
     private walletRepo: Repository<Wallet>,
     @InjectRepository(WalletTransaction)
     private transactionRepo: Repository<WalletTransaction>,
     private dataSource: DataSource,
-  ) {}
+    private readonly velocityService: VelocityService,
+    private readonly configService: ConfigService,
+    private readonly platformWalletService: PlatformWalletService,
+  ) {
+    this.withdrawalFeePercent = Number(
+      this.configService.get('WITHDRAWAL_FEE_PERCENT', 1.5),
+    );
+    this.withdrawalFeeMin = Number(
+      this.configService.get('WITHDRAWAL_FEE_MIN', 50),
+    );
+    this.withdrawalFeeMax = Number(
+      this.configService.get('WITHDRAWAL_FEE_MAX', 250),
+    );
+  }
 
   /**
    * Get wallet for a user
@@ -139,6 +167,20 @@ export class WalletService {
     } catch (error) {
       if (!isExternalTx) {
         await queryRunner.rollbackTransaction();
+
+        // Idempotency: a duplicate reference (unique-constraint violation) means
+        // this deposit was already credited — e.g. the webhook and /fund/verify
+        // racing, or a webhook retry. Treat it as a no-op and return the
+        // existing transaction instead of surfacing a 500.
+        const code =
+          (error as { code?: string; driverError?: { code?: string } })?.code ??
+          (error as { driverError?: { code?: string } })?.driverError?.code;
+        if (code === '23505') {
+          const existing = await this.transactionRepo.findOne({
+            where: { reference },
+          });
+          if (existing) return existing;
+        }
       }
       throw error;
     } finally {
@@ -252,6 +294,15 @@ export class WalletService {
         throw new BadRequestException('Insufficient balance');
       }
 
+      // Cumulative spend cap. Runs under the wallet-row pessimistic lock held
+      // above, so the windowed SUM is race-safe with concurrent escrow creates.
+      await this.velocityService.assertWithinCap(queryRunner.manager, {
+        userId,
+        walletId: wallet.id,
+        capType: TransactionCapType.SPEND,
+        incomingNaira: amount,
+      });
+
       const balanceBefore = Number(wallet.balance);
       wallet.lockedBalance = Number(wallet.lockedBalance) + amount;
 
@@ -275,93 +326,6 @@ export class WalletService {
       }
 
       return transaction;
-    } catch (error) {
-      if (!isExternalTx) {
-        await queryRunner.rollbackTransaction();
-      }
-      throw error;
-    } finally {
-      if (!isExternalTx) {
-        await queryRunner.release();
-      }
-    }
-  }
-
-  /**
-   * Release locked funds (escrow completion)
-   */
-  async releaseFunds(
-    fromUserId: string,
-    toUserId: string,
-    amount: number,
-    reference: string,
-    externalQueryRunner?: QueryRunner,
-  ): Promise<void> {
-    const isExternalTx = !!externalQueryRunner;
-    const queryRunner =
-      externalQueryRunner || this.dataSource.createQueryRunner();
-
-    if (!isExternalTx) {
-      await queryRunner.connect();
-      await queryRunner.startTransaction();
-    }
-
-    try {
-      // Lock both wallets
-      const [fromWallet, toWallet] = await Promise.all([
-        queryRunner.manager.findOne(Wallet, {
-          where: { userId: fromUserId },
-          lock: { mode: 'pessimistic_write' },
-        }),
-        queryRunner.manager.findOne(Wallet, {
-          where: { userId: toUserId },
-          lock: { mode: 'pessimistic_write' },
-        }),
-      ]);
-
-      if (!fromWallet || !toWallet) {
-        throw new NotFoundException('Wallet not found');
-      }
-
-      // Validate sender has sufficient locked and total balance
-      if (Number(fromWallet.lockedBalance) < amount) {
-        throw new BadRequestException(
-          'Insufficient locked balance for escrow release',
-        );
-      }
-
-      if (Number(fromWallet.balance) < amount) {
-        throw new BadRequestException(
-          'Insufficient balance for escrow release',
-        );
-      }
-
-      // Deduct from locked balance of sender
-      fromWallet.lockedBalance = Number(fromWallet.lockedBalance) - amount;
-      fromWallet.balance = Number(fromWallet.balance) - amount;
-
-      // Add to recipient
-      const toBalanceBefore = Number(toWallet.balance);
-      toWallet.balance = toBalanceBefore + amount;
-
-      await queryRunner.manager.save([fromWallet, toWallet]);
-
-      // Record transactions
-      const releaseTransaction = this.transactionRepo.create({
-        walletId: toWallet.id,
-        type: WalletTransactionType.ESCROW_RELEASE,
-        amount,
-        status: WalletTransactionStatus.COMPLETED,
-        reference: `${reference}_release`,
-        balanceBefore: toBalanceBefore,
-        balanceAfter: Number(toWallet.balance),
-      });
-
-      await queryRunner.manager.save(releaseTransaction);
-
-      if (!isExternalTx) {
-        await queryRunner.commitTransaction();
-      }
     } catch (error) {
       if (!isExternalTx) {
         await queryRunner.rollbackTransaction();
@@ -445,6 +409,147 @@ export class WalletService {
   }
 
   /**
+   * Settle an escrow hold atomically.
+   *
+   * The buyer locked `total` at initiation. Settlement distributes exactly
+   * `total` across three buckets — `toSeller`, `toPlatform`, and the remaining
+   * `refund` (returned to the buyer's available balance):
+   *
+   *     refund = total - toSeller - toPlatform      (must be >= 0)
+   *
+   * The buyer's locked balance is fully released (`-= total`) and their real
+   * balance drops by exactly what leaves them (`toSeller + toPlatform`). The
+   * seller is credited `toSeller`. The caller is responsible for crediting the
+   * platform wallet with `toPlatform` on the SAME `queryRunner`.
+   *
+   * Must be called inside an existing transaction (escrow settlement touches
+   * multiple entities that must commit together).
+   */
+  async settleEscrow(
+    buyerId: string,
+    sellerId: string,
+    opts: { total: number; toSeller: number; toPlatform: number },
+    reference: string,
+    queryRunner: QueryRunner,
+  ): Promise<void> {
+    const total = Number(opts.total);
+    const toSeller = Number(opts.toSeller);
+    const toPlatform = Number(opts.toPlatform);
+
+    // Work in integer kobo so the buckets sum back to `total` exactly.
+    const leavingKobo = toKobo(toSeller) + toKobo(toPlatform);
+    const refundKobo = toKobo(total) - leavingKobo;
+    const leaving = toNaira(leavingKobo); // money actually leaving the buyer
+    const refund = toNaira(refundKobo); // remainder unlocked back to the buyer
+
+    if (total <= 0 || toSeller < 0 || toPlatform < 0) {
+      throw new BadRequestException('Invalid settlement amounts');
+    }
+    if (refundKobo < 0) {
+      throw new BadRequestException('Settlement exceeds escrow amount');
+    }
+    if (buyerId === sellerId) {
+      throw new BadRequestException('Buyer and seller must differ');
+    }
+
+    // Lock both wallets in a deterministic order to avoid deadlocks.
+    const lockWallet = (userId: string) =>
+      queryRunner.manager.findOne(Wallet, {
+        where: { userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+    let buyerWallet: Wallet | null;
+    let sellerWallet: Wallet | null;
+    if (buyerId < sellerId) {
+      buyerWallet = await lockWallet(buyerId);
+      sellerWallet = await lockWallet(sellerId);
+    } else {
+      sellerWallet = await lockWallet(sellerId);
+      buyerWallet = await lockWallet(buyerId);
+    }
+
+    if (!buyerWallet || !sellerWallet) {
+      throw new NotFoundException('Wallet not found');
+    }
+
+    if (Number(buyerWallet.lockedBalance) < total) {
+      throw new BadRequestException(
+        'Insufficient locked balance for escrow settlement',
+      );
+    }
+    if (Number(buyerWallet.balance) < leaving) {
+      throw new BadRequestException(
+        'Insufficient balance for escrow settlement',
+      );
+    }
+
+    const buyerBalanceBefore = Number(buyerWallet.balance);
+    buyerWallet.lockedBalance = Number(buyerWallet.lockedBalance) - total;
+    buyerWallet.balance = buyerBalanceBefore - leaving;
+
+    const sellerBalanceBefore = Number(sellerWallet.balance);
+    if (toSeller > 0) {
+      sellerWallet.balance = sellerBalanceBefore + toSeller;
+    }
+
+    await queryRunner.manager.save([buyerWallet, sellerWallet]);
+
+    const txns: WalletTransaction[] = [];
+
+    // Buyer: funds leaving their real balance (to seller + platform).
+    if (leaving > 0) {
+      txns.push(
+        this.transactionRepo.create({
+          walletId: buyerWallet.id,
+          type: WalletTransactionType.ESCROW_RELEASE,
+          amount: -leaving,
+          status: WalletTransactionStatus.COMPLETED,
+          reference: `${reference}_debit`,
+          balanceBefore: buyerBalanceBefore,
+          balanceAfter: Number(buyerWallet.balance),
+          metadata: { toSeller, toPlatform },
+        }),
+      );
+    }
+
+    // Buyer: refund portion unlocked back to available (balance unchanged).
+    if (refund > 0) {
+      txns.push(
+        this.transactionRepo.create({
+          walletId: buyerWallet.id,
+          type: WalletTransactionType.ESCROW_REFUND,
+          amount: refund,
+          status: WalletTransactionStatus.COMPLETED,
+          reference: `${reference}_refund`,
+          balanceBefore: Number(buyerWallet.balance),
+          balanceAfter: Number(buyerWallet.balance),
+          metadata: { refundedAmount: refund },
+        }),
+      );
+    }
+
+    // Seller: amount received.
+    if (toSeller > 0) {
+      txns.push(
+        this.transactionRepo.create({
+          walletId: sellerWallet.id,
+          type: WalletTransactionType.ESCROW_RELEASE,
+          amount: toSeller,
+          status: WalletTransactionStatus.COMPLETED,
+          reference: `${reference}_release`,
+          balanceBefore: sellerBalanceBefore,
+          balanceAfter: Number(sellerWallet.balance),
+        }),
+      );
+    }
+
+    if (txns.length > 0) {
+      await queryRunner.manager.save(txns);
+    }
+  }
+
+  /**
    * Update bank account details
    */
   async updateBankAccount(
@@ -479,46 +584,155 @@ export class WalletService {
   }
 
   /**
-   * Create pending withdrawal transaction
+   * Debit the wallet for a withdrawal and record a PENDING transaction in one
+   * atomic step (pessimistic lock).
+   *
+   * The balance leaves immediately — the funds are committed to the transfer —
+   * but the transaction stays PENDING until Paystack confirms via webhook
+   * (`confirmWithdrawal` → COMPLETED) or the transfer fails/reverses
+   * (`reverseWithdrawal` → REVERSED, balance refunded).
    */
-  async createPendingWithdrawal(
+  async debitForWithdrawal(
     userId: string,
     amount: number,
     reference: string,
-    externalReference: string,
+    externalReference?: string,
   ): Promise<WalletTransaction> {
-    const wallet = await this.getWallet(userId);
+    if (amount <= 0) {
+      throw new BadRequestException('Amount must be positive');
+    }
 
-    const transaction = this.transactionRepo.create({
-      walletId: wallet.id,
-      type: WalletTransactionType.WITHDRAWAL,
-      amount: -amount,
-      status: WalletTransactionStatus.PENDING,
-      reference,
-      externalReference,
-      balanceBefore: Number(wallet.balance),
-      balanceAfter: Number(wallet.balance) - amount,
-    });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    return this.transactionRepo.save(transaction);
-  }
+    try {
+      const wallet = await queryRunner.manager.findOne(Wallet, {
+        where: { userId },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-  /**
-   * Confirm withdrawal (called by webhook)
-   */
-  async confirmWithdrawal(reference: string): Promise<void> {
-    const transaction = await this.transactionRepo.findOne({
-      where: { reference, status: WalletTransactionStatus.PENDING },
-    });
+      if (!wallet) {
+        throw new NotFoundException('Wallet not found');
+      }
 
-    if (transaction) {
-      transaction.status = WalletTransactionStatus.COMPLETED;
-      await this.transactionRepo.save(transaction);
+      if (wallet.isLocked) {
+        throw new BadRequestException('Wallet is locked');
+      }
+
+      if (wallet.availableBalance < amount) {
+        throw new BadRequestException('Insufficient balance');
+      }
+
+      // Cumulative withdrawal cap. Runs under the wallet-row pessimistic lock
+      // held above, so the windowed SUM is race-safe with concurrent debits.
+      await this.velocityService.assertWithinCap(queryRunner.manager, {
+        userId,
+        walletId: wallet.id,
+        capType: TransactionCapType.WITHDRAWAL,
+        incomingNaira: amount,
+      });
+
+      // Withdrawal fee (monetisation): the full gross `amount` leaves the
+      // wallet (so the velocity meter keeps counting gross), but only `net` is
+      // transferred to the bank; `fee` is the platform's cut, realised to the
+      // platform wallet on confirmWithdrawal.
+      const { fee, net } = computeWithdrawalFee(amount, {
+        percent: this.withdrawalFeePercent,
+        minFee: this.withdrawalFeeMin,
+        maxFee: this.withdrawalFeeMax,
+      });
+
+      const balanceBefore = Number(wallet.balance);
+      wallet.balance = balanceBefore - amount;
+
+      await queryRunner.manager.save(wallet);
+
+      const transaction = this.transactionRepo.create({
+        walletId: wallet.id,
+        type: WalletTransactionType.WITHDRAWAL,
+        amount: -amount,
+        status: WalletTransactionStatus.PENDING,
+        reference,
+        externalReference,
+        balanceBefore,
+        balanceAfter: Number(wallet.balance),
+        metadata: { grossAmount: amount, fee, netAmount: net },
+      });
+
+      await queryRunner.manager.save(transaction);
+      await queryRunner.commitTransaction();
+
+      return transaction;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
   }
 
   /**
-   * Reverse failed withdrawal (called by webhook)
+   * Confirm a withdrawal (webhook: transfer.success). Flips the PENDING row to
+   * COMPLETED and realises the withdrawal fee to the platform wallet — both in
+   * one locked transaction. Idempotent: the row is locked and the credit is
+   * gated on the PENDING→COMPLETED transition, so duplicate webhooks can't
+   * double-credit the platform.
+   */
+  async confirmWithdrawal(reference: string): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const transaction = await queryRunner.manager.findOne(WalletTransaction, {
+        where: { reference },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (
+        !transaction ||
+        transaction.type !== WalletTransactionType.WITHDRAWAL ||
+        transaction.status !== WalletTransactionStatus.PENDING
+      ) {
+        // Missing, not a withdrawal, or already finalised — nothing to do.
+        await queryRunner.commitTransaction();
+        return;
+      }
+
+      transaction.status = WalletTransactionStatus.COMPLETED;
+      await queryRunner.manager.save(transaction);
+
+      const fee = Number(
+        (transaction.metadata as unknown as { fee?: number } | null)?.fee ?? 0,
+      );
+      if (fee > 0) {
+        await this.platformWalletService.creditPlatformFee(
+          fee,
+          null,
+          PlatformTransactionType.WITHDRAWAL_FEE,
+          `Withdrawal fee for ${reference}`,
+          queryRunner,
+        );
+      }
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Reverse a withdrawal and refund the balance (called by webhook on
+   * transfer.failed / transfer.reversed, and by the controller if the transfer
+   * can't be initiated).
+   *
+   * Idempotent: safe to call for duplicate webhooks. Reverses a withdrawal
+   * that is still PENDING or already COMPLETED (Paystack can reverse a transfer
+   * after it succeeded); a no-op if the row is missing or already REVERSED.
    */
   async reverseWithdrawal(reference: string): Promise<void> {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -526,16 +740,27 @@ export class WalletService {
     await queryRunner.startTransaction();
 
     try {
+      // Lock the transaction row so concurrent webhooks (e.g. transfer.failed
+      // followed by transfer.reversed) can't both pass the status gate and
+      // double-refund — the second call blocks here, then reads REVERSED.
       const transaction = await queryRunner.manager.findOne(WalletTransaction, {
-        where: { reference, status: WalletTransactionStatus.PENDING },
+        where: { reference },
+        lock: { mode: 'pessimistic_write' },
       });
 
-      if (!transaction) {
+      const reversible =
+        transaction &&
+        transaction.type === WalletTransactionType.WITHDRAWAL &&
+        (transaction.status === WalletTransactionStatus.PENDING ||
+          transaction.status === WalletTransactionStatus.COMPLETED);
+
+      if (!reversible) {
+        // Missing, already reversed, or not a withdrawal — nothing to do.
         await queryRunner.commitTransaction();
         return;
       }
 
-      // Get wallet and credit back the amount
+      // Credit the debited (gross) amount back to the wallet.
       const wallet = await queryRunner.manager.findOne(Wallet, {
         where: { id: transaction.walletId },
         lock: { mode: 'pessimistic_write' },
@@ -547,11 +772,109 @@ export class WalletService {
         await queryRunner.manager.save(wallet);
       }
 
-      // Mark transaction as reversed
+      // If the withdrawal had already COMPLETED, its fee was realised to the
+      // platform wallet in confirmWithdrawal — claw it back on reversal. A
+      // still-PENDING withdrawal never credited the platform, so skip it.
+      const wasCompleted =
+        transaction.status === WalletTransactionStatus.COMPLETED;
+      const fee = Number(
+        (transaction.metadata as unknown as { fee?: number } | null)?.fee ?? 0,
+      );
+
       transaction.status = WalletTransactionStatus.REVERSED;
       await queryRunner.manager.save(transaction);
 
+      if (wasCompleted && fee > 0) {
+        await this.platformWalletService.debitPlatform(
+          fee,
+          PlatformTransactionType.WITHDRAWAL_FEE,
+          `Withdrawal fee reversal for ${reference}`,
+          queryRunner,
+        );
+      }
+
       await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Reverse a completed card deposit after a chargeback/refund (Paystack
+   * charge.dispute.create / refund.processed).
+   *
+   * Recovers as much of the disputed amount as the wallet balance can still
+   * cover (it can't go negative — the DB CHECK forbids it), records the
+   * shortfall, and FREEZES the wallet (a chargeback is a strong fraud signal
+   * that needs manual review). Idempotent: a deposit is only reversed once.
+   */
+  async reverseDeposit(reference: string, reason: string): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const deposit = await queryRunner.manager.findOne(WalletTransaction, {
+        where: { reference },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      // Only a completed deposit can be charged back, and only once.
+      if (
+        !deposit ||
+        deposit.type !== WalletTransactionType.DEPOSIT ||
+        deposit.status !== WalletTransactionStatus.COMPLETED
+      ) {
+        await queryRunner.commitTransaction();
+        return;
+      }
+
+      const wallet = await queryRunner.manager.findOne(Wallet, {
+        where: { id: deposit.walletId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!wallet) {
+        await queryRunner.commitTransaction();
+        return;
+      }
+
+      const disputed = Math.abs(Number(deposit.amount));
+      const balanceBefore = Number(wallet.balance);
+      const recovered = Math.min(balanceBefore, disputed); // never below 0
+      const shortfall = disputed - recovered;
+
+      wallet.balance = balanceBefore - recovered;
+      // Freeze the account pending manual review / recovery of any shortfall.
+      wallet.isLocked = true;
+      wallet.lockReason = `Chargeback on ${reference}: ${reason}`;
+      wallet.lockedAt = new Date();
+      await queryRunner.manager.save(wallet);
+
+      deposit.status = WalletTransactionStatus.REVERSED;
+      await queryRunner.manager.save(deposit);
+
+      const chargeback = this.transactionRepo.create({
+        walletId: wallet.id,
+        type: WalletTransactionType.CHARGEBACK,
+        amount: -recovered,
+        status: WalletTransactionStatus.COMPLETED,
+        reference: `${reference}_chargeback`,
+        balanceBefore,
+        balanceAfter: Number(wallet.balance),
+        metadata: { disputed, recovered, shortfall, reason, originalReference: reference },
+      });
+      await queryRunner.manager.save(chargeback);
+
+      await queryRunner.commitTransaction();
+
+      if (shortfall > 0) {
+        this.logger.warn(
+          `Chargeback shortfall of ${shortfall} on ${reference}; wallet ${wallet.id} frozen with ${recovered} recovered.`,
+        );
+      }
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
@@ -639,11 +962,11 @@ export class WalletService {
     }
 
     if (dto.minAmount) {
-      query.andWhere('tx.amount >= :minAmount', { minAmount: Number(dto.minAmount) });
+      query.andWhere('tx.amount >= :minAmount', { minAmount: toKobo(Number(dto.minAmount)) });
     }
 
     if (dto.maxAmount) {
-      query.andWhere('tx.amount <= :maxAmount', { maxAmount: Number(dto.maxAmount) });
+      query.andWhere('tx.amount <= :maxAmount', { maxAmount: toKobo(Number(dto.maxAmount)) });
     }
 
     const [transactions, total] = await query

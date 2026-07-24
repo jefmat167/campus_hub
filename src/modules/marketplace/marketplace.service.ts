@@ -6,11 +6,13 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder, In, Brackets } from 'typeorm';
+import { toKobo } from '../../common/utils/money';
 import {
   Listing,
   ListingImage,
   ListingStatus,
   VisibilityScope,
+  DeliveryMethod,
 } from '../../database/entities/listing.entity';
 import { Favorite } from '../../database/entities/favorite.entity';
 import { User } from '../../database/entities/user.entity';
@@ -115,6 +117,19 @@ export class MarketplaceService {
       }
     }
 
+    // Delivery config must be coherent (>=1 method + matching addresses).
+    this.validateDeliveryConfig(
+      dto.deliveryMethods,
+      dto.pickupAddress,
+      dto.meetupPoints,
+    );
+
+    // Reject before creating anything if an uploaded image's real size differs
+    // from what was declared when its presigned URL was issued.
+    if (dto.imageUrls && dto.imageUrls.length > 0) {
+      await this.uploadService.verifyUploadedFileSizes(dto.imageUrls);
+    }
+
     // Create the listing
     // Only set facultyId/departmentId if explicitly provided in the DTO
     const listing = this.listingRepository.create({
@@ -212,12 +227,52 @@ export class MarketplaceService {
       await this.listingImageRepository.save(newImages);
     }
 
+    // If any delivery field is changing, re-validate the resulting config.
+    if (
+      dto.deliveryMethods !== undefined ||
+      dto.pickupAddress !== undefined ||
+      dto.meetupPoints !== undefined
+    ) {
+      this.validateDeliveryConfig(
+        dto.deliveryMethods ?? listing.deliveryMethods,
+        dto.pickupAddress !== undefined ? dto.pickupAddress : listing.pickupAddress,
+        dto.meetupPoints !== undefined ? dto.meetupPoints : listing.meetupPoints,
+      );
+    }
+
     // Remove imageUrls from dto before updating listing
     const { imageUrls, ...updateData } = dto;
 
     await this.listingRepository.update(listingId, updateData);
 
     return this.getListingById(listingId, userId);
+  }
+
+  /**
+   * Validate a listing's delivery config: at least one method, and each offered
+   * method has its required address(es). Used on create and update.
+   */
+  private validateDeliveryConfig(
+    methods: DeliveryMethod[] | undefined,
+    pickupAddress: string | null | undefined,
+    meetupPoints: string[] | null | undefined,
+  ): void {
+    if (!methods || methods.length === 0) {
+      throw new BadRequestException('At least one delivery method is required');
+    }
+    if (methods.includes(DeliveryMethod.PICKUP) && !pickupAddress?.trim()) {
+      throw new BadRequestException(
+        'A pickup address is required when "pickup" is offered',
+      );
+    }
+    if (
+      methods.includes(DeliveryMethod.MEETUP) &&
+      (meetupPoints ?? []).filter((p) => p?.trim()).length === 0
+    ) {
+      throw new BadRequestException(
+        'At least one meet-up point is required when "meetup" is offered',
+      );
+    }
   }
 
   async getListingById(listingId: string, userId?: string): Promise<Listing> {
@@ -319,10 +374,10 @@ export class MarketplaceService {
 
     // Filter by price range
     if (query.minPrice !== undefined) {
-      qb.andWhere('listing.price >= :minPrice', { minPrice: query.minPrice });
+      qb.andWhere('listing.price >= :minPrice', { minPrice: toKobo(query.minPrice) });
     }
     if (query.maxPrice !== undefined) {
-      qb.andWhere('listing.price <= :maxPrice', { maxPrice: query.maxPrice });
+      qb.andWhere('listing.price <= :maxPrice', { maxPrice: toKobo(query.maxPrice) });
     }
 
     // Filter by negotiable
@@ -702,10 +757,10 @@ export class MarketplaceService {
       qb.andWhere('l.createdAt <= :dateTo', { dateTo: dto.dateTo });
     }
     if (dto.minPrice) {
-      qb.andWhere('l.price >= :minPrice', { minPrice: Number(dto.minPrice) });
+      qb.andWhere('l.price >= :minPrice', { minPrice: toKobo(Number(dto.minPrice)) });
     }
     if (dto.maxPrice) {
-      qb.andWhere('l.price <= :maxPrice', { maxPrice: Number(dto.maxPrice) });
+      qb.andWhere('l.price <= :maxPrice', { maxPrice: toKobo(Number(dto.maxPrice)) });
     }
 
     qb.orderBy('l.createdAt', sortOrder)

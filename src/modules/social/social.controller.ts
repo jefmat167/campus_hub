@@ -13,11 +13,14 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { SocialService } from './social.service';
@@ -611,7 +614,8 @@ export class SocialController {
   // ─── Admin Endpoints ──────────────────────────────────────────
 
   @Get('admin/posts')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Public()
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.SOCIAL_READ)
   @ApiOperation({ summary: 'List all posts (admin)', description: 'Paginated, filterable. Reveals authorId.' })
   @ApiResponse({
@@ -672,8 +676,9 @@ export class SocialController {
   }
 
   @Post('admin/posts/:id/hide')
+  @Public()
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.SOCIAL_MANAGE)
   @ApiOperation({ summary: 'Hide a post (admin)' })
   @ApiParam({ name: 'id', description: 'Post UUID' })
@@ -688,7 +693,7 @@ export class SocialController {
     },
   })
   async adminHidePost(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) postId: string,
     @Body() dto: AdminActionDto,
   ) {
@@ -706,8 +711,9 @@ export class SocialController {
   }
 
   @Post('admin/posts/:id/unhide')
+  @Public()
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.SOCIAL_MANAGE)
   @ApiOperation({ summary: 'Unhide a post (admin)' })
   @ApiParam({ name: 'id', description: 'Post UUID' })
@@ -722,7 +728,7 @@ export class SocialController {
     },
   })
   async adminUnhidePost(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) postId: string,
   ) {
     await this.socialService.adminUnhidePost(postId);
@@ -738,8 +744,9 @@ export class SocialController {
   }
 
   @Delete('admin/comments/:id')
+  @Public()
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(AdminJwtAuthGuard, PermissionsGuard)
   @RequirePermission(AdminPermissions.SOCIAL_MANAGE)
   @ApiOperation({ summary: 'Delete a comment (admin)' })
   @ApiParam({ name: 'id', description: 'Comment UUID' })
@@ -754,7 +761,7 @@ export class SocialController {
     },
   })
   async adminDeleteComment(
-    @CurrentUser('id') adminId: string,
+    @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) commentId: string,
     @Body() dto: AdminActionDto,
   ) {

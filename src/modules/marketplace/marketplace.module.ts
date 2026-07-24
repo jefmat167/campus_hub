@@ -22,6 +22,7 @@ import { EscrowModule } from '../escrow/escrow.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { UploadModule } from '../upload/upload.module';
 import { AdminModule } from '../admin/admin.module';
+import { TransactionPinModule } from '../transaction-pin/transaction-pin.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { AdminModule } from '../admin/admin.module';
     NotificationsModule,
     UploadModule,
     AdminModule,
+    TransactionPinModule,
   ],
   controllers: [
     MarketplaceController,

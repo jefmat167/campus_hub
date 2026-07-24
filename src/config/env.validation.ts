@@ -74,4 +74,17 @@ export const envValidationSchema = Joi.object({
 
   // MongoDB (Social features) - optional, defaults to local
   MONGODB_URI: Joi.string().allow('').optional(),
+
+  // Escrow tuning — safe production defaults; override per environment.
+  // Dispute window defaults to 24h (1440 min); set lower only in dev/test.
+  ESCROW_PLATFORM_FEE_PERCENT: Joi.number().min(0).default(2.5),
+  ESCROW_FULFILLMENT_HOURS: Joi.number().min(1).default(72),
+  ESCROW_DISPUTE_WINDOW_MINUTES: Joi.number().min(1).default(1440),
+
+  // Withdrawal fee (monetisation) — hybrid: PERCENT of the amount, floored at
+  // MIN and capped at MAX (all Naira). Set MAX very high to disable the cap,
+  // or PERCENT/MIN to 0 to effectively disable the fee.
+  WITHDRAWAL_FEE_PERCENT: Joi.number().min(0).default(1.5),
+  WITHDRAWAL_FEE_MIN: Joi.number().min(0).default(50),
+  WITHDRAWAL_FEE_MAX: Joi.number().min(0).default(250),
 });
