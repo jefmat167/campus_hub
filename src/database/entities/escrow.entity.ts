@@ -9,7 +9,7 @@ import {
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
-import { Listing } from './listing.entity';
+import { Listing, DeliveryMethod } from './listing.entity';
 import { Offer } from './offer.entity';
 import { BuyRequestOffer } from './buy-request-offer.entity';
 import { KoboColumnTransformer } from '../../common/utils/money';
@@ -92,7 +92,14 @@ export class EscrowTransaction {
   @Column({ type: 'timestamp', nullable: true })
   sellerReadyAt: Date | null;
 
-  // Delivery scheduling (set by seller when clicking "I'm Ready")
+  // Delivery method + resolved location, chosen by the buyer at order time
+  // (snapshotted from the listing; null for buy-request escrows).
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  deliveryMethod: DeliveryMethod | null;
+
+  // deliveryDate/deliveryTime are set by the seller at "I'm Ready" (meet-up
+  // only); deliveryLocation is the pickup address / chosen meet-up point,
+  // snapshotted at order time.
   @Column({ type: 'date', nullable: true })
   deliveryDate: Date | null;
 

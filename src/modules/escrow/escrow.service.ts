@@ -21,7 +21,11 @@ import {
   DisputeStatus,
 } from '../../database/entities/dispute.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
-import { Listing, ListingStatus } from '../../database/entities/listing.entity';
+import {
+  Listing,
+  ListingStatus,
+  DeliveryMethod,
+} from '../../database/entities/listing.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
 import { University } from '../../database/entities/university.entity';
 import {
@@ -240,6 +244,36 @@ export class EscrowService {
       throw new BadRequestException(`Insufficient balance. You need ₦${dto.amount.toLocaleString()}`);
     }
 
+    // Validate the buyer's chosen delivery method against the listing's offered
+    // set, and resolve the concrete location to snapshot onto the order.
+    const offeredMethods = listing.deliveryMethods ?? [];
+    if (!offeredMethods.includes(dto.deliveryMethod)) {
+      throw new BadRequestException(
+        'Selected delivery method is not offered for this listing',
+      );
+    }
+    let deliveryLocation: string;
+    if (dto.deliveryMethod === DeliveryMethod.MEETUP) {
+      const points = listing.meetupPoints ?? [];
+      if (
+        dto.meetupPointIndex === undefined ||
+        dto.meetupPointIndex < 0 ||
+        dto.meetupPointIndex >= points.length
+      ) {
+        throw new BadRequestException(
+          'A valid meet-up point selection is required for meet-up delivery',
+        );
+      }
+      deliveryLocation = points[dto.meetupPointIndex];
+    } else {
+      if (!listing.pickupAddress) {
+        throw new BadRequestException(
+          'This listing has no pickup address configured',
+        );
+      }
+      deliveryLocation = listing.pickupAddress;
+    }
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -259,6 +293,8 @@ export class EscrowService {
         status: EscrowStatus.AWAITING_SELLER,
         fulfillmentExpiresAt,
         notes: dto.notes || null,
+        deliveryMethod: dto.deliveryMethod,
+        deliveryLocation,
       });
 
       const savedEscrow = await queryRunner.manager.save(escrow);
@@ -548,19 +584,45 @@ export class EscrowService {
       throw new BadRequestException(`Cannot mark ready. Order status is: ${escrow.status}`);
     }
 
-    // Parse delivery date and time
-    const deliveryDateObj = new Date(dto.deliveryDate);
-    const [hours, minutes] = dto.deliveryTime.split(':').map(Number);
-    deliveryDateObj.setHours(hours, minutes, 0, 0);
+    const isMeetup = escrow.deliveryMethod === DeliveryMethod.MEETUP;
 
-    // Validate delivery is in the future
-    if (deliveryDateObj <= new Date()) {
-      throw new BadRequestException('Delivery time must be in the future');
+    // Code validity window depends on the method:
+    //  - meet-up: ±2h around the seller's scheduled date/time (which must fall
+    //    inside the 72h delivery deadline)
+    //  - pick-up: open from now until the delivery deadline (collect any time)
+    let validFrom: Date;
+    let validUntil: Date;
+    let scheduledAt: Date | null = null;
+
+    if (isMeetup) {
+      if (!dto.deliveryDate || !dto.deliveryTime) {
+        throw new BadRequestException(
+          'Delivery date and time are required for meet-up delivery',
+        );
+      }
+      scheduledAt = new Date(dto.deliveryDate);
+      const [hours, minutes] = dto.deliveryTime.split(':').map(Number);
+      scheduledAt.setHours(hours, minutes, 0, 0);
+
+      if (scheduledAt <= new Date()) {
+        throw new BadRequestException('Delivery time must be in the future');
+      }
+      if (
+        escrow.fulfillmentExpiresAt &&
+        scheduledAt > escrow.fulfillmentExpiresAt
+      ) {
+        throw new BadRequestException(
+          'Delivery must be scheduled within the 72-hour delivery window',
+        );
+      }
+      validFrom = new Date(scheduledAt.getTime() - 2 * 60 * 60 * 1000);
+      validUntil = new Date(scheduledAt.getTime() + 2 * 60 * 60 * 1000);
+    } else {
+      validFrom = new Date();
+      validUntil =
+        escrow.fulfillmentExpiresAt ??
+        new Date(Date.now() + this.FULFILLMENT_HOURS * 60 * 60 * 1000);
     }
-
-    // Calculate code validity window (±2 hours)
-    const validFrom = new Date(deliveryDateObj.getTime() - 2 * 60 * 60 * 1000);
-    const validUntil = new Date(deliveryDateObj.getTime() + 2 * 60 * 60 * 1000);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -570,9 +632,11 @@ export class EscrowService {
       // Update escrow
       escrow.status = EscrowStatus.SELLER_READY;
       escrow.sellerReadyAt = new Date();
-      escrow.deliveryDate = new Date(dto.deliveryDate);
-      escrow.deliveryTime = dto.deliveryTime;
-      escrow.deliveryLocation = dto.deliveryLocation;
+      if (isMeetup) {
+        escrow.deliveryDate = new Date(dto.deliveryDate!);
+        escrow.deliveryTime = dto.deliveryTime!;
+      }
+      // deliveryLocation was snapshotted at order time — leave it as-is.
 
       await queryRunner.manager.save(escrow);
 
@@ -586,34 +650,44 @@ export class EscrowService {
 
       await queryRunner.manager.save(deliveryCode);
 
-      // Remove fulfillment expiry job + pending reminders (seller responded)
-      await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
+      // Keep the fulfillment-expiry job running — it now enforces the 72h
+      // *delivery* deadline through SELLER_READY (auto-refund if undelivered).
+      // Only the pre-ready "confirm your order" reminders are cancelled.
       await this.cancelFulfillmentReminders(escrowId);
 
       await queryRunner.commitTransaction();
 
       this.logger.log(`Seller ready for escrow ${escrowId}, delivery scheduled for ${dto.deliveryDate} ${dto.deliveryTime}`);
 
-      // Format delivery date for display (e.g. "Mar 21, 2026")
-      const formattedDeliveryDate = deliveryDateObj.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
+      const location = escrow.deliveryLocation;
+      const formattedDeliveryDate = scheduledAt
+        ? scheduledAt.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          })
+        : null;
+
+      // Method-appropriate body: meet-up includes the scheduled date/time;
+      // pick-up is collect-any-time at the pickup address.
+      const body = isMeetup
+        ? `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Meet-up scheduled for ${formattedDeliveryDate} at ${dto.deliveryTime}, at ${location}.`
+        : `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Collect your item at ${location} and share the code with the seller.`;
 
       // Notify buyer — push + in-app
       await this.notificationsService.createNotification({
         userId: escrow.buyerId,
         type: NotificationType.DELIVERY_CODE_SENT,
         title: 'Your delivery code is ready',
-        body: `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Delivery scheduled for ${formattedDeliveryDate} at ${dto.deliveryTime} at ${dto.deliveryLocation}.`,
+        body,
         data: {
           escrowId,
           orderNumber: escrow.orderNumber,
           deliveryCode: deliveryCode.code,
+          deliveryMethod: escrow.deliveryMethod,
           deliveryDate: formattedDeliveryDate,
-          deliveryTime: dto.deliveryTime,
-          deliveryLocation: dto.deliveryLocation,
+          deliveryTime: dto.deliveryTime ?? null,
+          deliveryLocation: location,
         },
       });
 
@@ -628,9 +702,10 @@ export class EscrowService {
             buyerName: buyer.fullName,
             orderNumber: escrow.orderNumber,
             deliveryCode: deliveryCode.code,
-            deliveryDate: formattedDeliveryDate,
-            deliveryTime: dto.deliveryTime,
-            deliveryLocation: dto.deliveryLocation,
+            deliveryMethod: escrow.deliveryMethod,
+            deliveryDate: formattedDeliveryDate ?? '',
+            deliveryTime: dto.deliveryTime ?? '',
+            deliveryLocation: location ?? '',
           },
         });
       }
@@ -851,8 +926,13 @@ export class EscrowService {
       return;
     }
 
-    // Only expire if still awaiting seller
-    if (escrow.status !== EscrowStatus.AWAITING_SELLER) {
+    // Auto-refund if the order hasn't been delivered by the 72h deadline —
+    // covers both an unresponsive seller (AWAITING_SELLER) and a seller who
+    // marked ready but never completed the handoff (SELLER_READY).
+    if (
+      escrow.status !== EscrowStatus.AWAITING_SELLER &&
+      escrow.status !== EscrowStatus.SELLER_READY
+    ) {
       this.logger.log(
         `Escrow ${escrowId} status is ${escrow.status}, skipping expiry`,
       );

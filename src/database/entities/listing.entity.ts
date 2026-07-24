@@ -44,9 +44,8 @@ export enum VisibilityScope {
   UNIVERSITY = 'university',
 }
 
-export enum DeliveryOption {
-  PICKUP_ONLY = 'pickup_only',
-  DELIVERY_AVAILABLE = 'delivery_available',
+export enum DeliveryMethod {
+  PICKUP = 'pickup',
   MEETUP = 'meetup',
 }
 
@@ -141,15 +140,17 @@ export class Listing {
   @JoinColumn({ name: 'department_id' })
   department: Department | null;
 
-  @Column({
-    type: 'enum',
-    enum: DeliveryOption,
-    default: DeliveryOption.MEETUP,
-  })
-  deliveryOption: DeliveryOption;
+  // Delivery methods the seller offers (>=1). The buyer picks one at order time.
+  @Column({ type: 'jsonb' })
+  deliveryMethods: DeliveryMethod[];
 
+  // Required when `pickup` is offered — the fixed collection address (shown to buyers).
   @Column({ type: 'text', nullable: true })
-  meetupLocation: string | null;
+  pickupAddress: string | null;
+
+  // Required when `meetup` is offered — one or more meet-up points; the buyer picks one.
+  @Column({ type: 'jsonb', nullable: true })
+  meetupPoints: string[] | null;
 
   @Column({
     type: 'enum',

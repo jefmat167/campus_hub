@@ -12,6 +12,8 @@ import {
   MaxLength,
   MinLength,
   ArrayMaxSize,
+  ArrayNotEmpty,
+  ArrayUnique,
   IsUUID,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
@@ -20,7 +22,7 @@ import {
   ListingCategory,
   ListingCondition,
   VisibilityScope,
-  DeliveryOption,
+  DeliveryMethod,
   ListingType,
 } from '../../../database/entities/listing.entity';
 
@@ -125,25 +127,41 @@ export class CreateListingDto {
   @IsOptional()
   departmentId?: string;
 
-  @ApiPropertyOptional({
-    description: 'How the item can be delivered',
-    enum: DeliveryOption,
-    default: DeliveryOption.MEETUP,
-    example: DeliveryOption.MEETUP,
+  @ApiProperty({
+    description: 'Delivery methods offered (at least one). The buyer picks one when ordering.',
+    enum: DeliveryMethod,
+    isArray: true,
+    example: [DeliveryMethod.PICKUP, DeliveryMethod.MEETUP],
   })
-  @IsEnum(DeliveryOption)
-  @IsOptional()
-  deliveryOption?: DeliveryOption = DeliveryOption.MEETUP;
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsEnum(DeliveryMethod, { each: true })
+  deliveryMethods: DeliveryMethod[];
 
   @ApiPropertyOptional({
-    description: 'Preferred meetup location',
-    example: 'Faculty of Science Building, Ground Floor',
+    description: 'Fixed collection address — required when `pickup` is offered.',
+    example: 'Shop 12, Student Union Building',
     maxLength: 500,
   })
   @IsString()
   @IsOptional()
   @MaxLength(500)
-  meetupLocation?: string;
+  @Transform(({ value }) => value?.trim())
+  pickupAddress?: string;
+
+  @ApiPropertyOptional({
+    description: 'Meet-up points (max 5) — required when `meetup` is offered.',
+    example: ['Faculty of Science, ground floor', 'Main gate'],
+    isArray: true,
+    maxLength: 500,
+  })
+  @IsArray()
+  @IsOptional()
+  @ArrayMaxSize(5)
+  @IsString({ each: true })
+  @MaxLength(500, { each: true })
+  meetupPoints?: string[];
 
   @ApiPropertyOptional({
     description: 'Array of image URLs (max 5)',

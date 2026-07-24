@@ -10,7 +10,7 @@ import {
   ListingCategory,
   ListingCondition,
   VisibilityScope,
-  DeliveryOption,
+  DeliveryMethod,
   ListingStatus,
   ListingType,
 } from '../entities/listing.entity';
@@ -386,12 +386,6 @@ async function seed() {
     ListingCondition.USED_FAIR,
   ];
 
-  const deliveryOptions = [
-    DeliveryOption.PICKUP_ONLY,
-    DeliveryOption.DELIVERY_AVAILABLE,
-    DeliveryOption.MEETUP,
-  ];
-
   const meetupLocations = [
     'Main Gate',
     'Library Building',
@@ -400,6 +394,36 @@ async function seed() {
     'Sports Complex',
     'Cafeteria',
   ];
+
+  const pickupAddresses = [
+    'Shop 3, Student Union Building',
+    'Room 12, Boys Hostel Block A',
+    'Department office, ground floor',
+  ];
+
+  // Returns a valid delivery config (>=1 method, with matching addresses).
+  const randomDeliveryConfig = () => {
+    const roll = Math.random();
+    if (roll < 0.34) {
+      return {
+        deliveryMethods: [DeliveryMethod.PICKUP],
+        pickupAddress: randomElement(pickupAddresses),
+        meetupPoints: null,
+      };
+    }
+    if (roll < 0.67) {
+      return {
+        deliveryMethods: [DeliveryMethod.MEETUP],
+        pickupAddress: null,
+        meetupPoints: [randomElement(meetupLocations)],
+      };
+    }
+    return {
+      deliveryMethods: [DeliveryMethod.PICKUP, DeliveryMethod.MEETUP],
+      pickupAddress: randomElement(pickupAddresses),
+      meetupPoints: [randomElement(meetupLocations)],
+    };
+  };
 
   console.log('\nCreating listings...');
 
@@ -422,8 +446,7 @@ async function seed() {
       isNegotiable: Math.random() > 0.3,
       visibilityScope: VisibilityScope.FACULTY,
       facultyId: faculty1.id,
-      deliveryOption: randomElement(deliveryOptions),
-      meetupLocation: randomElement(meetupLocations),
+      ...randomDeliveryConfig(),
       status: ListingStatus.ACTIVE,
       viewCount: randomInt(0, 50),
       favoriteCount: randomInt(0, 10),
@@ -451,8 +474,7 @@ async function seed() {
       isNegotiable: Math.random() > 0.3,
       visibilityScope: VisibilityScope.FACULTY,
       facultyId: faculty2.id,
-      deliveryOption: randomElement(deliveryOptions),
-      meetupLocation: randomElement(meetupLocations),
+      ...randomDeliveryConfig(),
       status: ListingStatus.ACTIVE,
       viewCount: randomInt(0, 50),
       favoriteCount: randomInt(0, 10),
@@ -480,8 +502,7 @@ async function seed() {
       isNegotiable: Math.random() > 0.3,
       visibilityScope: VisibilityScope.UNIVERSITY,
       facultyId: null,
-      deliveryOption: randomElement(deliveryOptions),
-      meetupLocation: randomElement(meetupLocations),
+      ...randomDeliveryConfig(),
       status: ListingStatus.ACTIVE,
       viewCount: randomInt(0, 50),
       favoriteCount: randomInt(0, 10),
