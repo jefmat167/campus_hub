@@ -8,9 +8,11 @@ import {
 } from '@nestjs/terminus';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { RedisHealthIndicator } from './redis.health';
+import { SkipResponseTransform } from '../../common/interceptors/response-transform.interceptor';
 
 @ApiTags('Health')
 @Controller('health')
+@SkipResponseTransform()
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
