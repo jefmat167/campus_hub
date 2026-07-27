@@ -54,7 +54,7 @@ export class CreateListingDto {
     description: 'Detailed description of the item',
     example: 'Selling my iPhone 13 Pro Max, 256GB storage, Sierra Blue color. Used for 6 months, always with screen protector and case. Battery health at 98%. Comes with original box, charger, and cable. No scratches or dents.',
     minLength: 20,
-    maxLength: 5000,
+    maxLength: 1000,
   })
   @IsString()
   @IsNotEmpty()
