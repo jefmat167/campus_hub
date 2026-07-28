@@ -3,7 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { CacheModule } from '@nestjs/cache-manager';
 
 // Config
@@ -35,6 +35,7 @@ import { BullBoardModule } from './modules/bull-board/bull-board.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PermissionsModule } from './common/modules/permissions.module';
 import { TransactionPinModule } from './modules/transaction-pin/transaction-pin.module';
+import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
 
 @Module({
   imports: [
@@ -138,6 +139,10 @@ import { TransactionPinModule } from './modules/transaction-pin/transaction-pin.
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: ResponseTransformInterceptor,
     },
   ],
 })

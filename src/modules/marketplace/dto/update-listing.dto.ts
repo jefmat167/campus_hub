@@ -43,12 +43,12 @@ export class UpdateListingDto {
     description: 'Detailed description of the item',
     example: 'Updated description with more details about the item condition...',
     minLength: 20,
-    maxLength: 5000,
+    maxLength: 1000,
   })
   @IsString()
   @IsOptional()
   @MinLength(20)
-  @MaxLength(5000)
+  @MaxLength(1000)
   @Transform(({ value }) => value?.trim())
   description?: string;
 
