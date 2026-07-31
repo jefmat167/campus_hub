@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { University } from '../../database/entities/university.entity';
 import { Faculty } from '../../database/entities/faculty.entity';
 import { Department } from '../../database/entities/department.entity';
@@ -21,6 +26,7 @@ export class UniversitiesService {
     private facultyRepo: Repository<Faculty>,
     @InjectRepository(Department)
     private departmentRepo: Repository<Department>,
+    private dataSource: DataSource,
   ) { }
 
   async findAllUniversities(): Promise<University[]> {
@@ -287,20 +293,59 @@ export class UniversitiesService {
     return this.universityRepo.save(university);
   }
 
-  async adminDeactivateUniversity(id: string): Promise<University> {
-    const university = await this.universityRepo.findOne({ where: { id } });
-    if (!university) throw new NotFoundException('University not found');
+  // ─── Activation state (cascading) ───────────────────────────────
+  //
+  // Invariant: **a row is never active while an ancestor is inactive.**
+  // The user-facing read methods above filter on each row's own `isActive` only
+  // (they never check the parent), so this invariant is what actually keeps a
+  // deactivated university's faculties/departments out of every public response
+  // — including `POST /auth/register`, which validates the hierarchy through
+  // `validateAndGetHierarchy` and so refuses signups into a deactivated school.
+  //
+  // Deactivation cascades DOWN the tree; activation mirrors it, turning the
+  // whole subtree back on. Activating a row whose ancestor is inactive would
+  // break the invariant, so it is rejected rather than silently orphaned.
 
-    university.isActive = false;
-    return this.universityRepo.save(university);
+  async adminDeactivateUniversity(id: string): Promise<University> {
+    return this.setUniversitySubtreeActive(id, false);
   }
 
   async adminActivateUniversity(id: string): Promise<University> {
+    return this.setUniversitySubtreeActive(id, true);
+  }
+
+  /**
+   * Flip a university and its whole subtree (faculties + their departments) to
+   * `isActive`, atomically.
+   */
+  private async setUniversitySubtreeActive(
+    id: string,
+    isActive: boolean,
+  ): Promise<University> {
     const university = await this.universityRepo.findOne({ where: { id } });
     if (!university) throw new NotFoundException('University not found');
 
-    university.isActive = true;
-    return this.universityRepo.save(university);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(University, { id }, { isActive });
+      await manager.update(Faculty, { universityId: id }, { isActive });
+
+      // Departments have no universityId — reach them via their faculties.
+      const faculties = await manager.find(Faculty, {
+        where: { universityId: id },
+        select: ['id'],
+      });
+
+      if (faculties.length) {
+        await manager.update(
+          Department,
+          { facultyId: In(faculties.map((f) => f.id)) },
+          { isActive },
+        );
+      }
+    });
+
+    university.isActive = isActive;
+    return university;
   }
 
   async adminCreateFaculty(dto: CreateFacultyDto): Promise<Faculty> {
@@ -325,19 +370,40 @@ export class UniversitiesService {
   }
 
   async adminDeactivateFaculty(id: string): Promise<Faculty> {
-    const faculty = await this.facultyRepo.findOne({ where: { id } });
-    if (!faculty) throw new NotFoundException('Faculty not found');
-
-    faculty.isActive = false;
-    return this.facultyRepo.save(faculty);
+    return this.setFacultySubtreeActive(id, false);
   }
 
   async adminActivateFaculty(id: string): Promise<Faculty> {
-    const faculty = await this.facultyRepo.findOne({ where: { id } });
+    return this.setFacultySubtreeActive(id, true);
+  }
+
+  /**
+   * Flip a faculty and its departments to `isActive`, atomically. Activating is
+   * refused while the parent university is deactivated (would orphan the row).
+   */
+  private async setFacultySubtreeActive(
+    id: string,
+    isActive: boolean,
+  ): Promise<Faculty> {
+    const faculty = await this.facultyRepo.findOne({
+      where: { id },
+      relations: ['university'],
+    });
     if (!faculty) throw new NotFoundException('Faculty not found');
 
-    faculty.isActive = true;
-    return this.facultyRepo.save(faculty);
+    if (isActive && !faculty.university.isActive) {
+      throw new BadRequestException(
+        `Cannot activate this faculty while its university ('${faculty.university.name}') is deactivated. Activate the university first.`,
+      );
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(Faculty, { id }, { isActive });
+      await manager.update(Department, { facultyId: id }, { isActive });
+    });
+
+    faculty.isActive = isActive;
+    return faculty;
   }
 
   async adminCreateDepartment(dto: CreateDepartmentDto): Promise<Department> {
@@ -361,6 +427,8 @@ export class UniversitiesService {
     return this.departmentRepo.save(department);
   }
 
+  // Departments are the leaf of the tree — nothing to cascade to.
+
   async adminDeactivateDepartment(id: string): Promise<Department> {
     const department = await this.departmentRepo.findOne({ where: { id } });
     if (!department) throw new NotFoundException('Department not found');
@@ -370,8 +438,24 @@ export class UniversitiesService {
   }
 
   async adminActivateDepartment(id: string): Promise<Department> {
-    const department = await this.departmentRepo.findOne({ where: { id } });
+    const department = await this.departmentRepo.findOne({
+      where: { id },
+      relations: ['faculty', 'faculty.university'],
+    });
     if (!department) throw new NotFoundException('Department not found');
+
+    const { faculty } = department;
+    const inactiveAncestor = !faculty.university.isActive
+      ? `university ('${faculty.university.name}')`
+      : !faculty.isActive
+        ? `faculty ('${faculty.name}')`
+        : null;
+
+    if (inactiveAncestor) {
+      throw new BadRequestException(
+        `Cannot activate this department while its ${inactiveAncestor} is deactivated. Activate the ${inactiveAncestor.split(' ')[0]} first.`,
+      );
+    }
 
     department.isActive = true;
     return this.departmentRepo.save(department);
