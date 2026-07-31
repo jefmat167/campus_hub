@@ -225,11 +225,17 @@ export class AdminUniversitiesController {
   @Post(':id/deactivate')
   @HttpCode(HttpStatus.OK)
   @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
-  @ApiOperation({ summary: 'Deactivate university' })
+  @ApiOperation({
+    summary: 'Deactivate university (cascades to faculties + departments)',
+    description:
+      'Deactivates the university and **every faculty and department beneath it**, atomically. ' +
+      'The whole subtree disappears from the public `/universities` endpoints, and new ' +
+      'registrations into it are refused. Re-activating the university reverses this in full.',
+  })
   @ApiParam({ name: 'id', description: 'University UUID' })
   @ApiResponse({
     status: 200,
-    description: 'University deactivated',
+    description: 'University and its subtree deactivated',
     schema: {
       example: {
         success: true,
@@ -267,11 +273,17 @@ export class AdminUniversitiesController {
   @Post(':id/activate')
   @HttpCode(HttpStatus.OK)
   @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
-  @ApiOperation({ summary: 'Activate university' })
+  @ApiOperation({
+    summary: 'Activate university (cascades to faculties + departments)',
+    description:
+      'Activates the university and **every faculty and department beneath it**, atomically. ' +
+      'Note this mirrors the deactivation cascade, so faculties/departments that were ' +
+      'switched off individually beforehand are also turned back on.',
+  })
   @ApiParam({ name: 'id', description: 'University UUID' })
   @ApiResponse({
     status: 200,
-    description: 'University activated',
+    description: 'University and its subtree activated',
     schema: {
       example: {
         success: true,
@@ -457,11 +469,16 @@ export class AdminUniversitiesController {
   @Post('faculties/:id/deactivate')
   @HttpCode(HttpStatus.OK)
   @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
-  @ApiOperation({ summary: 'Deactivate faculty' })
+  @ApiOperation({
+    summary: 'Deactivate faculty (cascades to its departments)',
+    description:
+      'Deactivates the faculty and **every department beneath it**, atomically. ' +
+      'The parent university is left untouched.',
+  })
   @ApiParam({ name: 'id', description: 'Faculty UUID' })
   @ApiResponse({
     status: 200,
-    description: 'Faculty deactivated',
+    description: 'Faculty and its departments deactivated',
     schema: {
       example: {
         success: true,
@@ -488,9 +505,26 @@ export class AdminUniversitiesController {
   @Post('faculties/:id/activate')
   @HttpCode(HttpStatus.OK)
   @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
-  @ApiOperation({ summary: 'Activate faculty' })
+  @ApiOperation({
+    summary: 'Activate faculty (cascades to its departments)',
+    description:
+      'Activates the faculty and **every department beneath it**, atomically. ' +
+      'Rejected while the parent university is deactivated — activate the university first.',
+  })
   @ApiParam({ name: 'id', description: 'Faculty UUID' })
-  @ApiResponse({ status: 200, description: 'Faculty activated' })
+  @ApiResponse({ status: 200, description: 'Faculty and its departments activated' })
+  @ApiResponse({
+    status: 400,
+    description: 'Parent university is deactivated',
+    schema: {
+      example: {
+        statusCode: 400,
+        message:
+          "Cannot activate this faculty while its university ('University of Lagos') is deactivated. Activate the university first.",
+        error: 'Bad Request',
+      },
+    },
+  })
   async activateFaculty(
     @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -690,9 +724,26 @@ export class AdminUniversitiesController {
   @Post('departments/:id/activate')
   @HttpCode(HttpStatus.OK)
   @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
-  @ApiOperation({ summary: 'Activate department' })
+  @ApiOperation({
+    summary: 'Activate department',
+    description:
+      'Departments are the leaf of the hierarchy, so nothing cascades. Rejected while an ' +
+      'ancestor (faculty or university) is deactivated — activate the ancestor first.',
+  })
   @ApiParam({ name: 'id', description: 'Department UUID' })
   @ApiResponse({ status: 200, description: 'Department activated' })
+  @ApiResponse({
+    status: 400,
+    description: 'An ancestor (faculty or university) is deactivated',
+    schema: {
+      example: {
+        statusCode: 400,
+        message:
+          "Cannot activate this department while its faculty ('Faculty of Engineering') is deactivated. Activate the faculty first.",
+        error: 'Bad Request',
+      },
+    },
+  })
   async activateDepartment(
     @CurrentAdmin('id') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
