@@ -2,10 +2,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { EscrowService } from './escrow.service';
 import { EscrowStatus } from '../../database/entities/escrow.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
-import {
-  ListingStatus,
-  DeliveryMethod,
-} from '../../database/entities/listing.entity';
+import { ListingStatus } from '../../database/entities/listing.entity';
 
 /**
  * Focused on the delivery-code verification lockout (anti-brute-force on the
@@ -190,42 +187,33 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
   return { svc, walletService };
 }
 
-describe('EscrowService.initiateEscrow delivery method', () => {
+describe('EscrowService.initiateEscrow meet-up selection (P2P is meet-up only)', () => {
   const activeListing = (over: any = {}) => ({
     id: 'l1',
     sellerId: 's1',
     status: ListingStatus.ACTIVE,
-    deliveryMethods: [DeliveryMethod.PICKUP],
-    pickupAddress: 'Shop 3',
-    meetupPoints: null,
+    meetupPoints: ['Main gate', 'Library Building', 'Student Union'],
     ...over,
   });
 
-  it('rejects a method the listing does not offer', async () => {
+  it('rejects a missing meet-up point selection', async () => {
     const { svc } = buildService({ listing: activeListing() });
     await expect(
       svc.initiateEscrow('b1', {
         listingId: 'l1',
         amount: 5000,
-        deliveryMethod: DeliveryMethod.MEETUP, // listing only offers pickup
+        // meetupPointIndex omitted
       } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('rejects meet-up without a valid point selection', async () => {
-    const { svc } = buildService({
-      listing: activeListing({
-        deliveryMethods: [DeliveryMethod.MEETUP],
-        pickupAddress: null,
-        meetupPoints: ['Main gate', 'Library'],
-      }),
-    });
+  it('rejects an out-of-range meet-up point selection', async () => {
+    const { svc } = buildService({ listing: activeListing() });
     await expect(
       svc.initiateEscrow('b1', {
         listingId: 'l1',
         amount: 5000,
-        deliveryMethod: DeliveryMethod.MEETUP,
-        // meetupPointIndex omitted
+        meetupPointIndex: 3, // only indexes 0-2 exist
       } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
   });

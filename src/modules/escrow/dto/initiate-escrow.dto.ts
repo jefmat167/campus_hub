@@ -4,13 +4,11 @@ import {
   IsPositive,
   IsOptional,
   IsString,
-  IsEnum,
   IsInt,
   Min,
   Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { DeliveryMethod } from '../../../database/entities/listing.entity';
 
 export class InitiateEscrowDto {
   @ApiProperty({
@@ -45,22 +43,13 @@ export class InitiateEscrowDto {
   notes?: string;
 
   @ApiProperty({
-    description: 'Chosen delivery method (must be one the listing offers)',
-    enum: DeliveryMethod,
-    example: DeliveryMethod.MEETUP,
-  })
-  @IsEnum(DeliveryMethod)
-  deliveryMethod: DeliveryMethod;
-
-  @ApiPropertyOptional({
     description:
-      'Index of the chosen meet-up point (required when deliveryMethod = meetup)',
+      "Index of the chosen meet-up point from the listing's meetupPoints (P2P handover is meet-up only)",
     example: 0,
   })
   @IsInt()
   @Min(0)
-  @IsOptional()
-  meetupPointIndex?: number;
+  meetupPointIndex: number;
 
   @ApiProperty({
     description: 'Your 6-digit transaction PIN',

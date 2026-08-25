@@ -140,17 +140,11 @@ export class Listing {
   @JoinColumn({ name: 'department_id' })
   department: Department | null;
 
-  // Delivery methods the seller offers (>=1). The buyer picks one at order time.
+  // P2P handover is meet-up only (rev-2 spec 02): at least 3 named public
+  // meet-up points; the buyer picks one at purchase. No seller-location
+  // pickup, no door delivery — shop pickup is a vendors'-market concept.
   @Column({ type: 'jsonb' })
-  deliveryMethods: DeliveryMethod[];
-
-  // Required when `pickup` is offered — the fixed collection address (shown to buyers).
-  @Column({ type: 'text', nullable: true })
-  pickupAddress: string | null;
-
-  // Required when `meetup` is offered — one or more meet-up points; the buyer picks one.
-  @Column({ type: 'jsonb', nullable: true })
-  meetupPoints: string[] | null;
+  meetupPoints: string[];
 
   @Column({
     type: 'enum',

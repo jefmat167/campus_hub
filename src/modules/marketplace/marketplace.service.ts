@@ -12,7 +12,6 @@ import {
   ListingImage,
   ListingStatus,
   VisibilityScope,
-  DeliveryMethod,
 } from '../../database/entities/listing.entity';
 import { Favorite } from '../../database/entities/favorite.entity';
 import { User } from '../../database/entities/user.entity';
@@ -122,12 +121,8 @@ export class MarketplaceService {
       }
     }
 
-    // Delivery config must be coherent (>=1 method + matching addresses).
-    this.validateDeliveryConfig(
-      dto.deliveryMethods,
-      dto.pickupAddress,
-      dto.meetupPoints,
-    );
+    // P2P handover is meet-up only (rev-2 spec 02): >=3 usable public points.
+    this.validateMeetupPoints(dto.meetupPoints);
 
     // Reject before creating anything if an uploaded image's real size differs
     // from what was declared when its presigned URL was issued.
@@ -232,17 +227,9 @@ export class MarketplaceService {
       await this.listingImageRepository.save(newImages);
     }
 
-    // If any delivery field is changing, re-validate the resulting config.
-    if (
-      dto.deliveryMethods !== undefined ||
-      dto.pickupAddress !== undefined ||
-      dto.meetupPoints !== undefined
-    ) {
-      this.validateDeliveryConfig(
-        dto.deliveryMethods ?? listing.deliveryMethods,
-        dto.pickupAddress !== undefined ? dto.pickupAddress : listing.pickupAddress,
-        dto.meetupPoints !== undefined ? dto.meetupPoints : listing.meetupPoints,
-      );
+    // Replacement meet-up points must still satisfy the >=3 rule.
+    if (dto.meetupPoints !== undefined) {
+      this.validateMeetupPoints(dto.meetupPoints);
     }
 
     // Remove imageUrls from dto before updating listing
@@ -254,28 +241,17 @@ export class MarketplaceService {
   }
 
   /**
-   * Validate a listing's delivery config: at least one method, and each offered
-   * method has its required address(es). Used on create and update.
+   * P2P handover rule (rev-2 spec 02): every listing names at least 3 usable
+   * public meet-up points (the DTO enforces shape; this guards trimmed
+   * emptiness and any non-DTO caller). Used on create and update.
    */
-  private validateDeliveryConfig(
-    methods: DeliveryMethod[] | undefined,
-    pickupAddress: string | null | undefined,
+  private validateMeetupPoints(
     meetupPoints: string[] | null | undefined,
   ): void {
-    if (!methods || methods.length === 0) {
-      throw new BadRequestException('At least one delivery method is required');
-    }
-    if (methods.includes(DeliveryMethod.PICKUP) && !pickupAddress?.trim()) {
+    const usable = (meetupPoints ?? []).filter((p) => p?.trim()).length;
+    if (usable < 3) {
       throw new BadRequestException(
-        'A pickup address is required when "pickup" is offered',
-      );
-    }
-    if (
-      methods.includes(DeliveryMethod.MEETUP) &&
-      (meetupPoints ?? []).filter((p) => p?.trim()).length === 0
-    ) {
-      throw new BadRequestException(
-        'At least one meet-up point is required when "meetup" is offered',
+        'At least 3 meet-up points are required for a listing',
       );
     }
   }

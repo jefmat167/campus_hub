@@ -183,9 +183,7 @@ export class MarketplaceController {
           viewCount: 125,
           favoriteCount: 15,
           isFavorited: true,
-          deliveryMethods: ['pickup', 'meetup'],
-          pickupAddress: 'Shop 12, Student Union Building',
-          meetupPoints: ['Faculty of Science Building', 'Main gate'],
+          meetupPoints: ['Faculty of Science Building', 'Main gate', 'Library Building'],
           imageUrls: [
             'https://storage.example.com/listings/img1.jpg',
             'https://storage.example.com/listings/img2.jpg',

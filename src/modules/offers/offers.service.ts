@@ -225,10 +225,10 @@ export class OffersService {
       respondedAt,
     });
 
-    // Mark listing as in escrow
-    await this.listingRepository.update(offer.listingId, {
-      status: ListingStatus.IN_ESCROW,
-    });
+    // Rev-2 (spec 01.6): acceptance is a PRICE lock, never an availability
+    // hold — the listing stays ACTIVE and only checkout reserves it. (The old
+    // IN_ESCROW flip here also dead-ended the purchase: POST /escrow rejects
+    // non-ACTIVE listings, so an accepted offer could never be bought.)
 
     // Reject all other pending offers for this listing
     await this.offerRepository.update(

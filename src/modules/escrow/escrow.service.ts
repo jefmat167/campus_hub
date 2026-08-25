@@ -255,35 +255,20 @@ export class EscrowService {
       throw new BadRequestException(`Insufficient balance. You need ₦${dto.amount.toLocaleString()}`);
     }
 
-    // Validate the buyer's chosen delivery method against the listing's offered
-    // set, and resolve the concrete location to snapshot onto the order.
-    const offeredMethods = listing.deliveryMethods ?? [];
-    if (!offeredMethods.includes(dto.deliveryMethod)) {
+    // P2P handover is meet-up only (rev-2 spec 02): the buyer picks one of
+    // the listing's >=3 public meet-up points; the concrete location is
+    // snapshotted onto the order.
+    const points = listing.meetupPoints ?? [];
+    if (
+      dto.meetupPointIndex === undefined ||
+      dto.meetupPointIndex < 0 ||
+      dto.meetupPointIndex >= points.length
+    ) {
       throw new BadRequestException(
-        'Selected delivery method is not offered for this listing',
+        'A valid meet-up point selection is required',
       );
     }
-    let deliveryLocation: string;
-    if (dto.deliveryMethod === DeliveryMethod.MEETUP) {
-      const points = listing.meetupPoints ?? [];
-      if (
-        dto.meetupPointIndex === undefined ||
-        dto.meetupPointIndex < 0 ||
-        dto.meetupPointIndex >= points.length
-      ) {
-        throw new BadRequestException(
-          'A valid meet-up point selection is required for meet-up delivery',
-        );
-      }
-      deliveryLocation = points[dto.meetupPointIndex];
-    } else {
-      if (!listing.pickupAddress) {
-        throw new BadRequestException(
-          'This listing has no pickup address configured',
-        );
-      }
-      deliveryLocation = listing.pickupAddress;
-    }
+    const deliveryLocation = points[dto.meetupPointIndex];
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -304,7 +289,7 @@ export class EscrowService {
         status: EscrowStatus.AWAITING_SELLER,
         fulfillmentExpiresAt,
         notes: dto.notes || null,
-        deliveryMethod: dto.deliveryMethod,
+        deliveryMethod: DeliveryMethod.MEETUP,
         deliveryLocation,
       });
 
