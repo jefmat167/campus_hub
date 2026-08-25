@@ -5,6 +5,7 @@ import { EscrowController } from './escrow.controller';
 import { EscrowService } from './escrow.service';
 import { EscrowProcessor } from './escrow.processor';
 import { EscrowTransaction } from '../../database/entities/escrow.entity';
+import { OrderItem } from '../../database/entities/order-item.entity';
 import { Dispute } from '../../database/entities/dispute.entity';
 import { Listing } from '../../database/entities/listing.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
@@ -23,6 +24,7 @@ import { ESCROW_QUEUE_NAME } from './interfaces/escrow-jobs.interface';
   imports: [
     TypeOrmModule.forFeature([
       EscrowTransaction,
+      OrderItem,
       Dispute,
       Listing,
       DeliveryCode,

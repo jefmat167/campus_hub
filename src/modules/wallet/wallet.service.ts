@@ -346,6 +346,7 @@ export class WalletService {
     amount: number,
     reference: string,
     externalQueryRunner?: QueryRunner,
+    market?: string | null,
   ): Promise<WalletTransaction> {
     const isExternalTx = !!externalQueryRunner;
     const queryRunner =
@@ -387,6 +388,7 @@ export class WalletService {
         balanceBefore: Number(wallet.balance),
         balanceAfter: Number(wallet.balance),
         metadata: { refundedAmount: amount },
+        market: market ?? null,
       });
 
       await queryRunner.manager.save(transaction);
@@ -431,6 +433,7 @@ export class WalletService {
     opts: { total: number; toSeller: number; toPlatform: number },
     reference: string,
     queryRunner: QueryRunner,
+    market?: string | null,
   ): Promise<void> {
     const total = Number(opts.total);
     const toSeller = Number(opts.toSeller);
@@ -509,6 +512,7 @@ export class WalletService {
           balanceBefore: buyerBalanceBefore,
           balanceAfter: Number(buyerWallet.balance),
           metadata: { toSeller, toPlatform },
+          market: market ?? null,
         }),
       );
     }
@@ -525,6 +529,7 @@ export class WalletService {
           balanceBefore: Number(buyerWallet.balance),
           balanceAfter: Number(buyerWallet.balance),
           metadata: { refundedAmount: refund },
+          market: market ?? null,
         }),
       );
     }
@@ -540,6 +545,7 @@ export class WalletService {
           reference: `${reference}_release`,
           balanceBefore: sellerBalanceBefore,
           balanceAfter: Number(sellerWallet.balance),
+          market: market ?? null,
         }),
       );
     }

@@ -22,12 +22,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import {
-  TierGuard,
-  TierAmountLimit,
-  TierAmountLimitGuard,
-} from '../../common/guards/tier.guard';
-import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
+import { TierGuard } from '../../common/guards/tier.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -35,16 +30,11 @@ import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import {
-  TransactionPinGuard,
-  RequireTransactionPin,
-} from '../transaction-pin/transaction-pin.guard';
-import {
   User,
   VerificationTier,
 } from '../../database/entities/user.entity';
 import { EscrowService } from './escrow.service';
 import {
-  InitiateEscrowDto,
   OpenDisputeDto,
   ResolveDisputeDto,
   SellerReadyDto,
@@ -54,59 +44,16 @@ import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
-@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard, TransactionPinGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {
   constructor(private readonly escrowService: EscrowService) { }
 
-  /**
-   * Initiate an escrow transaction
-   * Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited.
-   * Seller has 72 hours to mark ready, otherwise auto-refund.
-   */
-  @Post()
-  @RequireTransactionPin()
-  @TierAmountLimit('amount', TIER_BUYING_LIMITS)
-  @ApiOperation({
-    summary: 'Initiate escrow',
-    description:
-      'Lock funds in escrow for a transaction. Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited. Seller has 72 hours to confirm readiness.',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Escrow initiated successfully',
-    schema: {
-      example: {
-        success: true,
-        data: {
-          id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
-          orderNumber: 'ORD-2026-000142',
-          buyerId: '550e8400-e29b-41d4-a716-446655440000',
-          sellerId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
-          listingId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
-          amount: '25000.00',
-          status: 'awaiting_seller',
-          fulfillmentExpiresAt: '2026-03-22T14:30:00.000Z',
-          createdAt: '2026-03-19T14:30:00.000Z',
-          updatedAt: '2026-03-19T14:30:00.000Z',
-        },
-        message: 'Order ORD-2026-000142 created. Seller has 72 hours to confirm readiness.',
-      },
-    },
-  })
-  async initiateEscrow(
-    @CurrentUser() user: User,
-    @Body() dto: InitiateEscrowDto,
-  ) {
-    const escrow = await this.escrowService.initiateEscrow(user.id, dto);
-
-    return {
-      success: true,
-      data: escrow,
-      message: `Order ${escrow.orderNumber} created. Seller has 72 hours to confirm readiness.`,
-    };
-  }
+  // NOTE (rev-2 Phase 3): POST /escrow was retired — purchases go through
+  // POST /checkout (cart) or POST /checkout/direct (buy-now), which split a
+  // single wallet debit into one sub-order per seller. Sub-order lifecycle
+  // endpoints below are unchanged.
 
   /**
    * Get user's escrow transactions

@@ -2,7 +2,11 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { EscrowService } from './escrow.service';
 import { EscrowStatus } from '../../database/entities/escrow.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
-import { ListingStatus } from '../../database/entities/listing.entity';
+import {
+  ListingStatus,
+  DeliveryMethod,
+} from '../../database/entities/listing.entity';
+import { OrderMarket } from '../../database/entities/escrow.entity';
 
 /**
  * Focused on the delivery-code verification lockout (anti-brute-force on the
@@ -88,6 +92,7 @@ function makeService(deliveryCode: DeliveryCode) {
     {} as any,
     {} as any,
     {} as any,
+    {} as any,
     dataSource,
     escrowQueue,
     {} as any,
@@ -161,9 +166,17 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
     commitTransaction: jest.fn(async () => {}),
     rollbackTransaction: jest.fn(async () => {}),
     release: jest.fn(async () => {}),
-    manager: { save: jest.fn(async (x: any) => x), update: jest.fn(async () => {}) },
+    manager: {
+      save: jest.fn(async (x: any) => x),
+      update: jest.fn(async () => {}),
+      find: jest.fn(async () => []),
+      create: (_entity: any, o: any) => ({ ...o }),
+    },
   };
-  const dataSource: any = { createQueryRunner: () => queryRunner };
+  const dataSource: any = {
+    createQueryRunner: () => queryRunner,
+    query: jest.fn(async () => [{ seq: 42 }]),
+  };
   const escrowQueue: any = { add: jest.fn(async () => {}), remove: jest.fn(async () => {}) };
   const buyRequestOfferRepo: any = { findOne: jest.fn(async () => null) };
 
@@ -172,6 +185,7 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
     {} as any,
     {} as any,
     listingRepo,
+    {} as any,
     {} as any,
     buyRequestOfferRepo,
     {} as any,
@@ -184,38 +198,53 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
     makeTimingPolicyStub(),
     makeSettingsStub(),
   );
-  return { svc, walletService };
+  return { svc, walletService, queryRunner };
 }
 
-describe('EscrowService.initiateEscrow meet-up selection (P2P is meet-up only)', () => {
-  const activeListing = (over: any = {}) => ({
-    id: 'l1',
-    sellerId: 's1',
-    status: ListingStatus.ACTIVE,
-    meetupPoints: ['Main gate', 'Library Building', 'Student Union'],
-    ...over,
-  });
+describe('EscrowService.createP2pSubOrder (checkout core)', () => {
+  it('creates a MEETUP sub-order + snapshot items on the caller transaction', async () => {
+    const { svc } = buildService({});
+    const saved: any[] = [];
+    const callerRunner: any = {
+      manager: {
+        save: jest.fn(async (x: any) => {
+          saved.push(x);
+          return { id: x.id ?? 'e-new', ...x };
+        }),
+        create: (_entity: any, o: any) => ({ ...o }),
+      },
+    };
 
-  it('rejects a missing meet-up point selection', async () => {
-    const { svc } = buildService({ listing: activeListing() });
-    await expect(
-      svc.initiateEscrow('b1', {
-        listingId: 'l1',
-        amount: 5000,
-        // meetupPointIndex omitted
-      } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
+    const order = await svc.createP2pSubOrder(callerRunner, {
+      checkoutId: 'chk1',
+      buyerId: 'b1',
+      sellerId: 's1',
+      amount: 15000,
+      deliveryLocation: 'Main gate',
+      lines: [
+        { listingId: 'l1', title: 'Mini fridge', unitPrice: 10000 },
+        { listingId: 'l2', title: 'Standing fan', unitPrice: 5000, offerId: 'o1' },
+      ],
+    });
 
-  it('rejects an out-of-range meet-up point selection', async () => {
-    const { svc } = buildService({ listing: activeListing() });
-    await expect(
-      svc.initiateEscrow('b1', {
-        listingId: 'l1',
-        amount: 5000,
-        meetupPointIndex: 3, // only indexes 0-2 exist
-      } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    // sub-order shape
+    expect(order.checkoutId).toBe('chk1');
+    expect(order.market).toBe(OrderMarket.P2P);
+    expect(order.deliveryMethod).toBe(DeliveryMethod.MEETUP);
+    expect(order.deliveryLocation).toBe('Main gate');
+    expect(order.itemsSubtotal).toBe(15000);
+    expect(order.orderNumber).toMatch(/^ORD-\d{4}-000042$/);
+
+    // one item row per line, snapshots carried
+    const items = saved.filter((s: any) => s.titleSnapshot);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      listingId: 'l1',
+      titleSnapshot: 'Mini fridge',
+      unitPrice: 10000,
+      lineTotal: 10000,
+    });
+    expect(items[1]).toMatchObject({ listingId: 'l2', offerId: 'o1' });
   });
 });
 
