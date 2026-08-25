@@ -18,6 +18,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
@@ -31,7 +32,7 @@ export class ReviewsController {
   constructor(private readonly reviewsService: ReviewsService) { }
 
   @Post()
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({
@@ -74,7 +75,7 @@ export class ReviewsController {
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({
@@ -201,7 +202,7 @@ export class ReviewsController {
   }
 
   @Get('given')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({
@@ -266,7 +267,7 @@ export class ReviewsController {
   }
 
   @Get('transaction/:escrowTransactionId')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({
@@ -310,7 +311,7 @@ export class ReviewsController {
   }
 
   @Get('can-review/:escrowTransactionId')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({

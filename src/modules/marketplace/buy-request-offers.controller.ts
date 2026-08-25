@@ -21,6 +21,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import {
   TierGuard,
   TierAmountLimit,
@@ -40,7 +41,7 @@ import {
 
 @ApiTags('Marketplace - Buy Request Offers')
 @Controller('marketplace/requests')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @ApiBearerAuth()
 export class BuyRequestOffersController {
   constructor(private readonly offersService: BuyRequestOffersService) {}
@@ -237,7 +238,7 @@ export class BuyRequestOffersController {
  */
 @ApiTags('Marketplace - My Offers')
 @Controller('marketplace/offers')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @MinTier(VerificationTier.TIER_1)
 @ApiBearerAuth()
 export class MyBuyRequestOffersController {

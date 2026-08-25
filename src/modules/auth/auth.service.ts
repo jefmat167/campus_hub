@@ -17,10 +17,16 @@ import { Queue } from 'bullmq';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 
-import { User, VerificationTier } from '../../database/entities/user.entity';
+import {
+  AccountType,
+  User,
+  VerificationTier,
+} from '../../database/entities/user.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { PasswordReset } from '../../database/entities/password-reset.entity';
+import { VendorStatus } from '../../database/entities/vendor-profile.entity';
 import { UniversitiesService } from '../universities/universities.service';
+import { VendorsService } from '../vendors/vendors.service';
 import { EmailService } from '../email/email.service';
 import { UsersService } from '../users/users.service';
 import { EmailVerificationType } from '../../database/entities/email-verification.entity';
@@ -30,6 +36,7 @@ import {
 } from './interfaces/auth-jobs.interface';
 import {
   RegisterDto,
+  RegisterVendorDto,
   LoginDto,
   ForgotPasswordDto,
   ResetPasswordDto,
@@ -61,6 +68,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private universitiesService: UniversitiesService,
+    private vendorsService: VendorsService,
     private emailService: EmailService,
     private usersService: UsersService,
     private dataSource: DataSource,
@@ -150,6 +158,7 @@ export class AuthService {
         yearOfStudy: dto.yearOfStudy,
         bio: dto.bio,
         deviceId: dto.deviceId,
+        accountType: AccountType.STUDENT,
         verificationTier: VerificationTier.NONE,
         refreshTokenHash,
         lastLoginAt: new Date(),
@@ -194,6 +203,134 @@ export class AuthService {
     // OPTIMIZATION: Build response without DB reload using cached entity data
     return {
       user: this.sanitizeUserWithRelations(user, university, faculty, department),
+      tokens,
+      emailSent: emailQueued,
+    };
+  }
+
+  /**
+   * Door 2 (rev-2 spec 03.1 / 01.5): register an external business as a
+   * vendor-only account — accountType = 'vendor', NO academic identity, and a
+   * DRAFT vendor profile on the same account/wallet. The live shopfront photo
+   * arrives post-auth via POST /vendors/me/submit (uploads require a token),
+   * mirroring the Tier-1 student-docs flow. Tier stays NONE forever — vendor
+   * standing maps through effectiveTier() instead.
+   */
+  async registerVendor(
+    dto: RegisterVendorDto,
+  ): Promise<AuthResponse & { vendor: Record<string, unknown>; emailSent: boolean }> {
+    const formattedPhone = this.formatPhone(dto.phone);
+    const email = dto.email.toLowerCase();
+
+    const existingUser = await this.userRepo.findOne({
+      where: [
+        { phone: formattedPhone, isDeleted: false },
+        { email, isDeleted: false },
+      ],
+    });
+    if (existingUser) {
+      if (existingUser.phone === formattedPhone) {
+        throw new ConflictException('Phone number is already registered');
+      }
+      throw new ConflictException('Email is already registered');
+    }
+
+    // 1–3 distinct active universities, home ∈ served.
+    await this.vendorsService.validateUniversitySelection(
+      dto.homeUniversityId,
+      dto.servedUniversityIds,
+    );
+
+    if (dto.deviceId) {
+      const bannedDevice = await this.userRepo.findOne({
+        where: { deviceId: dto.deviceId, isBanned: true },
+      });
+      if (bannedDevice) {
+        throw new BadRequestException(
+          'This device has been banned from the platform',
+        );
+      }
+    }
+
+    const refreshTokenJti = uuidv4();
+    const [passwordHash, refreshTokenHash] = await Promise.all([
+      bcrypt.hash(dto.password, 12),
+      bcrypt.hash(refreshTokenJti, 10),
+    ]);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    let user: User;
+    let vendorProfileId: string;
+
+    try {
+      user = this.userRepo.create({
+        phone: formattedPhone,
+        phoneVerified: false,
+        emailVerified: false,
+        email,
+        passwordHash,
+        fullName: dto.contactName,
+        gender: null,
+        universityId: null,
+        facultyId: null,
+        departmentId: null,
+        deviceId: dto.deviceId,
+        accountType: AccountType.VENDOR,
+        verificationTier: VerificationTier.NONE,
+        refreshTokenHash,
+        lastLoginAt: new Date(),
+      });
+      await queryRunner.manager.save(user);
+
+      // One wallet per account — vendor earnings land here (spec 01.1).
+      const isDev = this.configService.get<string>('NODE_ENV') === 'development';
+      const wallet = this.walletRepo.create({
+        userId: user.id,
+        balance: isDev ? 1000000 : 0,
+      });
+      await queryRunner.manager.save(wallet);
+
+      const profile = await this.vendorsService.createProfileWithManager(
+        queryRunner.manager,
+        user.id,
+        {
+          businessName: dto.businessName,
+          description: dto.description,
+          homeUniversityId: dto.homeUniversityId,
+          servedUniversityIds: dto.servedUniversityIds,
+        },
+        { status: VendorStatus.DRAFT },
+      );
+      vendorProfileId = profile.id;
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    const tokens = await this.generateTokensWithJti(user, refreshTokenJti);
+
+    let emailQueued = false;
+    try {
+      await this.authQueue.add(
+        AuthJobName.SEND_VERIFICATION_EMAIL,
+        { userId: user.id, email, type: EmailVerificationType.PERSONAL },
+        { attempts: 3, backoff: { type: 'exponential', delay: 1000 } },
+      );
+      emailQueued = true;
+    } catch (error) {
+      this.logger.error(`Failed to queue email job: ${error}`);
+    }
+
+    return {
+      user: this.sanitizeUser(user),
+      vendor: await this.vendorsService.getMyVendor(user.id, vendorProfileId),
       tokens,
       emailSent: emailQueued,
     };
@@ -492,6 +629,7 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       universityId: user.universityId,
+      accountType: user.accountType ?? AccountType.STUDENT,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
@@ -528,6 +666,7 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       universityId: user.universityId,
+      accountType: user.accountType ?? AccountType.STUDENT,
     };
 
     const [accessToken, refreshToken] = await Promise.all([

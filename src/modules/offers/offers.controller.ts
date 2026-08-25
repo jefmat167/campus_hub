@@ -21,6 +21,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
 import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -32,7 +33,7 @@ import { CreateOfferDto, RespondOfferDto } from './dto';
 
 @ApiTags('Offers')
 @Controller('offers')
-@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class OffersController {

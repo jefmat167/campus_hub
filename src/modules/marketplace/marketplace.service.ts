@@ -96,6 +96,11 @@ export class MarketplaceService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    // Vendor-only accounts have no academic identity (rev-2 01.5); the
+    // controller guard blocks them, this is defence in depth + narrows the type.
+    if (!user.universityId) {
+      throw new ForbiddenException('Only student accounts can create listings');
+    }
 
     // Validate facultyId if provided
     if (dto.facultyId) {
@@ -315,8 +320,9 @@ export class MarketplaceService {
       .leftJoinAndSelect('listing.images', 'images')
       .leftJoinAndSelect('listing.university', 'university');
 
-    // Apply visibility scope filtering based on current user
-    if (currentUser) {
+    // Apply visibility scope filtering based on current user (an account
+    // without a university — vendor-only — falls back to the anonymous view)
+    if (currentUser?.universityId) {
       this.applyVisibilityFilter(qb, currentUser);
     } else {
       // Only show university-wide listings for non-authenticated users

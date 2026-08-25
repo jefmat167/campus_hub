@@ -113,8 +113,13 @@ export class UsersService {
       this.findById(viewerId),
     ]);
 
-    // Only allow viewing profiles within same university
-    if (user.universityId !== viewer.universityId) {
+    // Only allow viewing profiles within same university. Accounts without a
+    // university (vendor-only, rev-2 01.5) can neither view nor be viewed here.
+    if (
+      !user.universityId ||
+      !viewer.universityId ||
+      user.universityId !== viewer.universityId
+    ) {
       throw new NotFoundException('User not found');
     }
 

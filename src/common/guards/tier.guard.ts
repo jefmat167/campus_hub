@@ -13,6 +13,7 @@ import {
 } from '../decorators/min-tier.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { TIER_LIMIT_TABLES, TierLimitType } from '../constants/tier-limits';
+import { effectiveTier } from '../utils/effective-tier';
 
 /**
  * Guard that checks if the user meets the minimum verification tier requirement.
@@ -56,7 +57,9 @@ export class TierGuard implements CanActivate {
       throw new ForbiddenException('User not authenticated');
     }
 
-    const userTier = user.verificationTier || VerificationTier.NONE;
+    // Effective tier: students = their real tier; vendor-only accounts map
+    // from vendor verification (active → TIER_2-equivalent) — rev-2 01.5.
+    const userTier = effectiveTier(user);
 
     if (!tierMeetsRequirement(userTier, requiredTier)) {
       const tierMessages: Record<VerificationTier, string> = {
@@ -151,7 +154,7 @@ export class TierAmountLimitGuard implements CanActivate {
       throw new ForbiddenException('User not authenticated');
     }
 
-    const userTier: VerificationTier = user.verificationTier || VerificationTier.NONE;
+    const userTier: VerificationTier = effectiveTier(user);
     const limit = config.limits[userTier as VerificationTier];
 
     // null means unlimited

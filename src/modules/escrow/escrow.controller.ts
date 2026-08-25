@@ -19,6 +19,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
@@ -53,7 +54,7 @@ import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
-@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard, TransactionPinGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard, TransactionPinGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {

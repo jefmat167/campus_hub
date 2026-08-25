@@ -13,6 +13,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
+import { requireUniversityId } from '../../common/utils/student-identity';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
@@ -39,7 +41,7 @@ import { AdminActionDto } from './dto/admin-action.dto';
 
 @ApiTags('Social (Anonymous Forum)')
 @Controller('social')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class SocialController {
@@ -57,7 +59,7 @@ export class SocialController {
   async createPost(@CurrentUser() user: User, @Body() dto: CreatePostDto) {
     const post = await this.socialService.createPost(
       user.id,
-      user.universityId,
+      requireUniversityId(user),
       user.facultyId,
       user.departmentId,
       dto,
@@ -169,7 +171,7 @@ export class SocialController {
   })
   async getFeed(@CurrentUser() user: User, @Query() query: FeedQueryDto) {
     const { posts, nextCursor } = await this.socialService.getFeed(
-      user.universityId,
+      requireUniversityId(user),
       user.facultyId,
       user.departmentId,
       {
@@ -230,7 +232,7 @@ export class SocialController {
     @Query('limit') limit?: string,
   ) {
     const posts = await this.socialService.getTrending(
-      user.universityId,
+      requireUniversityId(user),
       Number(limit) || 10,
     );
 

@@ -85,6 +85,11 @@ export class BuyRequestsService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    // Vendor-only accounts have no academic identity (rev-2 01.5); the
+    // controller guard blocks them, this is defence in depth + narrows the type.
+    if (!user.universityId) {
+      throw new ForbiddenException('Only student accounts can create buy requests');
+    }
 
     // Validate budgetMax >= budgetMin if both provided
     if (dto.budgetMax !== undefined && dto.budgetMax < dto.budgetMin) {
@@ -220,8 +225,9 @@ export class BuyRequestsService {
       .leftJoinAndSelect('requester.department', 'requesterDepartment')
       .leftJoinAndSelect('request.university', 'university');
 
-    // Apply visibility scope filtering based on current user
-    if (currentUser) {
+    // Apply visibility scope filtering based on current user (an account
+    // without a university — vendor-only — falls back to the anonymous view)
+    if (currentUser?.universityId) {
       this.applyVisibilityFilter(qb, currentUser);
     } else {
       // Only show university-wide requests for non-authenticated users

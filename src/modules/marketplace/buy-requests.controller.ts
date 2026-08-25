@@ -21,6 +21,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
 import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -40,7 +41,7 @@ export class BuyRequestsController {
   constructor(private readonly buyRequestsService: BuyRequestsService) { }
 
   @Post()
-  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
   @TierAmountLimit('budgetMax', TIER_BUYING_LIMITS)
   @ApiBearerAuth()
@@ -92,7 +93,7 @@ export class BuyRequestsController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Search buy requests',
@@ -143,7 +144,7 @@ export class BuyRequestsController {
   }
 
   @Get('my-requests')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @ApiOperation({
@@ -204,7 +205,7 @@ export class BuyRequestsController {
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get buy request by ID',
@@ -260,7 +261,7 @@ export class BuyRequestsController {
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
   @TierAmountLimit('budgetMax', TIER_BUYING_LIMITS)
   @ApiBearerAuth()
@@ -313,7 +314,7 @@ export class BuyRequestsController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
@@ -353,7 +354,7 @@ export class BuyRequestsController {
   }
 
   @Patch(':id/fulfilled')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @ApiOperation({
