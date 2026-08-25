@@ -26,6 +26,7 @@ import {
   TierAmountLimit,
   TierAmountLimitGuard,
 } from '../../common/guards/tier.guard';
+import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
@@ -47,10 +48,7 @@ export class BuyRequestOffersController {
   @Post(':requestId/offers')
   @UseGuards(TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('proposedPrice', {
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('proposedPrice', TIER_BUYING_LIMITS)
   @ApiOperation({
     summary: 'Submit an offer to a buy request',
     description:

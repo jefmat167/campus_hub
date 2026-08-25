@@ -1,4 +1,6 @@
 export * from './university.entity';
+export * from './university-settings.entity';
+export * from './drop-point.entity';
 export * from './faculty.entity';
 export * from './department.entity';
 export * from './user.entity';

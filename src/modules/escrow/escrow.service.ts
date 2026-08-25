@@ -27,7 +27,6 @@ import {
   DeliveryMethod,
 } from '../../database/entities/listing.entity';
 import { User, VerificationTier } from '../../database/entities/user.entity';
-import { University } from '../../database/entities/university.entity';
 import {
   BuyRequestOffer,
 } from '../../database/entities/buy-request-offer.entity';
@@ -60,15 +59,12 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../../database/entities/notification.entity';
 import { ResendService } from '../email/resend.service';
-import { ConfigService } from '@nestjs/config';
+import { TimingPolicyService } from '../../common/services/timing-policy.service';
+import { UniversitySettingsService } from '../universities/university-settings.service';
 
 @Injectable()
 export class EscrowService {
   private readonly logger = new Logger(EscrowService.name);
-  // Configurable via env (safe production defaults); see env.validation.ts.
-  private readonly PLATFORM_FEE_PERCENTAGE: number;
-  private readonly FULFILLMENT_HOURS: number;
-  private readonly DISPUTE_WINDOW_MINUTES: number;
   // Hours after creation to nudge the seller while still AWAITING_SELLER.
   private readonly FULFILLMENT_REMINDER_HOURS = [24, 48];
   // Delivery-code verification lockout (anti-brute-force on the 4-digit code).
@@ -84,8 +80,6 @@ export class EscrowService {
     private deliveryCodeRepo: Repository<DeliveryCode>,
     @InjectRepository(Listing)
     private listingRepo: Repository<Listing>,
-    @InjectRepository(University)
-    private universityRepo: Repository<University>,
     @InjectRepository(User)
     private userRepo: Repository<User>,
     @InjectRepository(BuyRequestOffer)
@@ -100,17 +94,34 @@ export class EscrowService {
     private escrowQueue: Queue,
     private notificationsService: NotificationsService,
     private resendService: ResendService,
-    private readonly configService: ConfigService,
-  ) {
-    this.PLATFORM_FEE_PERCENTAGE = Number(
-      this.configService.get('ESCROW_PLATFORM_FEE_PERCENT', 2.5),
+    private timingPolicy: TimingPolicyService,
+    private universitySettingsService: UniversitySettingsService,
+  ) { }
+
+  // Timing knobs resolved through the shared policy service (env-backed
+  // today, per-category overrides later — rev-2 spec 05).
+  private get FULFILLMENT_HOURS(): number {
+    return this.timingPolicy.resolve().fulfillmentHours;
+  }
+
+  private get DISPUTE_WINDOW_MINUTES(): number {
+    return this.timingPolicy.resolve().disputeWindowMinutes;
+  }
+
+  /**
+   * Platform fee % for an order, resolved per the BUYER's university (rev-2
+   * spec 01.3). Falls back to the platform default when the buyer carries no
+   * university or the university has no override.
+   */
+  private async getPlatformFeePercentForBuyer(buyerId: string): Promise<number> {
+    const buyer = await this.userRepo.findOne({
+      where: { id: buyerId },
+      select: ['id', 'universityId'],
+    });
+    const settings = await this.universitySettingsService.resolve(
+      buyer?.universityId ?? null,
     );
-    this.FULFILLMENT_HOURS = Number(
-      this.configService.get('ESCROW_FULFILLMENT_HOURS', 72),
-    );
-    this.DISPUTE_WINDOW_MINUTES = Number(
-      this.configService.get('ESCROW_DISPUTE_WINDOW_MINUTES', 1440),
-    );
+    return settings.p2pFeePercent;
   }
 
   /**
@@ -1043,10 +1054,14 @@ export class EscrowService {
     await queryRunner.startTransaction();
 
     try {
-      // Platform fee (2.5%), computed in kobo so fee + payout === amount.
+      // Platform fee (buyer's-university setting, default 2.5%), computed in
+      // kobo so fee + payout === amount.
+      const feePercent = await this.getPlatformFeePercentForBuyer(
+        escrow.buyerId,
+      );
       const { fee: platformFee, payout: sellerPayout } = splitFee(
         Number(escrow.amount),
-        this.PLATFORM_FEE_PERCENTAGE,
+        feePercent,
       );
 
       // Move the full amount out of the buyer's locked balance: payout to the
@@ -1152,15 +1167,16 @@ export class EscrowService {
 
       // If buyer cancels after seller is ready, apply cancellation fee
       if (isBuyer && escrow.status === EscrowStatus.SELLER_READY) {
-        // Get university cancellation policy
-        const university = await this.universityRepo.findOne({
-          where: { id: escrow.buyer.universityId },
-        });
+        // Per-university cancellation policy (settings service; default 10%,
+        // enabled — resolved by the buyer's university, rev-2 spec 01.3).
+        const settings = await this.universitySettingsService.resolve(
+          escrow.buyer.universityId,
+        );
 
-        if (university?.cancellationFeeEnabled && university.cancellationFeePercent > 0) {
+        if (settings.cancellationFeeEnabled && settings.cancellationFeePercent > 0) {
           const cancellationFee = percentOf(
             Number(escrow.amount),
-            Number(university.cancellationFeePercent),
+            settings.cancellationFeePercent,
           );
 
           // Split: 60% to seller, remainder to platform (kobo-exact).
@@ -1411,10 +1427,14 @@ export class EscrowService {
           break;
 
         case DisputeStatus.RESOLVED_SELLER: {
-          // Release to seller (with 2.5% platform fee deduction).
+          // Release to seller, with the platform fee deducted (buyer's-
+          // university setting, default 2.5% — same rule as auto-completion).
+          const feePercent = await this.getPlatformFeePercentForBuyer(
+            escrow.buyerId,
+          );
           const { fee: platformFee, payout: sellerPayout } = splitFee(
             Number(escrow.amount),
-            this.PLATFORM_FEE_PERCENTAGE,
+            feePercent,
           );
 
           await this.walletService.settleEscrow(

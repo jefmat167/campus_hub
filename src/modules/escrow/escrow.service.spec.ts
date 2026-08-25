@@ -13,6 +13,34 @@ import {
  * of `verifyDeliveryCode` to cover wrong-guess counting, the 5-attempt lock,
  * lock-blocks-correct-code, and the happy path.
  */
+/** TimingPolicyService stub with the production defaults. */
+function makeTimingPolicyStub(): any {
+  return {
+    resolve: () => ({
+      confirmationHours: 24,
+      fulfillmentHours: 72,
+      disputeWindowMinutes: 1440,
+      agreementHours: 72,
+      appointmentHorizonDays: 14,
+      noShowGraceMinutes: 30,
+      appointmentBackstopHours: 24,
+      offerLockHours: 24,
+    }),
+  };
+}
+
+/** UniversitySettingsService stub with the platform defaults. */
+function makeSettingsStub(): any {
+  return {
+    resolve: jest.fn(async () => ({
+      p2pFeePercent: 2.5,
+      vendorFeePercent: 2.5,
+      cancellationFeePercent: 10,
+      cancellationFeeEnabled: true,
+    })),
+  };
+}
+
 function makeCode(overrides: Partial<DeliveryCode> = {}): DeliveryCode {
   const c = new DeliveryCode();
   c.id = 'dc1';
@@ -50,7 +78,6 @@ function makeService(deliveryCode: DeliveryCode) {
   };
   const dataSource: any = { createQueryRunner: () => queryRunner };
   const escrowQueue: any = { add: jest.fn(async () => {}) };
-  const config: any = { get: (_k: string, d: any) => d };
 
   // Constructor arg order per escrow.service.ts; only the deps used by
   // verifyDeliveryCode are real, the rest are stubs.
@@ -64,12 +91,12 @@ function makeService(deliveryCode: DeliveryCode) {
     {} as any,
     {} as any,
     {} as any,
-    {} as any,
     dataSource,
     escrowQueue,
     {} as any,
     {} as any,
-    config,
+    makeTimingPolicyStub(),
+    makeSettingsStub(),
   );
   return { svc, escrow, deliveryCode, deliveryCodeRepo, escrowQueue };
 }
@@ -142,14 +169,12 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
   const dataSource: any = { createQueryRunner: () => queryRunner };
   const escrowQueue: any = { add: jest.fn(async () => {}), remove: jest.fn(async () => {}) };
   const buyRequestOfferRepo: any = { findOne: jest.fn(async () => null) };
-  const config: any = { get: (_k: string, d: any) => d };
 
   const svc = new EscrowService(
     escrowRepo,
     {} as any,
     {} as any,
     listingRepo,
-    {} as any,
     {} as any,
     buyRequestOfferRepo,
     {} as any,
@@ -159,7 +184,8 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
     escrowQueue,
     {} as any,
     {} as any,
-    config,
+    makeTimingPolicyStub(),
+    makeSettingsStub(),
   );
   return { svc, walletService };
 }

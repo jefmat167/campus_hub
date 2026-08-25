@@ -24,6 +24,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import { TIER_SELLING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -53,10 +54,7 @@ export class MarketplaceController {
   @Post('listings')
   @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('price', {
-    [VerificationTier.TIER_1]: 50000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('price', TIER_SELLING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create a new listing',
@@ -222,10 +220,7 @@ export class MarketplaceController {
   @Patch('listings/:id')
   @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('price', {
-    [VerificationTier.TIER_1]: 50000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('price', TIER_SELLING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Update a listing',

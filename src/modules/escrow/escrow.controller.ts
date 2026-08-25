@@ -26,6 +26,7 @@ import {
   TierAmountLimit,
   TierAmountLimitGuard,
 } from '../../common/guards/tier.guard';
+import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -65,11 +66,7 @@ export class EscrowController {
    */
   @Post()
   @RequireTransactionPin()
-  @TierAmountLimit('amount', {
-    [VerificationTier.TIER_0]: 30000,
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('amount', TIER_BUYING_LIMITS)
   @ApiOperation({
     summary: 'Initiate escrow',
     description:

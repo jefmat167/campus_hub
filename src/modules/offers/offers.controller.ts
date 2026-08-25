@@ -22,6 +22,7 @@ import {
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
@@ -38,11 +39,7 @@ export class OffersController {
   constructor(private readonly offersService: OffersService) {}
 
   @Post()
-  @TierAmountLimit('amount', {
-    [VerificationTier.TIER_0]: 30000,
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('amount', TIER_BUYING_LIMITS)
   @ApiOperation({
     summary: 'Create a new offer',
     description: 'Creates a new offer on a listing. Buyers can make offers below the listing price. Amount limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited.',

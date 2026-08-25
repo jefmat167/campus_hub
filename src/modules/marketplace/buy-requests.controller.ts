@@ -22,6 +22,7 @@ import {
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
@@ -41,10 +42,7 @@ export class BuyRequestsController {
   @Post()
   @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('budgetMax', {
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('budgetMax', TIER_BUYING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create a new buy request',
@@ -264,10 +262,7 @@ export class BuyRequestsController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('budgetMax', {
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null,
-  })
+  @TierAmountLimit('budgetMax', TIER_BUYING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Update a buy request',
