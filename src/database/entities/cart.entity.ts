@@ -12,6 +12,7 @@ import {
 import { User } from './user.entity';
 import { Listing } from './listing.entity';
 import { Offer } from './offer.entity';
+import { VendorListing } from './vendor-listing.entity';
 import { KoboColumnTransformer } from '../../common/utils/money';
 
 /**
@@ -68,9 +69,13 @@ export class CartItem {
   @JoinColumn({ name: 'listing_id' })
   listing: Listing | null;
 
-  // Vendor lines arrive in Phase 5 (FK added with vendor_listings).
+  // Vendor lines become purchasable in Phase 5.
   @Column({ name: 'vendor_listing_id', type: 'uuid', nullable: true })
   vendorListingId: string | null;
+
+  @ManyToOne(() => VendorListing, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'vendor_listing_id' })
+  vendorListing: VendorListing | null;
 
   // Accepted-offer price lock (24h from acceptance; never an availability hold).
   @Column({ name: 'offer_id', type: 'uuid', nullable: true })

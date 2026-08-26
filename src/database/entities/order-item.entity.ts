@@ -10,6 +10,7 @@ import {
 import { EscrowTransaction } from './escrow.entity';
 import { Listing } from './listing.entity';
 import { Offer } from './offer.entity';
+import { VendorListing } from './vendor-listing.entity';
 import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum OrderItemType {
@@ -50,9 +51,12 @@ export class OrderItem {
   @JoinColumn({ name: 'listing_id' })
   listing: Listing | null;
 
-  // FK arrives with vendor_listings in Phase 4/5.
   @Column({ name: 'vendor_listing_id', type: 'uuid', nullable: true })
   vendorListingId: string | null;
+
+  @ManyToOne(() => VendorListing, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'vendor_listing_id' })
+  vendorListing: VendorListing | null;
 
   // The accepted P2P offer this line's price came from (receipt, not a hold).
   @Column({ name: 'offer_id', type: 'uuid', nullable: true })
