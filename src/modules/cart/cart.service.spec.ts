@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ForbiddenException,
   NotFoundException,
@@ -38,6 +38,12 @@ function makeService(opts: {
   const offerRepo: any = {
     findOne: jest.fn(async ({ where }: any) => opts.offers?.[where.id] ?? null),
   };
+  const vendorListingRepo: any = {
+    findOne: jest.fn(async ({ where }: any) => (opts as any).vendorListings?.[where.id] ?? null),
+  };
+  const vendorUniversityRepo: any = {
+    findOne: jest.fn(async () => ((opts as any).vendorServes === false ? null : { id: 'vu1' })),
+  };
   const timingPolicy: any = { resolve: () => ({ offerLockHours: 24 }) };
 
   const svc = new CartService(
@@ -45,10 +51,14 @@ function makeService(opts: {
     cartItemRepo,
     listingRepo,
     offerRepo,
+    vendorListingRepo,
+    vendorUniversityRepo,
     timingPolicy,
   );
   return { svc, cartItemRepo };
 }
+
+const buyer: any = { id: 'buyer', universityId: 'u1' };
 
 const activeListing = (over: any = {}) => ({
   id: 'l1',
@@ -67,7 +77,7 @@ describe('CartService.addItem', () => {
       listings: { l1: activeListing() },
     });
 
-    await svc.addItem('buyer', { listingId: 'l1' });
+    await svc.addItem(buyer, { listingId: 'l1' });
 
     expect(cartItemRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ listingId: 'l1', priceAtAdd: 10000, offerId: null }),
@@ -76,11 +86,11 @@ describe('CartService.addItem', () => {
 
   it('requires exactly one of listingId / offerId', async () => {
     const { svc } = makeService();
-    await expect(svc.addItem('buyer', {})).rejects.toBeInstanceOf(
+    await expect(svc.addItem(buyer, {})).rejects.toBeInstanceOf(
       BadRequestException,
     );
     await expect(
-      svc.addItem('buyer', { listingId: 'l1', offerId: 'o1' }),
+      svc.addItem(buyer, { listingId: 'l1', offerId: 'o1' }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -88,19 +98,19 @@ describe('CartService.addItem', () => {
     const own = makeService({
       listings: { l1: activeListing({ sellerId: 'buyer' }) },
     });
-    await expect(own.svc.addItem('buyer', { listingId: 'l1' })).rejects.toBeInstanceOf(
+    await expect(own.svc.addItem(buyer, { listingId: 'l1' })).rejects.toBeInstanceOf(
       BadRequestException,
     );
 
     const sold = makeService({
       listings: { l1: activeListing({ status: ListingStatus.SOLD }) },
     });
-    await expect(sold.svc.addItem('buyer', { listingId: 'l1' })).rejects.toBeInstanceOf(
+    await expect(sold.svc.addItem(buyer, { listingId: 'l1' })).rejects.toBeInstanceOf(
       BadRequestException,
     );
 
     const gone = makeService({});
-    await expect(gone.svc.addItem('buyer', { listingId: 'nope' })).rejects.toBeInstanceOf(
+    await expect(gone.svc.addItem(buyer, { listingId: 'nope' })).rejects.toBeInstanceOf(
       NotFoundException,
     );
   });
@@ -117,7 +127,7 @@ describe('CartService.addItem', () => {
     };
     const { svc, cartItemRepo } = makeService({ offers: { o1: offer } });
 
-    await svc.addItem('buyer', { offerId: 'o1' });
+    await svc.addItem(buyer, { offerId: 'o1' });
     expect(cartItemRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ offerId: 'o1', priceAtAdd: 8500 }),
     );
@@ -126,14 +136,14 @@ describe('CartService.addItem', () => {
       offers: { o1: { ...offer, buyerId: 'someone-else' } },
     });
     await expect(
-      notMine.svc.addItem('buyer', { offerId: 'o1' }),
+      notMine.svc.addItem(buyer, { offerId: 'o1' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
 
     const lapsed = makeService({
       offers: { o1: { ...offer, respondedAt: new Date(Date.now() - 25 * HOUR) } },
     });
     await expect(
-      lapsed.svc.addItem('buyer', { offerId: 'o1' }),
+      lapsed.svc.addItem(buyer, { offerId: 'o1' }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -150,7 +160,7 @@ describe('CartService.addItem', () => {
       existingLine,
     });
 
-    await svc.addItem('buyer', { listingId: 'l1' });
+    await svc.addItem(buyer, { listingId: 'l1' });
 
     expect(cartItemRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'line1', priceAtAdd: 10000 }),
@@ -183,7 +193,7 @@ describe('CartService.getCart freshness flags', () => {
       ],
     });
 
-    const view = await svc.getCart('buyer');
+    const view = await svc.getCart(buyer);
 
     const byId = Object.fromEntries(view.lines.map((l) => [l.id, l]));
     expect(byId['i1'].issues).toEqual([]);
@@ -196,3 +206,4 @@ describe('CartService.getCart freshness flags', () => {
     expect(view.readyToCheckout).toBe(false);
   });
 });
+

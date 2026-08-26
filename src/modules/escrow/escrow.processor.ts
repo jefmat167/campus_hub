@@ -7,6 +7,7 @@ import {
   CheckFulfillmentExpiryPayload,
   CheckAutoReleasePayload,
   SendFulfillmentReminderPayload,
+  OrderConfirmTimeoutPayload,
 } from './interfaces/escrow-jobs.interface';
 import { EscrowService } from './escrow.service';
 
@@ -26,6 +27,7 @@ export class EscrowProcessor extends WorkerHost {
       | CheckFulfillmentExpiryPayload
       | CheckAutoReleasePayload
       | SendFulfillmentReminderPayload
+      | OrderConfirmTimeoutPayload
     >,
   ): Promise<any> {
     this.logger.log(`Processing escrow job: ${job.name} (${job.id})`);
@@ -39,6 +41,12 @@ export class EscrowProcessor extends WorkerHost {
 
         case EscrowJobName.CHECK_AUTO_RELEASE:
           return this.handleAutoRelease(job.data as CheckAutoReleasePayload);
+
+        case EscrowJobName.ORDER_CONFIRM_TIMEOUT: {
+          const { escrowId } = job.data as OrderConfirmTimeoutPayload;
+          await this.escrowService.handleConfirmationTimeout(escrowId);
+          return { success: true };
+        }
 
         case EscrowJobName.SEND_FULFILLMENT_REMINDER: {
           const { escrowId, reminderNumber } =

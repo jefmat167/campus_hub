@@ -299,6 +299,7 @@ export class AuthService {
         {
           businessName: dto.businessName,
           description: dto.description,
+          shopAddress: dto.shopAddress,
           homeUniversityId: dto.homeUniversityId,
           servedUniversityIds: dto.servedUniversityIds,
         },

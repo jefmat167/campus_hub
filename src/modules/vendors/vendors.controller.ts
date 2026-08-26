@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -19,7 +20,12 @@ import { TierGuard } from '../../common/guards/tier.guard';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
+import {
+  EscrowStatus,
+  OrderMarket,
+} from '../../database/entities/escrow.entity';
 import { VendorsService } from './vendors.service';
+import { EscrowService } from '../escrow/escrow.service';
 import { VendorGuard } from './vendor.guard';
 import { ApplyVendorDto } from './dto/apply-vendor.dto';
 import { SubmitVendorApplicationDto } from './dto/submit-vendor-application.dto';
@@ -30,7 +36,46 @@ import { SubmitCacDto } from './dto/submit-cac.dto';
 @Controller('vendors')
 @ApiBearerAuth()
 export class VendorsController {
-  constructor(private readonly vendorsService: VendorsService) { }
+  constructor(
+    private readonly vendorsService: VendorsService,
+    private readonly escrowService: EscrowService,
+  ) { }
+
+  @Get('me/orders')
+  @UseGuards(JwtAuthGuard, VendorGuard)
+  @ApiOperation({
+    summary: 'My vendor orders (sub-orders where I am the seller)',
+    description:
+      'Vendor-market sub-orders only. Lifecycle actions (confirm/reject, ready, ' +
+      'verify-code, cancel) live on /escrow/:id/* — that surface is party-scoped.',
+  })
+  @ApiResponse({ status: 200, description: 'Paginated vendor orders' })
+  async myOrders(
+    @CurrentUser() user: User,
+    @Query('status') status?: EscrowStatus,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const take = Math.min(Number(limit) || 20, 100);
+    const { escrows, total } = await this.escrowService.getUserEscrows(
+      user.id,
+      'seller',
+      Number(page) || 1,
+      take,
+      OrderMarket.VENDOR,
+      status,
+    );
+    return {
+      success: true,
+      data: escrows,
+      meta: {
+        total,
+        page: Number(page) || 1,
+        limit: take,
+        totalPages: Math.ceil(total / take),
+      },
+    };
+  }
 
   @Post('apply')
   @UseGuards(JwtAuthGuard, TierGuard)

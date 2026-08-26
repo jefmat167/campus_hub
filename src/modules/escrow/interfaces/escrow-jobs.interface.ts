@@ -4,6 +4,9 @@ export enum EscrowJobName {
   CHECK_FULFILLMENT_EXPIRY = 'check-fulfillment-expiry',
   CHECK_AUTO_RELEASE = 'check-auto-release',
   SEND_FULFILLMENT_REMINDER = 'send-fulfillment-reminder',
+  // Vendor manual confirmation window (rev-2 03.5, Phase 5): auto-cancel with
+  // a full refund + stock restore if the vendor never confirms.
+  ORDER_CONFIRM_TIMEOUT = 'order-confirm-timeout',
 }
 
 export interface CheckFulfillmentExpiryPayload {
@@ -17,4 +20,8 @@ export interface CheckAutoReleasePayload {
 export interface SendFulfillmentReminderPayload {
   escrowId: string;
   reminderNumber: number; // hours-after-creation offset this reminder is for
+}
+
+export interface OrderConfirmTimeoutPayload {
+  escrowId: string;
 }

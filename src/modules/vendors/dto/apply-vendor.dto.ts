@@ -43,6 +43,17 @@ export class ApplyVendorDto {
   @MaxLength(1000)
   description?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Human directions to the shop — shown to buyers as the pickup location',
+    example: 'Shop 4, Mama T Plaza, opposite the main gate',
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  shopAddress?: string;
+
   @ApiProperty({
     description:
       'Where the shop physically is — must be one of servedUniversityIds',

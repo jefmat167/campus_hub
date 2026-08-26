@@ -1,8 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize,
   IsArray,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -35,21 +35,66 @@ export class MeetupSelectionDto {
   meetupPointIndex: number;
 }
 
+/**
+ * One fulfillment choice per VENDOR in the cart (rev-2 spec 03.2): pickup at
+ * the shop (always available), or delivery — to an address at the vendor's
+ * home university, or to an admin drop point (mandatory for neighboring
+ * universities). Chosen once per vendor sub-order, not per item.
+ */
+export class VendorFulfillmentChoiceDto {
+  @ApiProperty({ description: 'The vendor this choice is for', format: 'uuid' })
+  @IsUUID()
+  vendorProfileId: string;
+
+  @ApiProperty({ enum: ['pickup', 'delivery'], example: 'delivery' })
+  @IsIn(['pickup', 'delivery'])
+  method: 'pickup' | 'delivery';
+
+  @ApiPropertyOptional({
+    description:
+      'Admin drop point at YOUR university (required for delivery from a neighboring-campus vendor; optional alternative at home)',
+    format: 'uuid',
+  })
+  @IsOptional()
+  @IsUUID()
+  dropPointId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Delivery address (only when the vendor's home university is yours)",
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  deliveryAddress?: string;
+}
+
 export class CheckoutDto {
   @ApiProperty({ description: 'Your 6-digit transaction PIN', example: '135790' })
   @IsString()
   @Matches(/^\d{6}$/, { message: 'PIN must be exactly 6 digits' })
   pin: string;
 
-  @ApiProperty({
-    description: 'One meet-up selection per seller in the cart',
+  @ApiPropertyOptional({
+    description: 'One meet-up selection per P2P seller in the cart',
     type: [MeetupSelectionDto],
   })
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => MeetupSelectionDto)
-  meetupSelections: MeetupSelectionDto[];
+  meetupSelections?: MeetupSelectionDto[];
+
+  @ApiPropertyOptional({
+    description: 'One fulfillment choice per vendor in the cart',
+    type: [VendorFulfillmentChoiceDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => VendorFulfillmentChoiceDto)
+  vendorFulfillment?: VendorFulfillmentChoiceDto[];
 
   @ApiPropertyOptional({
     description: 'Optional note to the sellers',

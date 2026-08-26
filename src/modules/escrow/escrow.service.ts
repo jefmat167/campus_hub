@@ -115,19 +115,32 @@ export class EscrowService {
   }
 
   /**
-   * Platform fee % for an order, resolved per the BUYER's university (rev-2
-   * spec 01.3). Falls back to the platform default when the buyer carries no
-   * university or the university has no override.
+   * Platform fee split for an order (rev-2 spec 01.3): the fee %, resolved
+   * per the BUYER's university and the order's market, applies to the ITEMS
+   * SUBTOTAL — delivery/travel fees pass through to the seller in full. The
+   * seller payout is amount − fee, kobo-exact.
    */
-  private async getPlatformFeePercentForBuyer(buyerId: string): Promise<number> {
+  private async getOrderFeeSplit(escrow: EscrowTransaction): Promise<{
+    platformFee: number;
+    sellerPayout: number;
+  }> {
     const buyer = await this.userRepo.findOne({
-      where: { id: buyerId },
+      where: { id: escrow.buyerId },
       select: ['id', 'universityId'],
     });
     const settings = await this.universitySettingsService.resolve(
       buyer?.universityId ?? null,
     );
-    return settings.p2pFeePercent;
+    const percent =
+      escrow.market === OrderMarket.VENDOR
+        ? settings.vendorFeePercent
+        : settings.p2pFeePercent;
+    const feeBase = Number(escrow.itemsSubtotal ?? escrow.amount);
+    const { fee: platformFee } = splitFee(feeBase, percent);
+    const sellerPayout = toNaira(
+      toKobo(Number(escrow.amount)) - toKobo(platformFee),
+    );
+    return { platformFee, sellerPayout };
   }
 
   /**
@@ -425,6 +438,393 @@ export class EscrowService {
   }
 
   /**
+   * Create one VENDOR sub-order (rev-2 spec 03.4/03.5) on the CALLER's
+   * transaction. Manual-confirmation orders start in PENDING_CONFIRMATION
+   * (funds already held); auto-confirmed orders go straight to
+   * AWAITING_SELLER. Stock was already decremented by the checkout.
+   */
+  async createVendorSubOrder(
+    queryRunner: QueryRunner,
+    params: {
+      checkoutId: string;
+      buyerId: string;
+      sellerId: string; // the vendor profile's userId
+      amount: number; // naira — itemsSubtotal + deliveryFee
+      itemsSubtotal: number;
+      deliveryFee: number;
+      deliveryMethod: DeliveryMethod;
+      deliveryLocation: string;
+      deliveryAddress?: string | null;
+      dropPointId?: string | null;
+      confirmationRequired: boolean;
+      notes?: string | null;
+      lines: Array<{
+        vendorListingId: string;
+        title: string;
+        unitPrice: number;
+        quantity: number;
+        lineTotal: number;
+        optionsSnapshot: Record<string, unknown> | null;
+      }>;
+    },
+  ): Promise<EscrowTransaction> {
+    const orderNumber = await this.generateOrderNumber();
+    const fulfillmentExpiresAt = new Date(
+      Date.now() + this.FULFILLMENT_HOURS * 60 * 60 * 1000,
+    );
+
+    const escrow = this.escrowRepo.create({
+      buyerId: params.buyerId,
+      sellerId: params.sellerId,
+      checkoutId: params.checkoutId,
+      market: OrderMarket.VENDOR,
+      amount: params.amount,
+      itemsSubtotal: params.itemsSubtotal,
+      deliveryFee: params.deliveryFee,
+      orderNumber,
+      status: params.confirmationRequired
+        ? EscrowStatus.PENDING_CONFIRMATION
+        : EscrowStatus.AWAITING_SELLER,
+      confirmationRequired: params.confirmationRequired,
+      // Provisional for manual orders — reset to confirm-time + 72h on confirm.
+      fulfillmentExpiresAt,
+      notes: params.notes ?? null,
+      deliveryMethod: params.deliveryMethod,
+      deliveryLocation: params.deliveryLocation,
+      deliveryAddress: params.deliveryAddress ?? null,
+      dropPointId: params.dropPointId ?? null,
+    });
+    const savedEscrow = await queryRunner.manager.save(escrow);
+
+    for (const line of params.lines) {
+      await queryRunner.manager.save(
+        queryRunner.manager.create(OrderItem, {
+          orderId: savedEscrow.id,
+          itemType: OrderItemType.VENDOR_GOODS,
+          vendorListingId: line.vendorListingId,
+          titleSnapshot: line.title,
+          unitPrice: line.unitPrice,
+          quantity: line.quantity,
+          lineTotal: line.lineTotal,
+          optionsSnapshot: line.optionsSnapshot,
+        }),
+      );
+    }
+
+    return savedEscrow;
+  }
+
+  /**
+   * Post-commit side effects for a vendor sub-order. Manual orders get the
+   * 24h confirmation-timeout timer; auto-confirmed orders get the standard
+   * 72h delivery deadline + reminders. Never throws.
+   */
+  async finalizeVendorSubOrderPlacement(
+    escrow: EscrowTransaction,
+    itemsLabel: string,
+  ): Promise<void> {
+    try {
+      const confirmationHours = this.timingPolicy.resolve().confirmationHours;
+      if (escrow.status === EscrowStatus.PENDING_CONFIRMATION) {
+        await this.escrowQueue.add(
+          EscrowJobName.ORDER_CONFIRM_TIMEOUT,
+          { escrowId: escrow.id },
+          {
+            delay: confirmationHours * 60 * 60 * 1000,
+            jobId: `confirm-timeout-${escrow.id}`,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 1000 },
+          },
+        );
+      } else {
+        await this.scheduleFulfillmentTimers(escrow.id);
+      }
+
+      const amount = Number(escrow.amount);
+      const formattedAmount = amount.toLocaleString();
+      const [buyer, seller] = await Promise.all([
+        this.userRepo.findOne({ where: { id: escrow.buyerId } }),
+        this.userRepo.findOne({ where: { id: escrow.sellerId } }),
+      ]);
+
+      const pending = escrow.status === EscrowStatus.PENDING_CONFIRMATION;
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ESCROW_INITIATED,
+        title: pending ? 'Order placed — awaiting vendor confirmation' : 'Order confirmed',
+        body: pending
+          ? `Your order ${escrow.orderNumber} for "${itemsLabel}" (₦${formattedAmount}) is waiting for the vendor to confirm (within ${confirmationHours}h). You'll be refunded in full if they don't.`
+          : `Your order ${escrow.orderNumber} for "${itemsLabel}" (₦${formattedAmount}) has been placed. The vendor has 72 hours to fulfil it.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          checkoutId: escrow.checkoutId,
+          amount,
+        },
+      });
+
+      await this.notificationsService.createNotification({
+        userId: escrow.sellerId,
+        type: NotificationType.ESCROW_INITIATED,
+        title: pending
+          ? `New order — confirm within ${confirmationHours}h`
+          : 'New order on your storefront',
+        body: pending
+          ? `Order ${escrow.orderNumber} for "${itemsLabel}" (₦${formattedAmount}) needs your confirmation within ${confirmationHours} hours, or it auto-cancels with a full refund.`
+          : `A buyer placed order ${escrow.orderNumber} for "${itemsLabel}" (₦${formattedAmount}). You have 72 hours to fulfil it.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          checkoutId: escrow.checkoutId,
+          amount,
+        },
+      });
+
+      if (buyer?.email) {
+        await this.resendService.sendEmail({
+          to: buyer.email,
+          subject: `Order Confirmed — ${escrow.orderNumber}`,
+          template: 'orderConfirmationBuyer',
+          context: {
+            buyerName: buyer.fullName,
+            orderNumber: escrow.orderNumber,
+            listingTitle: itemsLabel,
+            amount: formattedAmount,
+            sellerName: seller?.fullName ?? 'Vendor',
+          },
+        });
+      }
+      if (seller?.email) {
+        await this.resendService.sendEmail({
+          to: seller.email,
+          subject: `New Order — ${escrow.orderNumber}`,
+          template: 'newOrderSeller',
+          context: {
+            sellerName: seller.fullName,
+            orderNumber: escrow.orderNumber,
+            listingTitle: itemsLabel,
+            amount: formattedAmount,
+          },
+        });
+      }
+
+      this.logger.log(
+        `Vendor sub-order ${escrow.id} (${escrow.orderNumber}) placed for ₦${formattedAmount} (${escrow.status})`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Post-placement side effects failed for vendor sub-order ${escrow.id}: ${error}`,
+      );
+    }
+  }
+
+  /**
+   * Vendor confirms a PENDING_CONFIRMATION order (rev-2 03.5): the standard
+   * 3-day fulfillment clock starts NOW (confirmation is commitment, not
+   * readiness — the vendor still marks ready/out-for-delivery later).
+   */
+  async confirmOrder(
+    escrowId: string,
+    sellerId: string,
+  ): Promise<EscrowTransaction> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow) throw new NotFoundException('Order not found');
+    if (escrow.sellerId !== sellerId) {
+      throw new ForbiddenException('You are not the seller of this order');
+    }
+    if (escrow.status !== EscrowStatus.PENDING_CONFIRMATION) {
+      throw new BadRequestException(
+        `Cannot confirm. Order status is: ${escrow.status}`,
+      );
+    }
+
+    escrow.status = EscrowStatus.AWAITING_SELLER;
+    escrow.confirmedAt = new Date();
+    escrow.fulfillmentExpiresAt = new Date(
+      Date.now() + this.FULFILLMENT_HOURS * 60 * 60 * 1000,
+    );
+    await this.escrowRepo.save(escrow);
+
+    await this.escrowQueue.remove(`confirm-timeout-${escrowId}`);
+    await this.scheduleFulfillmentTimers(escrowId);
+
+    const itemTitle = await this.getItemTitle(escrow);
+    try {
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ORDER_CONFIRMED,
+        title: 'Vendor confirmed your order',
+        body: `Order ${escrow.orderNumber} ("${itemTitle}") is confirmed. The vendor has 72 hours to fulfil it.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+    } catch (error) {
+      this.logger.warn(`Confirm notification failed for ${escrowId}: ${error}`);
+    }
+
+    this.logger.log(`Order ${escrowId} confirmed by vendor ${sellerId}`);
+    return escrow;
+  }
+
+  /**
+   * Vendor rejects a PENDING_CONFIRMATION order: full refund, no fee
+   * (seller-initiated — rev-2 01.2), stock restored.
+   */
+  async rejectOrder(
+    escrowId: string,
+    sellerId: string,
+    reason?: string,
+  ): Promise<EscrowTransaction> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow) throw new NotFoundException('Order not found');
+    if (escrow.sellerId !== sellerId) {
+      throw new ForbiddenException('You are not the seller of this order');
+    }
+    if (escrow.status !== EscrowStatus.PENDING_CONFIRMATION) {
+      throw new BadRequestException(
+        `Cannot reject. Order status is: ${escrow.status}`,
+      );
+    }
+
+    await this.terminatePendingOrder(escrow, 'seller', 'rejected', reason);
+
+    try {
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ORDER_REJECTED,
+        title: 'Order rejected — full refund issued',
+        body: `The vendor rejected order ${escrow.orderNumber}${reason ? ` ("${reason}")` : ''}. You've been refunded in full.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+    } catch (error) {
+      this.logger.warn(`Reject notification failed for ${escrowId}: ${error}`);
+    }
+
+    this.logger.log(`Order ${escrowId} rejected by vendor ${sellerId}`);
+    return escrow;
+  }
+
+  /**
+   * Confirmation-timeout backstop (24h, TimingPolicy): the vendor never
+   * confirmed — auto-cancel with a full refund + stock restore.
+   */
+  async handleConfirmationTimeout(escrowId: string): Promise<void> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow) {
+      this.logger.warn(`Escrow ${escrowId} not found for confirmation timeout`);
+      return;
+    }
+    if (escrow.status !== EscrowStatus.PENDING_CONFIRMATION) {
+      this.logger.log(
+        `Escrow ${escrowId} status is ${escrow.status}, skipping confirmation timeout`,
+      );
+      return;
+    }
+
+    await this.terminatePendingOrder(escrow, 'system', 'confirm_timeout');
+
+    try {
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ORDER_REJECTED,
+        title: 'Order auto-cancelled — full refund issued',
+        body: `The vendor didn't confirm order ${escrow.orderNumber} in time, so it was cancelled and you've been refunded in full.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+    } catch (error) {
+      this.logger.warn(`Timeout notification failed for ${escrowId}: ${error}`);
+    }
+
+    this.logger.log(`Order ${escrowId} auto-cancelled (confirmation timeout)`);
+  }
+
+  /** Shared terminal path for pending vendor orders: refund + restock + cancel. */
+  private async terminatePendingOrder(
+    escrow: EscrowTransaction,
+    cancelledBy: 'seller' | 'system',
+    cancelReason: string,
+    noteReason?: string,
+  ): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await this.walletService.refundFunds(
+        escrow.buyerId,
+        Number(escrow.amount),
+        `ESCROW_REJECTED_${escrow.id}`,
+        queryRunner,
+        escrow.market ?? null,
+      );
+
+      escrow.status = EscrowStatus.CANCELLED;
+      escrow.cancelledBy = cancelledBy;
+      escrow.cancelReason = cancelReason;
+      escrow.refundedAt = new Date();
+      if (noteReason) {
+        escrow.metadata = { ...(escrow.metadata ?? {}), rejectionReason: noteReason };
+      }
+      await queryRunner.manager.save(escrow);
+
+      await this.restoreVendorStock(queryRunner.manager, escrow.id);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+    await this.escrowQueue.remove(`confirm-timeout-${escrow.id}`);
+  }
+
+  /**
+   * Put vendor stock back for a terminal-without-delivery order (reject,
+   * confirmation timeout, cancel, expiry). Only tracked stock is touched —
+   * if the vendor untracked it mid-flight, there's nothing to restore.
+   * Disputes after delivery never restock: the goods are with the buyer.
+   */
+  private async restoreVendorStock(
+    manager: import('typeorm').EntityManager,
+    orderId: string,
+  ): Promise<void> {
+    const items = await manager.find(OrderItem, { where: { orderId } });
+    for (const item of items) {
+      if (!item.vendorListingId) continue;
+      await manager.query(
+        `UPDATE "vendor_listings" SET "stock" = "stock" + $1 WHERE "id" = $2 AND "stock" IS NOT NULL`,
+        [item.quantity, item.vendorListingId],
+      );
+      const optionIds = Array.isArray(
+        (item.optionsSnapshot as Record<string, unknown>)?.optionIds,
+      )
+        ? ((item.optionsSnapshot as Record<string, unknown>)
+          .optionIds as string[])
+        : [];
+      for (const optionId of optionIds) {
+        await manager.query(
+          `UPDATE "options" SET "stock" = "stock" + $1 WHERE "id" = $2 AND "stock" IS NOT NULL`,
+          [item.quantity, optionId],
+        );
+      }
+    }
+  }
+
+  /** 72h delivery deadline + pre-ready seller reminders. */
+  private async scheduleFulfillmentTimers(escrowId: string): Promise<void> {
+    await this.escrowQueue.add(
+      EscrowJobName.CHECK_FULFILLMENT_EXPIRY,
+      { escrowId },
+      {
+        delay: this.FULFILLMENT_HOURS * 60 * 60 * 1000,
+        jobId: `fulfillment-expiry-${escrowId}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1000 },
+      },
+    );
+    await this.scheduleFulfillmentReminders(escrowId);
+  }
+
+  /**
    * Resolve the display title for an order (buy-request title, or the first
    * order item's snapshot with a "+N more" suffix for bundles).
    */
@@ -699,10 +1099,13 @@ export class EscrowService {
         : null;
 
       // Method-appropriate body: meet-up includes the scheduled date/time;
-      // pick-up is collect-any-time at the pickup address.
+      // door delivery is out-for-delivery; pick-up is collect-any-time.
+      const isDelivery = escrow.deliveryMethod === DeliveryMethod.DELIVERY;
       const body = isMeetup
         ? `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Meet-up scheduled for ${formattedDeliveryDate} at ${dto.deliveryTime}, at ${location}.`
-        : `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Collect your item at ${location} and share the code with the seller.`;
+        : isDelivery
+          ? `Order ${escrow.orderNumber} is out for delivery to ${location}. Your delivery code is ${deliveryCode.code} — share it with the courier on receipt.`
+          : `The seller is ready for order ${escrow.orderNumber}. Your delivery code is ${deliveryCode.code}. Collect your item at ${location} and share the code with the seller.`;
 
       // Notify buyer — push + in-app
       await this.notificationsService.createNotification({
@@ -982,7 +1385,7 @@ export class EscrowService {
       escrow.refundedAt = new Date();
       await queryRunner.manager.save(escrow);
 
-      // Release the items' listings back to ACTIVE
+      // Release the items' listings back to ACTIVE + restore vendor stock
       const expiredItems = await queryRunner.manager.find(OrderItem, {
         where: { orderId: escrow.id },
       });
@@ -996,6 +1399,7 @@ export class EscrowService {
           { status: ListingStatus.ACTIVE },
         );
       }
+      await this.restoreVendorStock(queryRunner.manager, escrow.id);
 
       // Revert buy request to OPEN (if buy-request-based escrow)
       if (escrow.buyRequestOfferId) {
@@ -1076,15 +1480,9 @@ export class EscrowService {
     await queryRunner.startTransaction();
 
     try {
-      // Platform fee (buyer's-university setting, default 2.5%), computed in
-      // kobo so fee + payout === amount.
-      const feePercent = await this.getPlatformFeePercentForBuyer(
-        escrow.buyerId,
-      );
-      const { fee: platformFee, payout: sellerPayout } = splitFee(
-        Number(escrow.amount),
-        feePercent,
-      );
+      // Platform fee on the items subtotal (buyer's-university setting per
+      // the order's market); delivery fees pass through to the seller.
+      const { platformFee, sellerPayout } = await this.getOrderFeeSplit(escrow);
 
       // Move the full amount out of the buyer's locked balance: payout to the
       // seller, fee to the platform wallet (no refund on a completed order).
@@ -1176,11 +1574,15 @@ export class EscrowService {
       throw new ForbiddenException('You are not part of this transaction');
     }
 
-    // Can only cancel if AWAITING_SELLER or SELLER_READY
+    // Cancellable while nothing has been handed over: pending vendor
+    // confirmation, awaiting seller, or seller-ready (fee only applies to a
+    // buyer cancelling after ready — rev-2 01.2).
     if (
-      ![EscrowStatus.AWAITING_SELLER, EscrowStatus.SELLER_READY].includes(
-        escrow.status,
-      )
+      ![
+        EscrowStatus.PENDING_CONFIRMATION,
+        EscrowStatus.AWAITING_SELLER,
+        EscrowStatus.SELLER_READY,
+      ].includes(escrow.status)
     ) {
       throw new BadRequestException(
         `Cannot cancel order. Status is: ${escrow.status}`,
@@ -1267,7 +1669,7 @@ export class EscrowService {
 
       await queryRunner.manager.save(escrow);
 
-      // Release the items' listings back to ACTIVE
+      // Release the items' listings back to ACTIVE + restore vendor stock
       const cancelledItems = await queryRunner.manager.find(OrderItem, {
         where: { orderId: escrow.id },
       });
@@ -1281,6 +1683,7 @@ export class EscrowService {
           { status: ListingStatus.ACTIVE },
         );
       }
+      await this.restoreVendorStock(queryRunner.manager, escrow.id);
 
       // Revert buy request to OPEN (if buy-request-based escrow)
       if (escrow.buyRequestOfferId) {
@@ -1297,6 +1700,7 @@ export class EscrowService {
       // Remove any pending jobs
       await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
       await this.escrowQueue.remove(`auto-release-${escrowId}`);
+      await this.escrowQueue.remove(`confirm-timeout-${escrowId}`);
       await this.cancelFulfillmentReminders(escrowId);
 
       await queryRunner.commitTransaction();
@@ -1471,14 +1875,10 @@ export class EscrowService {
           break;
 
         case DisputeStatus.RESOLVED_SELLER: {
-          // Release to seller, with the platform fee deducted (buyer's-
-          // university setting, default 2.5% — same rule as auto-completion).
-          const feePercent = await this.getPlatformFeePercentForBuyer(
-            escrow.buyerId,
-          );
-          const { fee: platformFee, payout: sellerPayout } = splitFee(
-            Number(escrow.amount),
-            feePercent,
+          // Release to seller, with the platform fee deducted — same rule as
+          // auto-completion (market-aware, fee on the items subtotal).
+          const { platformFee, sellerPayout } = await this.getOrderFeeSplit(
+            escrow,
           );
 
           await this.walletService.settleEscrow(
@@ -1642,18 +2042,26 @@ export class EscrowService {
     role: 'buyer' | 'seller' | 'all' = 'all',
     page = 1,
     limit = 20,
+    market?: OrderMarket,
+    status?: EscrowStatus,
   ): Promise<{ escrows: EscrowTransaction[]; total: number }> {
+    const extra = {
+      ...(market && { market }),
+      ...(status && { status }),
+    };
     let where:
-      | { buyerId: string }
-      | { sellerId: string }
-      | Array<{ buyerId: string } | { sellerId: string }>;
+      | Record<string, unknown>
+      | Array<Record<string, unknown>>;
 
     if (role === 'buyer') {
-      where = { buyerId: userId };
+      where = { buyerId: userId, ...extra };
     } else if (role === 'seller') {
-      where = { sellerId: userId };
+      where = { sellerId: userId, ...extra };
     } else {
-      where = [{ buyerId: userId }, { sellerId: userId }];
+      where = [
+        { buyerId: userId, ...extra },
+        { sellerId: userId, ...extra },
+      ];
     }
 
     const [escrows, total] = await this.escrowRepo.findAndCount({

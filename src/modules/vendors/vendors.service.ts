@@ -24,6 +24,7 @@ import { SubmitCacDto } from './dto/submit-cac.dto';
 export interface VendorProfileSeed {
   businessName: string;
   description?: string | null;
+  shopAddress?: string | null;
   homeUniversityId: string;
   servedUniversityIds: string[];
 }
@@ -99,6 +100,7 @@ export class VendorsService {
       userId,
       businessName: seed.businessName,
       description: seed.description ?? null,
+      shopAddress: seed.shopAddress ?? null,
       homeUniversityId: seed.homeUniversityId,
       status: initial.status,
       shopfrontPhotoUrl: initial.shopfrontPhotoUrl ?? null,
@@ -148,6 +150,7 @@ export class VendorsService {
         {
           businessName: dto.businessName,
           description: dto.description,
+          shopAddress: dto.shopAddress,
           homeUniversityId: dto.homeUniversityId,
           servedUniversityIds: dto.servedUniversityIds,
         },
@@ -215,6 +218,7 @@ export class VendorsService {
     await this.dataSource.transaction(async (manager) => {
       if (dto.businessName !== undefined) profile.businessName = dto.businessName;
       if (dto.description !== undefined) profile.description = dto.description;
+      if (dto.shopAddress !== undefined) profile.shopAddress = dto.shopAddress;
       profile.homeUniversityId = newHome;
       await manager.save(profile);
 
@@ -517,6 +521,7 @@ export class VendorsService {
       id: profile.id,
       businessName: profile.businessName,
       description: profile.description,
+      shopAddress: profile.shopAddress,
       status: profile.status,
       homeUniversityId: profile.homeUniversityId,
       homeUniversity: profile.homeUniversity

@@ -44,7 +44,7 @@ export class CartController {
   })
   @ApiResponse({ status: 200, description: 'Cart view with per-seller grouping' })
   async getCart(@CurrentUser() user: User) {
-    return this.cartService.getCart(user.id);
+    return this.cartService.getCart(user);
   }
 
   @Post('items')
@@ -57,7 +57,7 @@ export class CartController {
   @ApiResponse({ status: 201, description: 'Updated cart view' })
   @ApiResponse({ status: 400, description: 'Unavailable listing / expired offer lock / own listing' })
   async addItem(@CurrentUser() user: User, @Body() dto: AddCartItemDto) {
-    return this.cartService.addItem(user.id, dto);
+    return this.cartService.addItem(user, dto);
   }
 
   @Delete('items/:itemId')
@@ -67,7 +67,7 @@ export class CartController {
     @CurrentUser() user: User,
     @Param('itemId', ParseUUIDPipe) itemId: string,
   ) {
-    return this.cartService.removeItem(user.id, itemId);
+    return this.cartService.removeItem(user, itemId);
   }
 
   @Delete()

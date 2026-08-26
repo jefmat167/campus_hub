@@ -44,7 +44,11 @@ export enum VisibilityScope {
   UNIVERSITY = 'university',
 }
 
+// P2P orders are MEETUP-only (rev-2 02). PICKUP (shop collection) and
+// DELIVERY (address / drop point) belong to vendor orders. Stored in plain
+// varchar columns — no PG enum to migrate.
 export enum DeliveryMethod {
+  DELIVERY = 'delivery',
   PICKUP = 'pickup',
   MEETUP = 'meetup',
 }

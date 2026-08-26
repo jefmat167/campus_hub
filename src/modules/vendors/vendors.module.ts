@@ -23,6 +23,7 @@ import { UniversitiesModule } from '../universities/universities.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AdminModule } from '../admin/admin.module';
 import { UploadModule } from '../upload/upload.module';
+import { EscrowModule } from '../escrow/escrow.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { UploadModule } from '../upload/upload.module';
     NotificationsModule,
     AdminModule,
     UploadModule,
+    EscrowModule,
   ],
   controllers: [
     VendorsController,

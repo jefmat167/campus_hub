@@ -30,6 +30,15 @@ export class UpdateVendorProfileDto {
   description?: string;
 
   @ApiPropertyOptional({
+    description: 'Human directions to the shop (pickup location for buyers)',
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  shopAddress?: string;
+
+  @ApiPropertyOptional({
     description:
       'New home university — must be (or become) one of the served universities',
     format: 'uuid',

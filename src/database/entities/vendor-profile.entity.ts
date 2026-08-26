@@ -61,6 +61,11 @@ export class VendorProfile {
   @Index()
   homeUniversityId: string;
 
+  // Human directions to the shop — snapshotted onto pickup orders as the
+  // collection location (Phase 5).
+  @Column({ name: 'shop_address', type: 'text', nullable: true })
+  shopAddress: string | null;
+
   @ManyToOne(() => University, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'home_university_id' })
   homeUniversity: University;

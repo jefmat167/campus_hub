@@ -19,7 +19,6 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
@@ -36,6 +35,7 @@ import {
 import { EscrowService } from './escrow.service';
 import {
   OpenDisputeDto,
+  RejectOrderDto,
   ResolveDisputeDto,
   SellerReadyDto,
   VerifyCodeDto,
@@ -44,7 +44,7 @@ import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
-@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
+@UseGuards(JwtAuthGuard, TierGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {
@@ -54,6 +54,59 @@ export class EscrowController {
   // POST /checkout (cart) or POST /checkout/direct (buy-now), which split a
   // single wallet debit into one sub-order per seller. Sub-order lifecycle
   // endpoints below are unchanged.
+  //
+  // NOTE (rev-2 Phase 5): this controller is party-scoped, NOT student-scoped
+  // — vendor-only sellers operate their orders here too (active vendors are
+  // TIER_2-equivalent via effectiveTier). Buyers are students by construction
+  // (checkout is student-gated); every route checks buyerId/sellerId.
+
+  /**
+   * Vendor confirms a pending order (manual-confirmation flow, rev-2 03.5).
+   */
+  @Post(':id/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Confirm a pending vendor order (seller only)',
+    description:
+      'PENDING_CONFIRMATION → AWAITING_SELLER; the 72h fulfillment clock starts NOW. ' +
+      'Confirmation is commitment, not readiness — mark ready/out-for-delivery separately.',
+  })
+  @ApiResponse({ status: 200, description: 'Order confirmed' })
+  @ApiResponse({ status: 400, description: 'Order is not pending confirmation' })
+  async confirmOrder(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const escrow = await this.escrowService.confirmOrder(id, user.id);
+    return {
+      success: true,
+      data: escrow,
+      message: `Order ${escrow.orderNumber} confirmed. You have 72 hours to fulfil it.`,
+    };
+  }
+
+  /**
+   * Vendor rejects a pending order: full refund, no fee, stock restored.
+   */
+  @Post(':id/reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reject a pending vendor order (seller only, free full refund)',
+  })
+  @ApiResponse({ status: 200, description: 'Order rejected, buyer refunded in full' })
+  @ApiResponse({ status: 400, description: 'Order is not pending confirmation' })
+  async rejectOrder(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectOrderDto,
+  ) {
+    const escrow = await this.escrowService.rejectOrder(id, user.id, dto.reason);
+    return {
+      success: true,
+      data: escrow,
+      message: `Order ${escrow.orderNumber} rejected. The buyer was refunded in full.`,
+    };
+  }
 
   /**
    * Get user's escrow transactions
