@@ -98,7 +98,7 @@ export class BuyRequestsController {
   @ApiOperation({
     summary: 'Search buy requests',
     description:
-      'Search and filter buy requests. Public endpoint with optional authentication for personalized results.',
+      'Search and filter buy requests. Requires authentication — results are scoped to YOUR university.',
   })
   @ApiResponse({
     status: 200,

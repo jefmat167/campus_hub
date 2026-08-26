@@ -107,7 +107,7 @@ export class MarketplaceController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Search listings',
-    description: 'Search and filter marketplace listings. Public endpoint with optional authentication for personalized results.',
+    description: 'Search and filter marketplace listings. Requires authentication — results are scoped to YOUR university (rev-2: browse is never cross-campus).',
   })
   @ApiResponse({
     status: 200,

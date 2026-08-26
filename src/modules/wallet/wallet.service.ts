@@ -90,11 +90,15 @@ export class WalletService {
     userId: string,
     page = 1,
     limit = 20,
+    market?: 'p2p' | 'vendor',
   ): Promise<{ transactions: WalletTransaction[]; total: number }> {
     const wallet = await this.getWallet(userId);
 
+    // market filters down to one market's rows (rev-2 spec 01.1: a
+    // student-vendor slicing their history to business income). Escrow rows
+    // are tagged since the rev-2 rewrite; deposits/withdrawals stay untagged.
     const [transactions, total] = await this.transactionRepo.findAndCount({
-      where: { walletId: wallet.id },
+      where: { walletId: wallet.id, ...(market ? { market } : {}) },
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

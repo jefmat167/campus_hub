@@ -1892,6 +1892,26 @@ export class EscrowService {
         },
       );
 
+      // The buyer confirmed receipt by showing the code — tell them the
+      // dispute clock is now running (the seller acted, they get the response).
+      try {
+        await this.notificationsService.createNotification({
+          userId: escrow.buyerId,
+          type: NotificationType.DELIVERY_CONFIRMED,
+          title: 'Delivery confirmed',
+          body: `Order ${escrow.orderNumber} is marked delivered. You have ${Math.round(this.DISPUTE_WINDOW_MINUTES / 60)} hours to raise an issue — after that the payment releases to the seller.`,
+          data: {
+            escrowId,
+            orderNumber: escrow.orderNumber,
+            disputeWindowExpiresAt: escrow.disputeWindowExpiresAt?.toISOString(),
+          },
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Delivery-confirmed notification failed for ${escrowId}: ${error}`,
+        );
+      }
+
       this.logger.log(`Delivery verified for escrow ${escrowId}, 24h dispute window started`);
 
       return escrow;
@@ -1980,6 +2000,28 @@ export class EscrowService {
       }
 
       await queryRunner.commitTransaction();
+
+      // The order died silently on a timer — both sides should hear why.
+      try {
+        await this.notificationsService.createNotification({
+          userId: escrow.buyerId,
+          type: NotificationType.ORDER_EXPIRED,
+          title: 'Order expired — full refund issued',
+          body: `Order ${escrow.orderNumber} wasn't delivered within the ${this.FULFILLMENT_HOURS}h window, so it was cancelled and you've been refunded in full.`,
+          data: { escrowId, orderNumber: escrow.orderNumber },
+        });
+        await this.notificationsService.createNotification({
+          userId: escrow.sellerId,
+          type: NotificationType.ORDER_EXPIRED,
+          title: 'Order expired',
+          body: `Order ${escrow.orderNumber} wasn't delivered within the ${this.FULFILLMENT_HOURS}h window. It was cancelled, the buyer refunded, and your item made available again.`,
+          data: { escrowId, orderNumber: escrow.orderNumber },
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Expiry notification failed for ${escrowId}: ${error}`,
+        );
+      }
 
       this.logger.log(
         `Escrow ${escrowId} expired, full refund issued to buyer`,
@@ -2098,6 +2140,27 @@ export class EscrowService {
       }
 
       await queryRunner.commitTransaction();
+
+      // Payday — the one notification a seller actually waits for.
+      try {
+        await this.notificationsService.createNotification({
+          userId: escrow.sellerId,
+          type: NotificationType.ESCROW_RELEASED,
+          title: 'Payment released',
+          body: `₦${sellerPayout.toLocaleString()} for order ${escrow.orderNumber} is now in your wallet (₦${platformFee.toLocaleString()} platform fee deducted).`,
+          data: {
+            escrowId: escrow.id,
+            orderNumber: escrow.orderNumber,
+            sellerPayout,
+            platformFee,
+            trigger,
+          },
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Release notification failed for ${escrow.id}: ${error}`,
+        );
+      }
 
       this.logger.log(
         `Escrow ${escrow.id} completed (${trigger}): seller receives ₦${sellerPayout}, platform fee ₦${platformFee}`,
@@ -2303,6 +2366,40 @@ export class EscrowService {
 
       const cancellationFee = sellerCompensation + platformShare;
 
+      // Tell the party who DIDN'T cancel (the canceller has the API response).
+      try {
+        if (isBuyer) {
+          await this.notificationsService.createNotification({
+            userId: escrow.sellerId,
+            type: NotificationType.ESCROW_CANCELLED,
+            title:
+              sellerCompensation > 0
+                ? 'Order cancelled — compensation received'
+                : 'Order cancelled by the buyer',
+            body:
+              sellerCompensation > 0
+                ? `The buyer cancelled order ${escrow.orderNumber} after you were ready. ₦${sellerCompensation.toLocaleString()} compensation (your share of the cancellation fee) is in your wallet.`
+                : `The buyer cancelled order ${escrow.orderNumber}. Your item is available again.`,
+            data: { escrowId, orderNumber: escrow.orderNumber, sellerCompensation },
+          });
+        } else {
+          await this.notificationsService.createNotification({
+            userId: escrow.buyerId,
+            type: NotificationType.ESCROW_CANCELLED,
+            title: cancellationFee > 0 ? 'No-show recorded — partial refund' : 'Order cancelled — full refund issued',
+            body:
+              cancellationFee > 0
+                ? `The vendor recorded a no-show on booking ${escrow.orderNumber}. ₦${buyerRefund.toLocaleString()} was refunded (₦${cancellationFee.toLocaleString()} cancellation fee deducted for the held slot).`
+                : `The seller cancelled order ${escrow.orderNumber}. You've been refunded in full.`,
+            data: { escrowId, orderNumber: escrow.orderNumber, refundAmount: buyerRefund, cancellationFee },
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Cancellation notification failed for ${escrowId}: ${error}`,
+        );
+      }
+
       this.logger.log(
         `Escrow ${escrowId} cancelled by ${isBuyer ? 'buyer' : 'seller'}`,
       );
@@ -2392,6 +2489,28 @@ export class EscrowService {
       await this.escrowQueue.remove(`auto-release-${escrowId}`);
 
       await queryRunner.commitTransaction();
+
+      // The other party's payout/refund is now frozen — they must know.
+      const otherPartyId =
+        userId === escrow.buyerId ? escrow.sellerId : escrow.buyerId;
+      try {
+        await this.notificationsService.createNotification({
+          userId: otherPartyId,
+          type: NotificationType.ESCROW_DISPUTED,
+          title: 'Dispute opened on your order',
+          body: `A dispute was opened on order ${escrow.orderNumber} (${dto.reason}). The funds stay held while our team reviews it — you may be contacted for your side.`,
+          data: {
+            escrowId,
+            orderNumber: escrow.orderNumber,
+            disputeId: savedDispute.id,
+            reason: dto.reason,
+          },
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Dispute-opened notification failed for ${escrowId}: ${error}`,
+        );
+      }
 
       this.logger.log(`Dispute ${savedDispute.id} opened for escrow ${escrowId}`);
 
@@ -2594,6 +2713,45 @@ export class EscrowService {
       }
 
       await queryRunner.commitTransaction();
+
+      // Resolution copy per outcome — money moved, both sides hear it.
+      try {
+        const resolutionCopy: Record<string, { buyer: string; seller: string }> = {
+          [DisputeStatus.RESOLVED_BUYER]: {
+            buyer: `Your dispute on order ${escrow.orderNumber} was resolved in your favour — ₦${Number(escrow.amount).toLocaleString()} refunded in full.`,
+            seller: `The dispute on order ${escrow.orderNumber} was resolved in the buyer's favour. The held funds were refunded to the buyer.`,
+          },
+          [DisputeStatus.RESOLVED_SELLER]: {
+            buyer: `The dispute on order ${escrow.orderNumber} was resolved in the seller's favour. The payment has been released to the seller.`,
+            seller: `The dispute on order ${escrow.orderNumber} was resolved in your favour — ₦${Number(dispute.sellerReleaseAmount ?? 0).toLocaleString()} released to your wallet.`,
+          },
+          [DisputeStatus.RESOLVED_SPLIT]: {
+            buyer: `The dispute on order ${escrow.orderNumber} was resolved with a split: ₦${Number(dispute.buyerRefundAmount ?? 0).toLocaleString()} of your payment comes back to you (less a 1% platform fee).`,
+            seller: `The dispute on order ${escrow.orderNumber} was resolved with a split: ₦${Number(dispute.sellerReleaseAmount ?? 0).toLocaleString()} of the payment goes to you (less a 1% platform fee).`,
+          },
+        };
+        const copy = resolutionCopy[dto.resolution];
+        if (copy) {
+          await this.notificationsService.createNotification({
+            userId: escrow.buyerId,
+            type: NotificationType.ESCROW_DISPUTED,
+            title: 'Dispute resolved',
+            body: copy.buyer,
+            data: { escrowId: escrow.id, orderNumber: escrow.orderNumber, disputeId, resolution: dto.resolution },
+          });
+          await this.notificationsService.createNotification({
+            userId: escrow.sellerId,
+            type: NotificationType.ESCROW_DISPUTED,
+            title: 'Dispute resolved',
+            body: copy.seller,
+            data: { escrowId: escrow.id, orderNumber: escrow.orderNumber, disputeId, resolution: dto.resolution },
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Dispute-resolved notification failed for ${disputeId}: ${error}`,
+        );
+      }
 
       this.logger.log(`Dispute ${disputeId} resolved: ${dto.resolution}`);
 

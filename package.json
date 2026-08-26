@@ -16,6 +16,7 @@
     "seed:admin": "ts-node src/database/seeds/create-admin.ts",
     "seed:users": "ts-node src/database/seeds/users-roommates.seed.ts",
     "seed:listings": "ts-node src/database/seeds/users-listings.seed.ts",
+    "seed:vendors": "ts-node src/database/seeds/vendors-catalog.seed.ts",
     "typeorm": "env-cmd --fallback --silent ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js",
     "migration:generate": "npm run typeorm -- --dataSource=src/database/data-source.ts migration:generate",
     "migration:run": "npm run typeorm -- --dataSource=src/database/data-source.ts migration:run",

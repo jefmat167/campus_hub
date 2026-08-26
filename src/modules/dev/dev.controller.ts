@@ -11,13 +11,20 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/s
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import {
   User,
   VerificationTier,
   Tier1ReviewStatus,
   Gender,
+  AccountType,
 } from '../../database/entities/user.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import {
+  VendorProfile,
+  VendorStatus,
+} from '../../database/entities/vendor-profile.entity';
+import { VendorUniversity } from '../../database/entities/vendor-university.entity';
 
 /**
  * Development-only controller for testing verification flows.
@@ -33,6 +40,10 @@ export class DevController {
     private userRepo: Repository<User>,
     @InjectRepository(Wallet)
     private walletRepo: Repository<Wallet>,
+    @InjectRepository(VendorProfile)
+    private vendorProfileRepo: Repository<VendorProfile>,
+    @InjectRepository(VendorUniversity)
+    private vendorUniversityRepo: Repository<VendorUniversity>,
     private configService: ConfigService,
   ) {
     this.isDevelopment =
@@ -650,6 +661,164 @@ export class DevController {
   }
 
   /**
+   * Create a ready-to-sell test vendor (rev-2 Phase 7): vendor-only account
+   * with a REAL password hash (you can log in), a funded dev wallet, and an
+   * ACTIVE profile serving the given universities — the whole Door-2 +
+   * admin-approval dance skipped.
+   */
+  @ApiOperation({ summary: 'Create an ACTIVE test vendor (login-ready)' })
+  @ApiBody({
+    schema: {
+      example: {
+        businessName: 'Test Chop Bar',
+        homeUniversityId: '550e8400-e29b-41d4-a716-446655440000',
+        servedUniversityIds: ['550e8400-e29b-41d4-a716-446655440000'],
+        shopAddress: 'Shop 3, Campus Plaza',
+        email: 'optional',
+        phone: 'optional',
+        password: 'optional (default DevPass123!)',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Test vendor created (profile already ACTIVE)',
+    schema: {
+      example: {
+        message: 'Test vendor created and approved',
+        user: { id: 'uuid', email: 'vendor123@test.com', accountType: 'vendor' },
+        vendorProfileId: 'uuid',
+        password: 'DevPass123!',
+        note: 'Log in via POST /auth/login; catalog writes via /vendors/me/listings',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @Post('create-test-vendor')
+  async createTestVendor(
+    @Body()
+    body: {
+      businessName?: string;
+      email?: string;
+      phone?: string;
+      password?: string;
+      homeUniversityId: string;
+      servedUniversityIds?: string[];
+      shopAddress?: string;
+    },
+  ) {
+    this.checkDevMode();
+
+    if (!body.homeUniversityId) {
+      throw new NotFoundException('homeUniversityId is required');
+    }
+
+    const timestamp = Date.now();
+    const businessName = body.businessName || `Test Vendor ${timestamp}`;
+    const email = body.email || `vendor${timestamp}@test.com`;
+    const phone = body.phone || `+234${timestamp.toString().slice(-10)}`;
+    const password = body.password || 'DevPass123!';
+
+    // Vendor-only account: no student identity (rev-2 spec 01.5).
+    const user = this.userRepo.create({
+      email,
+      phone,
+      fullName: businessName,
+      gender: null,
+      universityId: null,
+      facultyId: null,
+      departmentId: null,
+      accountType: AccountType.VENDOR,
+      verificationTier: VerificationTier.NONE,
+      passwordHash: await bcrypt.hash(password, 12),
+      emailVerified: true,
+      emailVerifiedAt: new Date(),
+      phoneVerified: true,
+      phoneVerifiedAt: new Date(),
+    });
+    await this.userRepo.save(user);
+
+    // Dev wallets start funded, mirroring dev vendor registration.
+    await this.walletRepo.save(
+      this.walletRepo.create({ userId: user.id, balance: 1000000 }),
+    );
+
+    const profile = this.vendorProfileRepo.create({
+      userId: user.id,
+      businessName,
+      homeUniversityId: body.homeUniversityId,
+      shopAddress: body.shopAddress ?? null,
+      status: VendorStatus.ACTIVE,
+      shopfrontPhotoUrl: 'https://cdn.example.com/dev-shopfront.jpg',
+      photoCapturedLive: true,
+      submittedAt: new Date(),
+      reviewedAt: new Date(),
+      reviewedBy: 'dev-controller',
+    });
+    await this.vendorProfileRepo.save(profile);
+
+    const served = Array.from(
+      new Set([body.homeUniversityId, ...(body.servedUniversityIds ?? [])]),
+    );
+    for (const universityId of served) {
+      await this.vendorUniversityRepo.save(
+        this.vendorUniversityRepo.create({
+          vendorProfileId: profile.id,
+          universityId,
+        }),
+      );
+    }
+
+    return {
+      message: 'Test vendor created and approved',
+      user: { id: user.id, email: user.email, accountType: user.accountType },
+      vendorProfileId: profile.id,
+      servedUniversityIds: served,
+      password,
+      note: 'Log in via POST /auth/login; catalog writes via /vendors/me/listings',
+    };
+  }
+
+  /**
+   * Flip any vendor profile straight to ACTIVE — skips the admin cookie dance.
+   */
+  @ApiOperation({ summary: 'Approve a vendor profile (any status → ACTIVE)' })
+  @ApiParam({ name: 'profileId', description: 'UUID of the vendor profile' })
+  @ApiResponse({ status: 201, description: 'Vendor profile activated' })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'Vendor profile not found' })
+  @Post('vendors/:profileId/approve')
+  async approveVendor(@Param('profileId') profileId: string) {
+    this.checkDevMode();
+
+    const profile = await this.vendorProfileRepo.findOne({
+      where: { id: profileId },
+    });
+    if (!profile) {
+      throw new NotFoundException('Vendor profile not found');
+    }
+
+    const previousStatus = profile.status;
+    profile.status = VendorStatus.ACTIVE;
+    profile.reviewedAt = new Date();
+    profile.reviewedBy = 'dev-controller';
+    profile.rejectionReason = null;
+    profile.suspensionReason = null;
+    if (!profile.shopfrontPhotoUrl) {
+      profile.shopfrontPhotoUrl = 'https://cdn.example.com/dev-shopfront.jpg';
+      profile.photoCapturedLive = true;
+    }
+    await this.vendorProfileRepo.save(profile);
+
+    return {
+      message: `Vendor profile moved from ${previousStatus} to active`,
+      vendorProfileId: profile.id,
+      userId: profile.userId,
+      status: profile.status,
+    };
+  }
+
+  /**
    * List all available dev endpoints
    */
   @ApiOperation({ summary: 'List all available dev endpoints' })
@@ -725,12 +894,33 @@ export class DevController {
           },
           description: 'Create a test user at specified tier',
         },
+        {
+          method: 'POST',
+          path: '/dev/create-test-vendor',
+          body: {
+            businessName: 'optional',
+            email: 'optional',
+            phone: 'optional',
+            password: 'optional (default DevPass123!)',
+            homeUniversityId: 'required',
+            servedUniversityIds: 'optional (home always included)',
+            shopAddress: 'optional',
+          },
+          description:
+            'Create a login-ready, already-ACTIVE vendor-only account (rev-2)',
+        },
+        {
+          method: 'POST',
+          path: '/dev/vendors/:profileId/approve',
+          description: 'Flip a vendor profile straight to ACTIVE',
+        },
       ],
       tierInfo: {
         none: 'Browse only',
         tier_0: 'Phone + Email verified: Buy ≤₦30k, chat, posts, fund wallet',
-        tier_1: 'Documents approved: Sell ≤₦30k, buy ≤₦60k, housing ≤₦50k/month',
+        tier_1: 'Documents approved: Sell ≤₦50k, buy ≤₦60k, roommate features',
         tier_2: 'KYC verified: Unlimited access',
+        vendor: 'Active vendor-only accounts are TIER_2-equivalent (effectiveTier)',
       },
     };
   }

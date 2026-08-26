@@ -32,6 +32,10 @@ import {
   User,
   VerificationTier,
 } from '../../database/entities/user.entity';
+import {
+  EscrowStatus,
+  OrderMarket,
+} from '../../database/entities/escrow.entity';
 import { EscrowService } from './escrow.service';
 import { ServiceSchedulingService } from './service-scheduling.service';
 import {
@@ -203,6 +207,8 @@ export class EscrowController {
       'Retrieve the authenticated user\'s escrow transactions. Filter by role (buyer, seller, or all).',
   })
   @ApiQuery({ name: 'role', required: false, enum: ['buyer', 'seller', 'all'], description: 'Filter by user role in the transaction', example: 'all' })
+  @ApiQuery({ name: 'market', required: false, enum: ['p2p', 'vendor'], description: 'Only orders from one market' })
+  @ApiQuery({ name: 'status', required: false, description: 'Filter by order status (e.g. pending_confirmation, awaiting_seller, seller_ready, delivered, completed)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page', example: 20 })
   @ApiResponse({
@@ -232,12 +238,27 @@ export class EscrowController {
     @Query('role') role?: 'buyer' | 'seller' | 'all',
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('market') market?: string,
+    @Query('status') status?: string,
   ) {
+    const marketFilter = Object.values(OrderMarket).includes(
+      market as OrderMarket,
+    )
+      ? (market as OrderMarket)
+      : undefined;
+    const statusFilter = Object.values(EscrowStatus).includes(
+      status as EscrowStatus,
+    )
+      ? (status as EscrowStatus)
+      : undefined;
+
     const { escrows, total } = await this.escrowService.getUserEscrows(
       user.id,
       role || 'all',
       Number(page) || 1,
       Number(limit) || 20,
+      marketFilter,
+      statusFilter,
     );
 
     return {

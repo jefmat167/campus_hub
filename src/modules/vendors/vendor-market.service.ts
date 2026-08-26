@@ -136,6 +136,8 @@ export class VendorMarketService {
       .innerJoinAndSelect('vl.vendorProfile', 'p', 'p.status = :active', {
         active: VendorStatus.ACTIVE,
       })
+      // Needed for the rating on each result's vendor summary (spec 03.8).
+      .leftJoinAndSelect('p.user', 'vendorUser')
       .leftJoinAndSelect('vl.images', 'images')
       .leftJoinAndSelect('vl.optionGroups', 'groups')
       .leftJoinAndSelect('groups.options', 'options')
