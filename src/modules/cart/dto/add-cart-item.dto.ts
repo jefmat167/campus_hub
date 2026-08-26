@@ -13,7 +13,8 @@ import {
  * Exactly one of listingId / offerId / vendorListingId (service-enforced):
  * - listingId       → P2P listing at its listed price
  * - offerId         → P2P listing at an ACCEPTED offer's agreed price (24h lock)
- * - vendorListingId → vendor goods, with quantity + selected options
+ * - vendorListingId → vendor goods (quantity + options) or a service
+ *   (always quantity 1; the appointment time is proposed at checkout)
  */
 export class AddCartItemDto {
   @ApiPropertyOptional({
@@ -34,7 +35,7 @@ export class AddCartItemDto {
   offerId?: string;
 
   @ApiPropertyOptional({
-    description: 'Vendor goods listing to add',
+    description: 'Vendor listing to add (goods, or a service booking)',
     format: 'uuid',
   })
   @IsOptional()

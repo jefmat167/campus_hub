@@ -18,6 +18,7 @@ describe('TimingPolicyService', () => {
       appointmentHorizonDays: 14,
       noShowGraceMinutes: 30,
       appointmentBackstopHours: 24,
+      proposalExpiryHours: 48,
       offerLockHours: 24,
     });
   });

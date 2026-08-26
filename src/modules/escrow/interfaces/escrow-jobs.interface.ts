@@ -7,6 +7,11 @@ export enum EscrowJobName {
   // Vendor manual confirmation window (rev-2 03.5, Phase 5): auto-cancel with
   // a full refund + stock restore if the vendor never confirms.
   ORDER_CONFIRM_TIMEOUT = 'order-confirm-timeout',
+  // Services (rev-2 03.6, Phase 6): no appointment agreed within 72h of the
+  // order → auto-cancel with a full refund.
+  SERVICE_AGREEMENT_TIMEOUT = 'service-agreement-timeout',
+  // Services: not DELIVERED by appointment + 24h → auto-cancel, full refund.
+  APPOINTMENT_BACKSTOP = 'appointment-backstop',
 }
 
 export interface CheckFulfillmentExpiryPayload {
@@ -23,5 +28,13 @@ export interface SendFulfillmentReminderPayload {
 }
 
 export interface OrderConfirmTimeoutPayload {
+  escrowId: string;
+}
+
+export interface ServiceAgreementTimeoutPayload {
+  escrowId: string;
+}
+
+export interface AppointmentBackstopPayload {
   escrowId: string;
 }

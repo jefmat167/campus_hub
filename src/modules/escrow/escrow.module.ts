@@ -4,8 +4,14 @@ import { BullModule } from '@nestjs/bullmq';
 import { EscrowController } from './escrow.controller';
 import { EscrowService } from './escrow.service';
 import { EscrowProcessor } from './escrow.processor';
+import { ServiceSchedulingService } from './service-scheduling.service';
+import {
+  AVAILABILITY_VALIDATOR,
+  AlwaysAvailableValidator,
+} from './availability/availability-validator';
 import { EscrowTransaction } from '../../database/entities/escrow.entity';
 import { OrderItem } from '../../database/entities/order-item.entity';
+import { ServiceTimeProposal } from '../../database/entities/service-time-proposal.entity';
 import { Dispute } from '../../database/entities/dispute.entity';
 import { Listing } from '../../database/entities/listing.entity';
 import { DeliveryCode } from '../../database/entities/delivery-code.entity';
@@ -25,6 +31,7 @@ import { ESCROW_QUEUE_NAME } from './interfaces/escrow-jobs.interface';
     TypeOrmModule.forFeature([
       EscrowTransaction,
       OrderItem,
+      ServiceTimeProposal,
       Dispute,
       Listing,
       DeliveryCode,
@@ -43,7 +50,14 @@ import { ESCROW_QUEUE_NAME } from './interfaces/escrow-jobs.interface';
     TransactionPinModule,
   ],
   controllers: [EscrowController],
-  providers: [EscrowService, EscrowProcessor],
-  exports: [EscrowService],
+  providers: [
+    EscrowService,
+    EscrowProcessor,
+    ServiceSchedulingService,
+    // The calendar seam (rev-2 spec 05): swap this provider for a real
+    // availability implementation later — nothing else changes.
+    { provide: AVAILABILITY_VALIDATOR, useClass: AlwaysAvailableValidator },
+  ],
+  exports: [EscrowService, ServiceSchedulingService],
 })
 export class EscrowModule {}

@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsDateString,
   IsIn,
   IsInt,
   IsOptional,
@@ -70,6 +71,56 @@ export class VendorFulfillmentChoiceDto {
   deliveryAddress?: string;
 }
 
+/**
+ * One schedule per SERVICE line in the cart (rev-2 spec 03.6), keyed by the
+ * cart line id (the same service can be booked twice with different times).
+ * Services don't use drop points — travel goes to a buyer-provided location.
+ */
+export class ServiceScheduleDto {
+  @ApiProperty({
+    description: 'The cart line (service booking) this schedule is for',
+    format: 'uuid',
+  })
+  @IsUUID()
+  cartItemId: string;
+
+  @ApiProperty({
+    description:
+      'Your proposed appointment time, ISO 8601 — in the future, at most 14 days out',
+    example: '2026-09-02T14:30:00.000Z',
+  })
+  @IsDateString()
+  proposedTime: string;
+
+  @ApiProperty({
+    enum: ['pickup', 'delivery'],
+    description:
+      'pickup = you go to the shop; delivery = the vendor travels to you (per-university opt-in + travel fee)',
+    example: 'pickup',
+  })
+  @IsIn(['pickup', 'delivery'])
+  method: 'pickup' | 'delivery';
+
+  @ApiPropertyOptional({
+    description:
+      'Where the service happens (required when method is delivery/travel)',
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  serviceAddress?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional note with your proposed time',
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
 export class CheckoutDto {
   @ApiProperty({ description: 'Your 6-digit transaction PIN', example: '135790' })
   @IsString()
@@ -95,6 +146,16 @@ export class CheckoutDto {
   @ValidateNested({ each: true })
   @Type(() => VendorFulfillmentChoiceDto)
   vendorFulfillment?: VendorFulfillmentChoiceDto[];
+
+  @ApiPropertyOptional({
+    description: 'One schedule (proposed time + pickup/travel) per service line',
+    type: [ServiceScheduleDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ServiceScheduleDto)
+  serviceSchedules?: ServiceScheduleDto[];
 
   @ApiPropertyOptional({
     description: 'Optional note to the sellers',

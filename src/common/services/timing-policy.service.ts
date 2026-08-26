@@ -28,6 +28,8 @@ export interface TimingPolicy {
   noShowGraceMinutes: number;
   /** Services: auto-refund backstop past the appointment (spec 03.6). */
   appointmentBackstopHours: number;
+  /** Services: how long a single time proposal stays open (spec 03.6 — "same 48h as offers"). */
+  proposalExpiryHours: number;
   /** P2P: how long an accepted offer's price stays locked in the cart (spec 01.6). */
   offerLockHours: number;
 }
@@ -62,6 +64,9 @@ export class TimingPolicyService {
       ),
       appointmentBackstopHours: Number(
         configService.get('SERVICE_APPOINTMENT_BACKSTOP_HOURS', 24),
+      ),
+      proposalExpiryHours: Number(
+        configService.get('SERVICE_PROPOSAL_EXPIRY_HOURS', 48),
       ),
       offerLockHours: Number(configService.get('OFFER_LOCK_HOURS', 24)),
     });

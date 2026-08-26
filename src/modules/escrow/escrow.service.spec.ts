@@ -159,6 +159,10 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
     getBalance: jest.fn(async () => ({ availableBalance: 1_000_000 })),
     refundFunds: jest.fn(async () => {}),
     lockFunds: jest.fn(async () => {}),
+    settleEscrow: jest.fn(async () => {}),
+  };
+  const platformWalletService: any = {
+    creditPlatformFee: jest.fn(async () => {}),
   };
   const queryRunner: any = {
     connect: jest.fn(async () => {}),
@@ -190,7 +194,7 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
     buyRequestOfferRepo,
     {} as any,
     walletService,
-    {} as any,
+    platformWalletService,
     dataSource,
     escrowQueue,
     {} as any,
@@ -198,7 +202,7 @@ function buildService(opts: { listing?: any; escrow?: any } = {}) {
     makeTimingPolicyStub(),
     makeSettingsStub(),
   );
-  return { svc, walletService, queryRunner };
+  return { svc, walletService, platformWalletService, queryRunner, escrowQueue };
 }
 
 describe('EscrowService.createP2pSubOrder (checkout core)', () => {
@@ -281,5 +285,143 @@ describe('EscrowService.handleFulfillmentExpiry (72h delivery deadline)', () => 
 
     expect(walletService.refundFunds).not.toHaveBeenCalled();
     expect(escrow.status).toBe(EscrowStatus.DELIVERED);
+  });
+});
+
+// ─── Phase 6: services — no-show, backstop, buyer-no-show fee (03.6) ──
+
+const MIN = 60 * 1000;
+
+function serviceEscrow(over: any = {}) {
+  return {
+    id: 'e1',
+    buyerId: 'b1',
+    sellerId: 'v1',
+    orderNumber: 'ORD-2026-000700',
+    status: EscrowStatus.SELLER_READY,
+    amount: 5000,
+    itemsSubtotal: 5000,
+    deliveryFee: 0,
+    market: OrderMarket.VENDOR,
+    appointmentAt: new Date(Date.now() - 45 * MIN), // 45 min ago
+    buyRequestOfferId: null,
+    buyer: { universityId: 'u1' },
+    ...over,
+  };
+}
+
+describe('EscrowService.claimNoShow (vendor no-show, spec 03.6)', () => {
+  it('is refused while the 30-minute grace is still running', async () => {
+    const escrow = serviceEscrow({
+      appointmentAt: new Date(Date.now() - 10 * MIN),
+    });
+    const { svc, walletService } = buildService({ escrow });
+
+    await expect(svc.claimNoShow('e1', 'b1')).rejects.toThrow(/grace period/);
+    expect(walletService.refundFunds).not.toHaveBeenCalled();
+  });
+
+  it('after the grace: full refund, CANCELLED/no_show, backstop job removed', async () => {
+    const escrow = serviceEscrow();
+    const { svc, walletService, escrowQueue } = buildService({ escrow });
+
+    const result = await svc.claimNoShow('e1', 'b1');
+
+    expect(walletService.refundFunds).toHaveBeenCalledWith(
+      'b1',
+      5000,
+      'ESCROW_NO_SHOW_e1',
+      expect.anything(),
+      OrderMarket.VENDOR,
+    );
+    expect(result.status).toBe(EscrowStatus.CANCELLED);
+    expect(result.cancelReason).toBe('no_show');
+    expect(result.cancelledBy).toBe('buyer');
+    expect(escrowQueue.remove).toHaveBeenCalledWith('appointment-backstop-e1');
+  });
+
+  it('only the buyer can claim, and only on an agreed service booking', async () => {
+    const escrow = serviceEscrow();
+    const { svc } = buildService({ escrow });
+    await expect(svc.claimNoShow('e1', 'v1')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+
+    const goods = serviceEscrow({ appointmentAt: null });
+    const { svc: svc2 } = buildService({ escrow: goods });
+    await expect(svc2.claimNoShow('e1', 'b1')).rejects.toThrow(
+      /agreed appointment/,
+    );
+  });
+});
+
+describe('EscrowService.handleAppointmentBackstop (appointment + 24h)', () => {
+  it('expires an undelivered SELLER_READY booking with a full refund', async () => {
+    const escrow = serviceEscrow();
+    const { svc, walletService } = buildService({ escrow });
+
+    await svc.handleAppointmentBackstop('e1');
+
+    expect(walletService.refundFunds).toHaveBeenCalledWith(
+      'b1',
+      5000,
+      'ESCROW_EXPIRED_e1',
+      expect.anything(),
+      OrderMarket.VENDOR,
+    );
+    expect(escrow.status).toBe(EscrowStatus.EXPIRED);
+    expect(escrow.cancelReason).toBe('appointment_backstop');
+  });
+
+  it('skips a booking already delivered/verified', async () => {
+    const escrow = serviceEscrow({ status: EscrowStatus.DELIVERED });
+    const { svc, walletService } = buildService({ escrow });
+
+    await svc.handleAppointmentBackstop('e1');
+
+    expect(walletService.refundFunds).not.toHaveBeenCalled();
+    expect(escrow.status).toBe(EscrowStatus.DELIVERED);
+  });
+});
+
+describe('EscrowService.cancelEscrow — buyer no-show fee (spec FIG 03.4)', () => {
+  it('vendor cancelling after appointment + grace charges the standard 10% fee (60/40)', async () => {
+    const escrow = serviceEscrow();
+    const { svc, walletService, platformWalletService } = buildService({
+      escrow,
+    });
+
+    const result = await svc.cancelEscrow('e1', 'v1');
+
+    // ₦5,000 × 10% = ₦500 → ₦300 vendor / ₦200 platform; buyer gets ₦4,500.
+    expect(walletService.settleEscrow).toHaveBeenCalledWith(
+      'b1',
+      'v1',
+      { total: 5000, toSeller: 300, toPlatform: 200 },
+      'ESCROW_CANCEL_e1',
+      expect.anything(),
+      OrderMarket.VENDOR,
+    );
+    expect(platformWalletService.creditPlatformFee).toHaveBeenCalled();
+    expect(result.cancellationFee).toBe(500);
+    expect(result.refundAmount).toBe(4500);
+    expect(result.sellerCompensation).toBe(300);
+    expect(result.escrow.cancelReason).toBe('buyer_no_show');
+    expect(result.escrow.cancelledBy).toBe('seller');
+  });
+
+  it('vendor cancelling before the appointment stays a free full refund', async () => {
+    const escrow = serviceEscrow({
+      appointmentAt: new Date(Date.now() + 24 * 60 * MIN), // tomorrow
+    });
+    const { svc, walletService } = buildService({ escrow });
+
+    const result = await svc.cancelEscrow('e1', 'v1');
+
+    expect(walletService.refundFunds).toHaveBeenCalled();
+    expect(walletService.settleEscrow).not.toHaveBeenCalled();
+    expect(result.cancellationFee).toBe(0);
+    expect(result.refundAmount).toBe(5000);
+    expect(result.escrow.cancelReason).toBe('seller_cancel');
   });
 });

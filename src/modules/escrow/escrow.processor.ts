@@ -8,6 +8,8 @@ import {
   CheckAutoReleasePayload,
   SendFulfillmentReminderPayload,
   OrderConfirmTimeoutPayload,
+  ServiceAgreementTimeoutPayload,
+  AppointmentBackstopPayload,
 } from './interfaces/escrow-jobs.interface';
 import { EscrowService } from './escrow.service';
 
@@ -28,6 +30,8 @@ export class EscrowProcessor extends WorkerHost {
       | CheckAutoReleasePayload
       | SendFulfillmentReminderPayload
       | OrderConfirmTimeoutPayload
+      | ServiceAgreementTimeoutPayload
+      | AppointmentBackstopPayload
     >,
   ): Promise<any> {
     this.logger.log(`Processing escrow job: ${job.name} (${job.id})`);
@@ -45,6 +49,18 @@ export class EscrowProcessor extends WorkerHost {
         case EscrowJobName.ORDER_CONFIRM_TIMEOUT: {
           const { escrowId } = job.data as OrderConfirmTimeoutPayload;
           await this.escrowService.handleConfirmationTimeout(escrowId);
+          return { success: true };
+        }
+
+        case EscrowJobName.SERVICE_AGREEMENT_TIMEOUT: {
+          const { escrowId } = job.data as ServiceAgreementTimeoutPayload;
+          await this.escrowService.handleAgreementTimeout(escrowId);
+          return { success: true };
+        }
+
+        case EscrowJobName.APPOINTMENT_BACKSTOP: {
+          const { escrowId } = job.data as AppointmentBackstopPayload;
+          await this.escrowService.handleAppointmentBackstop(escrowId);
           return { success: true };
         }
 

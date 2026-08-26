@@ -44,6 +44,7 @@ function makeService(opts: {
   dropPoints?: Record<string, any>;
   vendorServes?: boolean;
   rawItems?: Array<{
+    cartItemId?: string;
     listingId?: string;
     offerId?: string | null;
     vendorListingId?: string;
@@ -93,7 +94,8 @@ function makeService(opts: {
   };
   const cartService: any = {
     getRawItems: jest.fn(async () =>
-      (opts.rawItems ?? []).map((raw) => ({
+      (opts.rawItems ?? []).map((raw, index) => ({
+        id: raw.cartItemId ?? `ci-${index}`,
         listingId: raw.listingId ?? null,
         offerId: raw.offerId ?? null,
         vendorListingId: raw.vendorListingId ?? null,
@@ -136,10 +138,38 @@ function makeService(opts: {
       deliveryLocation: params.deliveryLocation,
       checkoutId: params.checkoutId,
     })),
+    createServiceSubOrder: jest.fn(async (_qr: any, params: any) => ({
+      id: `esc-svc-${params.line.vendorListingId}`,
+      orderNumber: `ORD-SVC-${params.line.vendorListingId}`,
+      sellerId: params.sellerId,
+      amount: params.amount,
+      market: 'vendor',
+      status: 'pending_confirmation',
+      deliveryMethod: params.deliveryMethod,
+      deliveryLocation: params.deliveryLocation,
+      checkoutId: params.checkoutId,
+    })),
     finalizeSubOrderPlacement: jest.fn(async () => {}),
     finalizeVendorSubOrderPlacement: jest.fn(async () => {}),
+    finalizeServiceSubOrderPlacement: jest.fn(async () => {}),
+  };
+  const schedulingService: any = {
+    assertAvailable: jest.fn(async () => {}),
   };
   const walletService: any = { lockFunds: jest.fn(async () => ({})) };
+  const timingPolicy: any = {
+    resolve: () => ({
+      confirmationHours: 24,
+      fulfillmentHours: 72,
+      disputeWindowMinutes: 1440,
+      agreementHours: 72,
+      appointmentHorizonDays: 14,
+      noShowGraceMinutes: 30,
+      appointmentBackstopHours: 24,
+      proposalExpiryHours: 48,
+      offerLockHours: 24,
+    }),
+  };
 
   const svc = new CheckoutService(
     dataSource,
@@ -150,7 +180,9 @@ function makeService(opts: {
     dropPointRepo,
     cartService,
     escrowService,
+    schedulingService,
     walletService,
+    timingPolicy,
   );
   return {
     svc,
@@ -158,6 +190,7 @@ function makeService(opts: {
     queryRunner,
     cartService,
     escrowService,
+    schedulingService,
     walletService,
   };
 }
@@ -565,5 +598,195 @@ describe('CheckoutService.checkoutDirect (buy-now + offer pricing)', () => {
       const body: any = (error as BadRequestException).getResponse();
       expect(body.issues[0].reason).toBe('offer_lock_expired');
     }
+  });
+});
+
+// ─── Phase 6: service bookings through checkout (rev-2 spec 03.6) ────
+
+function serviceListing(id: string, over: any = {}) {
+  return vendorListing(id, {
+    type: 'service',
+    stock: null,
+    manualConfirm: true,
+    basePrice: 5000,
+    title: `Service ${id}`,
+    ...over,
+  });
+}
+
+describe('CheckoutService — service bookings (Phase 6)', () => {
+  const inTwoDays = new Date(Date.now() + 48 * HOUR).toISOString();
+
+  it('books a service as its OWN pending sub-order with the proposed time', async () => {
+    const { svc, escrowService, walletService } = makeService({
+      vendorListings: { vs1: serviceListing('vs1') },
+      rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
+    });
+
+    const result = await svc.checkoutFromCart(buyer, {
+      pin: '135790',
+      serviceSchedules: [
+        { cartItemId: 'line-1', proposedTime: inTwoDays, method: 'pickup' },
+      ],
+    } as any);
+
+    expect(result.total).toBe(5000);
+    expect(result.orders).toHaveLength(1);
+    expect(result.orders[0].status).toBe('pending_confirmation');
+    expect(escrowService.createServiceSubOrder).toHaveBeenCalledTimes(1);
+    const params = escrowService.createServiceSubOrder.mock.calls[0][1];
+    expect(params.itemsSubtotal).toBe(5000);
+    expect(params.deliveryFee).toBe(0);
+    expect(params.deliveryMethod).toBe('pickup');
+    expect(params.deliveryLocation).toBe('Shop 4, Mama T Plaza');
+    expect(new Date(params.proposedTime).toISOString()).toBe(inTwoDays);
+    expect(walletService.lockFunds.mock.calls[0][1]).toBe(5000);
+    expect(escrowService.finalizeServiceSubOrderPlacement).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires a schedule for every service line', async () => {
+    const { svc } = makeService({
+      vendorListings: { vs1: serviceListing('vs1') },
+      rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
+    });
+
+    await expect(
+      svc.checkoutFromCart(buyer, { pin: '135790' } as any),
+    ).rejects.toThrow(/Provide a schedule/);
+  });
+
+  it('rejects a proposed time beyond the 14-day appointment horizon', async () => {
+    const { svc } = makeService({
+      vendorListings: { vs1: serviceListing('vs1') },
+      rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
+    });
+
+    await expect(
+      svc.checkoutFromCart(buyer, {
+        pin: '135790',
+        serviceSchedules: [
+          {
+            cartItemId: 'line-1',
+            proposedTime: new Date(Date.now() + 15 * 24 * HOUR).toISOString(),
+            method: 'pickup',
+          },
+        ],
+      } as any),
+    ).rejects.toThrow(/at most 14 days/);
+  });
+
+  it('travel needs the per-university opt-in and a service location; the fee lands on the total', async () => {
+    const { svc, escrowService, walletService } = makeService({
+      vendorListings: {
+        vs1: serviceListing('vs1', {
+          fulfillment: [
+            { universityId: 'u1', deliveryEnabled: true, deliveryFee: 1500 },
+          ],
+        }),
+      },
+      rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
+    });
+
+    // Missing address → 400
+    await expect(
+      svc.checkoutFromCart(buyer, {
+        pin: '135790',
+        serviceSchedules: [
+          { cartItemId: 'line-1', proposedTime: inTwoDays, method: 'delivery' },
+        ],
+      } as any),
+    ).rejects.toThrow(/service location/);
+
+    const result = await svc.checkoutFromCart(buyer, {
+      pin: '135790',
+      serviceSchedules: [
+        {
+          cartItemId: 'line-1',
+          proposedTime: inTwoDays,
+          method: 'delivery',
+          serviceAddress: 'Room 12, Queen Amina Hall',
+        },
+      ],
+    } as any);
+
+    expect(result.total).toBe(6500); // 5000 + 1500 travel
+    const params = escrowService.createServiceSubOrder.mock.calls[0][1];
+    expect(params.deliveryFee).toBe(1500);
+    expect(params.deliveryLocation).toBe('Room 12, Queen Amina Hall');
+    expect(walletService.lockFunds.mock.calls[0][1]).toBe(6500);
+  });
+
+  it('travel to a university the service does not opt into is refused', async () => {
+    const { svc } = makeService({
+      vendorListings: {
+        vs1: serviceListing('vs1', {
+          fulfillment: [
+            { universityId: 'u1', deliveryEnabled: false, deliveryFee: null },
+          ],
+        }),
+      },
+      rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
+    });
+
+    await expect(
+      svc.checkoutFromCart(buyer, {
+        pin: '135790',
+        serviceSchedules: [
+          {
+            cartItemId: 'line-1',
+            proposedTime: inTwoDays,
+            method: 'delivery',
+            serviceAddress: 'Room 12',
+          },
+        ],
+      } as any),
+    ).rejects.toThrow(/doesn't offer travel/);
+  });
+
+  it('a service never bundles with goods from the same vendor — two sub-orders, one lock', async () => {
+    const { svc, escrowService, walletService } = makeService({
+      vendorListings: {
+        vg1: vendorListing('vg1', { basePrice: 2000 }),
+        vs1: serviceListing('vs1'),
+      },
+      rawItems: [
+        { cartItemId: 'line-g', vendorListingId: 'vg1' },
+        { cartItemId: 'line-s', vendorListingId: 'vs1' },
+      ],
+    });
+
+    const result = await svc.checkoutFromCart(buyer, {
+      pin: '135790',
+      vendorFulfillment: [{ vendorProfileId: 'vp1', method: 'pickup' }],
+      serviceSchedules: [
+        { cartItemId: 'line-s', proposedTime: inTwoDays, method: 'pickup' },
+      ],
+    } as any);
+
+    expect(result.orders).toHaveLength(2);
+    expect(escrowService.createVendorSubOrder).toHaveBeenCalledTimes(1);
+    expect(escrowService.createServiceSubOrder).toHaveBeenCalledTimes(1);
+    expect(result.total).toBe(7000);
+    expect(walletService.lockFunds).toHaveBeenCalledTimes(1);
+    expect(walletService.lockFunds.mock.calls[0][1]).toBe(7000);
+  });
+
+  it('runs every proposed time through the availability seam', async () => {
+    const { svc, schedulingService } = makeService({
+      vendorListings: { vs1: serviceListing('vs1') },
+      rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
+    });
+
+    await svc.checkoutFromCart(buyer, {
+      pin: '135790',
+      serviceSchedules: [
+        { cartItemId: 'line-1', proposedTime: inTwoDays, method: 'pickup' },
+      ],
+    } as any);
+
+    expect(schedulingService.assertAvailable).toHaveBeenCalledWith(
+      'vs1',
+      expect.any(Date),
+    );
   });
 });

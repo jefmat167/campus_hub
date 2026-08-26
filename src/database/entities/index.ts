@@ -19,6 +19,7 @@ export * from './review.entity';
 export * from './conversation.entity';
 export * from './favorite.entity';
 export * from './escrow.entity';
+export * from './service-time-proposal.entity';
 export * from './checkout.entity';
 export * from './order-item.entity';
 export * from './cart.entity';

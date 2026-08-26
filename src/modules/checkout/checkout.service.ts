@@ -31,16 +31,20 @@ import { toKobo, toNaira } from '../../common/utils/money';
 import { resolveVendorSelection } from '../vendors/vendor-listing.util';
 import { CartService } from '../cart/cart.service';
 import { EscrowService } from '../escrow/escrow.service';
+import { ServiceSchedulingService } from '../escrow/service-scheduling.service';
 import { WalletService } from '../wallet/wallet.service';
+import { TimingPolicyService } from '../../common/services/timing-policy.service';
 import {
   CheckoutDto,
   DirectCheckoutDto,
   MeetupSelectionDto,
+  ServiceScheduleDto,
   VendorFulfillmentChoiceDto,
 } from './dto/checkout.dto';
 
 interface RawLine {
   kind: 'p2p' | 'vendor';
+  cartItemId: string | null;
   listingId?: string | null;
   offerId?: string | null;
   vendorListingId?: string | null;
@@ -65,6 +69,7 @@ interface P2pPlan {
 }
 
 interface VendorPlanLine {
+  cartItemId: string | null;
   listing: VendorListing;
   quantity: number;
   unitPriceKobo: number;
@@ -86,6 +91,21 @@ interface VendorPlan {
   deliveryAddress: string | null;
   dropPointId: string | null;
   confirmationRequired: boolean;
+}
+
+/** One service booking = one sub-order (rev-2 03.6, decision #1). */
+interface ServicePlan {
+  vendorProfileId: string;
+  sellerId: string;
+  businessName: string;
+  line: VendorPlanLine;
+  itemsSubtotalKobo: number;
+  deliveryFeeKobo: number; // the travel fee, when the vendor comes to you
+  deliveryMethod: DeliveryMethod;
+  deliveryLocation: string;
+  deliveryAddress: string | null;
+  proposedTime: Date;
+  scheduleNote: string | null;
 }
 
 export interface CheckoutResult {
@@ -116,6 +136,9 @@ export interface CheckoutResult {
  *   fee = the HIGHEST single line fee (one trip, not one per item), and
  *   neighboring-university delivery goes to an admin drop point only.
  * - Manual-confirmation vendor orders start PENDING_CONFIRMATION.
+ * - Service lines (Phase 6, spec 03.6) each become their OWN sub-order with
+ *   the buyer's proposed time; travel goes to a buyer-provided location
+ *   (drop points don't apply — nothing is handed over at a gate).
  */
 @Injectable()
 export class CheckoutService {
@@ -135,7 +158,9 @@ export class CheckoutService {
     private dropPointRepo: Repository<DropPoint>,
     private cartService: CartService,
     private escrowService: EscrowService,
+    private schedulingService: ServiceSchedulingService,
     private walletService: WalletService,
+    private timingPolicy: TimingPolicyService,
   ) { }
 
   async checkoutFromCart(user: User, dto: CheckoutDto): Promise<CheckoutResult> {
@@ -146,6 +171,7 @@ export class CheckoutService {
 
     const rawLines: RawLine[] = items.map((item) => ({
       kind: item.vendorListingId ? 'vendor' : 'p2p',
+      cartItemId: item.id,
       listingId: item.listingId,
       offerId: item.offerId,
       vendorListingId: item.vendorListingId,
@@ -158,6 +184,7 @@ export class CheckoutService {
       rawLines,
       dto.meetupSelections ?? [],
       dto.vendorFulfillment ?? [],
+      dto.serviceSchedules ?? [],
       dto.notes ?? null,
     );
 
@@ -175,6 +202,7 @@ export class CheckoutService {
       [
         {
           kind: 'p2p',
+          cartItemId: null,
           listingId: dto.listingId,
           offerId: dto.offerId ?? null,
           quantity: 1,
@@ -182,6 +210,7 @@ export class CheckoutService {
         },
       ],
       [{ listingId: dto.listingId, meetupPointIndex: dto.meetupPointIndex }],
+      [],
       [],
       dto.notes ?? null,
     );
@@ -194,6 +223,7 @@ export class CheckoutService {
     rawLines: RawLine[],
     selections: MeetupSelectionDto[],
     vendorChoices: VendorFulfillmentChoiceDto[],
+    schedules: ServiceScheduleDto[],
     notes: string | null,
   ): Promise<CheckoutResult> {
     // 1) Validate + reprice every line server-side; collect per-line issues.
@@ -217,21 +247,34 @@ export class CheckoutService {
       });
     }
 
-    // 2) Group into sub-order plans.
+    // 2) Group into sub-order plans. Goods bundle per vendor; every service
+    //    line is its OWN sub-order (own appointment, own deadline — 03.6).
+    const goodsLines = vendorLines.filter(
+      (line) => line.vendorListing.type !== VendorListingType.SERVICE,
+    );
+    const serviceLines = vendorLines.filter(
+      (line) => line.vendorListing.type === VendorListingType.SERVICE,
+    );
+
     const p2pPlans = this.buildP2pPlans(p2pLines, selections);
     const vendorPlans = await this.buildVendorPlans(
       user,
-      vendorLines,
+      goodsLines,
       vendorChoices,
+    );
+    const servicePlans = await this.buildServicePlans(
+      user,
+      serviceLines,
+      schedules,
     );
 
     const itemsSubtotalKobo =
       p2pPlans.reduce((sum, plan) => sum + plan.subtotalKobo, 0) +
-      vendorPlans.reduce((sum, plan) => sum + plan.itemsSubtotalKobo, 0);
-    const deliveryTotalKobo = vendorPlans.reduce(
-      (sum, plan) => sum + plan.deliveryFeeKobo,
-      0,
-    );
+      vendorPlans.reduce((sum, plan) => sum + plan.itemsSubtotalKobo, 0) +
+      servicePlans.reduce((sum, plan) => sum + plan.itemsSubtotalKobo, 0);
+    const deliveryTotalKobo =
+      vendorPlans.reduce((sum, plan) => sum + plan.deliveryFeeKobo, 0) +
+      servicePlans.reduce((sum, plan) => sum + plan.deliveryFeeKobo, 0);
     const totalKobo = itemsSubtotalKobo + deliveryTotalKobo;
     const total = toNaira(totalKobo);
 
@@ -258,6 +301,8 @@ export class CheckoutService {
     const checkoutId = randomUUID();
     const orders: EscrowTransaction[] = [];
     const labels = new Map<string, string>();
+    const itemCounts = new Map<string, number>();
+    const serviceOrderPlans = new Map<string, ServicePlan>();
 
     try {
       await queryRunner.manager.save(
@@ -304,10 +349,11 @@ export class CheckoutService {
         });
         orders.push(order);
         labels.set(order.id, this.labelFor(plan.lines.map((l) => l.title)));
+        itemCounts.set(order.id, plan.lines.length);
       }
 
       for (const plan of vendorPlans) {
-        await this.decrementVendorStock(queryRunner, plan);
+        await this.decrementVendorStock(queryRunner, plan.lines);
 
         const order = await this.escrowService.createVendorSubOrder(
           queryRunner,
@@ -339,6 +385,41 @@ export class CheckoutService {
           order.id,
           this.labelFor(plan.lines.map((l) => l.listing.title)),
         );
+        itemCounts.set(order.id, plan.lines.length);
+      }
+
+      for (const plan of servicePlans) {
+        // Services carry no base stock, but selected options can be tracked.
+        await this.decrementVendorStock(queryRunner, [plan.line]);
+
+        const order = await this.escrowService.createServiceSubOrder(
+          queryRunner,
+          {
+            checkoutId,
+            buyerId: user.id,
+            sellerId: plan.sellerId,
+            amount: toNaira(plan.itemsSubtotalKobo + plan.deliveryFeeKobo),
+            itemsSubtotal: toNaira(plan.itemsSubtotalKobo),
+            deliveryFee: toNaira(plan.deliveryFeeKobo),
+            deliveryMethod: plan.deliveryMethod,
+            deliveryLocation: plan.deliveryLocation,
+            deliveryAddress: plan.deliveryAddress,
+            notes,
+            proposedTime: plan.proposedTime,
+            scheduleNote: plan.scheduleNote,
+            line: {
+              vendorListingId: plan.line.listing.id,
+              title: plan.line.listing.title,
+              unitPrice: toNaira(plan.line.unitPriceKobo),
+              lineTotal: toNaira(plan.line.unitPriceKobo),
+              optionsSnapshot: plan.line.optionsSnapshot,
+            },
+          },
+        );
+        orders.push(order);
+        labels.set(order.id, plan.line.listing.title);
+        itemCounts.set(order.id, 1);
+        serviceOrderPlans.set(order.id, plan);
       }
 
       // One hold for the whole checkout — balance and the daily velocity cap
@@ -365,7 +446,14 @@ export class CheckoutService {
     // 5) Post-commit side effects per sub-order (never throw — money moved).
     for (const order of orders) {
       const label = labels.get(order.id) ?? 'your order';
-      if (order.market === 'vendor') {
+      const servicePlan = serviceOrderPlans.get(order.id);
+      if (servicePlan) {
+        await this.escrowService.finalizeServiceSubOrderPlacement(
+          order,
+          label,
+          servicePlan.proposedTime,
+        );
+      } else if (order.market === 'vendor') {
         await this.escrowService.finalizeVendorSubOrderPlacement(order, label);
       } else {
         await this.escrowService.finalizeSubOrderPlacement(order, label);
@@ -382,10 +470,7 @@ export class CheckoutService {
         status: order.status,
         sellerId: order.sellerId,
         amount: Number(order.amount),
-        itemCount:
-          p2pPlans.find((p) => p.sellerId === order.sellerId)?.lines.length ??
-          vendorPlans.find((p) => p.sellerId === order.sellerId)?.lines.length ??
-          1,
+        itemCount: itemCounts.get(order.id) ?? 1,
         deliveryMethod: order.deliveryMethod,
         deliveryLocation: order.deliveryLocation,
       })),
@@ -468,8 +553,8 @@ export class CheckoutService {
       issues.push({ listingId: id, reason: 'listing_unavailable' });
       return;
     }
-    if (listing.type === VendorListingType.SERVICE) {
-      issues.push({ listingId: id, reason: 'service_not_supported' });
+    if (listing.type === VendorListingType.SERVICE && raw.quantity !== 1) {
+      issues.push({ listingId: id, reason: 'selection_invalid' });
       return;
     }
     if (listing.vendorProfile.userId === user.id) {
@@ -502,6 +587,7 @@ export class CheckoutService {
     }
 
     out.push({
+      cartItemId: raw.cartItemId,
       listing,
       vendorListing: listing,
       quantity: raw.quantity,
@@ -683,13 +769,119 @@ export class CheckoutService {
     return plans;
   }
 
+  /**
+   * One plan per SERVICE line (rev-2 spec 03.6): the buyer's proposed time
+   * (validated > now and ≤ 14 days out) plus where the service happens —
+   * pickup at the shop, or "delivery" = the vendor travels to a
+   * buyer-provided location (per-university opt-in with a travel fee; the
+   * goods drop-point rule doesn't apply).
+   */
+  private async buildServicePlans(
+    user: User,
+    lines: Array<VendorPlanLine & { vendorListing: VendorListing }>,
+    schedules: ServiceScheduleDto[],
+  ): Promise<ServicePlan[]> {
+    if (lines.length === 0) return [];
+
+    const policy = this.timingPolicy.resolve({
+      market: 'vendor',
+      itemType: 'vendor_service',
+    });
+    const horizonMs = policy.appointmentHorizonDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    const plans: ServicePlan[] = [];
+    for (const line of lines) {
+      const profile = line.vendorListing.vendorProfile;
+      const title = line.vendorListing.title;
+      const schedule = (schedules ?? []).find(
+        (s) => s.cartItemId === line.cartItemId,
+      );
+      if (!schedule) {
+        throw new BadRequestException(
+          `Provide a schedule (proposed time + pickup/travel choice) for "${title}"`,
+        );
+      }
+
+      const proposedTime = new Date(schedule.proposedTime);
+      if (Number.isNaN(proposedTime.getTime())) {
+        throw new BadRequestException(
+          `The proposed time for "${title}" is not a valid date`,
+        );
+      }
+      if (proposedTime.getTime() <= now) {
+        throw new BadRequestException(
+          `The proposed time for "${title}" must be in the future`,
+        );
+      }
+      if (proposedTime.getTime() > now + horizonMs) {
+        throw new BadRequestException(
+          `An appointment can sit at most ${policy.appointmentHorizonDays} days out — pick an earlier time for "${title}"`,
+        );
+      }
+
+      // The calendar seam (spec 05): v1 always allows.
+      await this.schedulingService.assertAvailable(
+        line.vendorListing.id,
+        proposedTime,
+      );
+
+      let deliveryMethod: DeliveryMethod;
+      let deliveryFeeKobo = 0;
+      let deliveryLocation: string;
+      let deliveryAddress: string | null = null;
+
+      if (schedule.method === 'pickup') {
+        // The buyer goes to the vendor.
+        deliveryMethod = DeliveryMethod.PICKUP;
+        deliveryLocation =
+          profile.shopAddress?.trim() ||
+          `${profile.businessName} (at the shop)`;
+      } else {
+        // Travel: the vendor comes to the buyer — per-university opt-in.
+        deliveryMethod = DeliveryMethod.DELIVERY;
+        const row = (line.vendorListing.fulfillment ?? []).find(
+          (f) => f.universityId === user.universityId,
+        );
+        if (!row || !row.deliveryEnabled) {
+          throw new BadRequestException(
+            `"${title}" doesn't offer travel to your university — choose pickup`,
+          );
+        }
+        deliveryFeeKobo = toKobo(Number(row.deliveryFee ?? 0));
+        if (!schedule.serviceAddress?.trim()) {
+          throw new BadRequestException(
+            `Provide the service location for "${title}" (where should the vendor come?)`,
+          );
+        }
+        deliveryAddress = schedule.serviceAddress.trim();
+        deliveryLocation = deliveryAddress;
+      }
+
+      plans.push({
+        vendorProfileId: profile.id,
+        sellerId: profile.userId,
+        businessName: profile.businessName,
+        line,
+        itemsSubtotalKobo: line.unitPriceKobo,
+        deliveryFeeKobo,
+        deliveryMethod,
+        deliveryLocation,
+        deliveryAddress,
+        proposedTime,
+        scheduleNote: schedule.note?.trim() || null,
+      });
+    }
+    return plans;
+  }
+
   // ─── stock reservation (race-checked, inside the checkout tx) ────
 
   private async decrementVendorStock(
     queryRunner: QueryRunner,
-    plan: VendorPlan,
+    lines: VendorPlanLine[],
   ): Promise<void> {
-    for (const line of plan.lines) {
+    for (const line of lines) {
       if (line.listing.stock !== null) {
         const rows: unknown[] = await queryRunner.manager.query(
           `UPDATE "vendor_listings" SET "stock" = "stock" - $1

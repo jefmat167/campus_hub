@@ -22,6 +22,11 @@ import {
   OrderItemType,
 } from '../../database/entities/order-item.entity';
 import {
+  ServiceTimeProposal,
+  ProposalParty,
+  ProposalStatus,
+} from '../../database/entities/service-time-proposal.entity';
+import {
   Dispute,
   DisputeStatus,
 } from '../../database/entities/dispute.entity';
@@ -248,6 +253,16 @@ export class EscrowService {
     validFrom: Date;
     validUntil: Date;
   } {
+    // Services (rev-2 03.6): the code exchanges at the appointment — it opens
+    // 2h before it (meetup's lead-in mirrored) and stays valid until the
+    // order deadline (appointment + 24h backstop).
+    if (escrow.appointmentAt) {
+      const appointment = new Date(escrow.appointmentAt);
+      return {
+        validFrom: new Date(appointment.getTime() - 2 * 60 * 60 * 1000),
+        validUntil: escrow.fulfillmentExpiresAt,
+      };
+    }
     if (
       escrow.deliveryMethod === DeliveryMethod.MEETUP &&
       escrow.deliveryDate &&
@@ -618,6 +633,539 @@ export class EscrowService {
     }
   }
 
+  /** Short date+time label for appointment copy (e.g. "Sep 2, 02:30 PM"). */
+  private formatAppointment(date: Date): string {
+    return new Date(date).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  /**
+   * Create one SERVICE sub-order (rev-2 spec 03.6) on the CALLER's
+   * transaction. A service never shares a sub-order with goods or another
+   * service — it has its own appointment, ready-semantics, and deadline.
+   * PENDING_CONFIRMATION here means TIME NEGOTIATION: the buyer's proposed
+   * time lands as the first service_time_proposals row, and the provisional
+   * deadline is the 72h agreement window (re-keyed to appointment + 24h once
+   * a time is agreed).
+   */
+  async createServiceSubOrder(
+    queryRunner: QueryRunner,
+    params: {
+      checkoutId: string;
+      buyerId: string;
+      sellerId: string; // the vendor profile's userId
+      amount: number; // naira — itemsSubtotal + deliveryFee (travel)
+      itemsSubtotal: number;
+      deliveryFee: number;
+      deliveryMethod: DeliveryMethod; // PICKUP (at the shop) or DELIVERY (travel)
+      deliveryLocation: string;
+      deliveryAddress?: string | null;
+      notes?: string | null;
+      proposedTime: Date;
+      scheduleNote?: string | null;
+      line: {
+        vendorListingId: string;
+        title: string;
+        unitPrice: number;
+        lineTotal: number;
+        optionsSnapshot: Record<string, unknown> | null;
+      };
+    },
+  ): Promise<EscrowTransaction> {
+    const policy = this.timingPolicy.resolve({
+      market: 'vendor',
+      itemType: 'vendor_service',
+    });
+    const orderNumber = await this.generateOrderNumber();
+    const now = Date.now();
+
+    const escrow = this.escrowRepo.create({
+      buyerId: params.buyerId,
+      sellerId: params.sellerId,
+      checkoutId: params.checkoutId,
+      market: OrderMarket.VENDOR,
+      amount: params.amount,
+      itemsSubtotal: params.itemsSubtotal,
+      deliveryFee: params.deliveryFee,
+      orderNumber,
+      status: EscrowStatus.PENDING_CONFIRMATION,
+      confirmationRequired: true,
+      // Provisional: the 72h time-to-AGREE window (spec FIG 03.5) — replaced
+      // by appointment + 24h at agreement.
+      fulfillmentExpiresAt: new Date(now + policy.agreementHours * 60 * 60 * 1000),
+      notes: params.notes ?? null,
+      deliveryMethod: params.deliveryMethod,
+      deliveryLocation: params.deliveryLocation,
+      deliveryAddress: params.deliveryAddress ?? null,
+    });
+    const savedEscrow = await queryRunner.manager.save(escrow);
+
+    await queryRunner.manager.save(
+      queryRunner.manager.create(OrderItem, {
+        orderId: savedEscrow.id,
+        itemType: OrderItemType.VENDOR_SERVICE,
+        vendorListingId: params.line.vendorListingId,
+        titleSnapshot: params.line.title,
+        unitPrice: params.line.unitPrice,
+        quantity: 1,
+        lineTotal: params.line.lineTotal,
+        optionsSnapshot: params.line.optionsSnapshot,
+      }),
+    );
+
+    // The buyer's opening time proposal (48h on the table, offer semantics).
+    await queryRunner.manager.save(
+      queryRunner.manager.create(ServiceTimeProposal, {
+        orderId: savedEscrow.id,
+        proposedBy: ProposalParty.BUYER,
+        proposedTime: params.proposedTime,
+        message: params.scheduleNote ?? null,
+        status: ProposalStatus.PENDING,
+        expiresAt: new Date(now + policy.proposalExpiryHours * 60 * 60 * 1000),
+      }),
+    );
+
+    return savedEscrow;
+  }
+
+  /**
+   * Post-commit side effects for a service sub-order: the 72h agreement
+   * timeout + both parties' notifications. Never throws.
+   */
+  async finalizeServiceSubOrderPlacement(
+    escrow: EscrowTransaction,
+    itemsLabel: string,
+    proposedTime: Date,
+  ): Promise<void> {
+    try {
+      const policy = this.timingPolicy.resolve({
+        market: 'vendor',
+        itemType: 'vendor_service',
+      });
+      await this.escrowQueue.add(
+        EscrowJobName.SERVICE_AGREEMENT_TIMEOUT,
+        { escrowId: escrow.id },
+        {
+          delay: policy.agreementHours * 60 * 60 * 1000,
+          jobId: `agreement-timeout-${escrow.id}`,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1000 },
+        },
+      );
+
+      const amount = Number(escrow.amount);
+      const formattedAmount = amount.toLocaleString();
+      const timeLabel = this.formatAppointment(proposedTime);
+      const [buyer, seller] = await Promise.all([
+        this.userRepo.findOne({ where: { id: escrow.buyerId } }),
+        this.userRepo.findOne({ where: { id: escrow.sellerId } }),
+      ]);
+
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ESCROW_INITIATED,
+        title: 'Booking request placed',
+        body: `Your booking ${escrow.orderNumber} for "${itemsLabel}" (₦${formattedAmount}) proposes ${timeLabel}. If no time is agreed within ${policy.agreementHours} hours you'll be refunded in full.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          checkoutId: escrow.checkoutId,
+          amount,
+          proposedTime: proposedTime.toISOString(),
+        },
+      });
+
+      await this.notificationsService.createNotification({
+        userId: escrow.sellerId,
+        type: NotificationType.APPOINTMENT_PROPOSED,
+        title: 'New booking request',
+        body: `Booking ${escrow.orderNumber} for "${itemsLabel}" (₦${formattedAmount}) proposes ${timeLabel}. Accept, counter, or reject — proposals expire after ${policy.proposalExpiryHours}h, and the whole booking auto-cancels if no time is agreed within ${policy.agreementHours}h.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          checkoutId: escrow.checkoutId,
+          amount,
+          proposedTime: proposedTime.toISOString(),
+        },
+      });
+
+      if (buyer?.email) {
+        await this.resendService.sendEmail({
+          to: buyer.email,
+          subject: `Booking Request Placed — ${escrow.orderNumber}`,
+          template: 'orderConfirmationBuyer',
+          context: {
+            buyerName: buyer.fullName,
+            orderNumber: escrow.orderNumber,
+            listingTitle: itemsLabel,
+            amount: formattedAmount,
+            sellerName: seller?.fullName ?? 'Vendor',
+          },
+        });
+      }
+      if (seller?.email) {
+        await this.resendService.sendEmail({
+          to: seller.email,
+          subject: `New Booking Request — ${escrow.orderNumber}`,
+          template: 'newOrderSeller',
+          context: {
+            sellerName: seller.fullName,
+            orderNumber: escrow.orderNumber,
+            listingTitle: itemsLabel,
+            amount: formattedAmount,
+          },
+        });
+      }
+
+      this.logger.log(
+        `Service sub-order ${escrow.id} (${escrow.orderNumber}) placed for ₦${formattedAmount}, proposing ${timeLabel}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Post-placement side effects failed for service sub-order ${escrow.id}: ${error}`,
+      );
+    }
+  }
+
+  /**
+   * An accepted time proposal becomes the appointment (rev-2 03.6): the order
+   * is now "ready" — SELLER_READY with the delivery code issued (window:
+   * appointment − 2h → deadline), and every deadline re-keys to the
+   * appointment (deadline = appointment + 24h backstop). Called by
+   * ServiceSchedulingService after party/proposal checks.
+   */
+  async activateServiceAppointment(
+    escrowId: string,
+    appointmentAt: Date,
+  ): Promise<{ escrow: EscrowTransaction; deliveryCode: DeliveryCode }> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow) throw new NotFoundException('Order not found');
+    if (escrow.status !== EscrowStatus.PENDING_CONFIRMATION) {
+      throw new BadRequestException(
+        `Cannot agree a time. Order status is: ${escrow.status}`,
+      );
+    }
+
+    const policy = this.timingPolicy.resolve({
+      market: 'vendor',
+      itemType: 'vendor_service',
+    });
+    const deadline = new Date(
+      appointmentAt.getTime() + policy.appointmentBackstopHours * 60 * 60 * 1000,
+    );
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    let deliveryCode: DeliveryCode;
+    try {
+      const now = new Date();
+      escrow.status = EscrowStatus.SELLER_READY;
+      escrow.agreedAt = now;
+      escrow.appointmentAt = appointmentAt;
+      escrow.sellerReadyAt = now; // "ready" = the time is agreed (spec FIG 03.4)
+      escrow.fulfillmentExpiresAt = deadline; // re-keyed: appointment + 24h
+      await queryRunner.manager.save(escrow);
+
+      deliveryCode = this.deliveryCodeRepo.create({
+        escrowId: escrow.id,
+        code: this.generateDeliveryCodeValue(),
+        validFrom: new Date(appointmentAt.getTime() - 2 * 60 * 60 * 1000),
+        validUntil: deadline,
+      });
+      await queryRunner.manager.save(deliveryCode);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.escrowQueue.remove(`agreement-timeout-${escrow.id}`);
+    await this.escrowQueue.add(
+      EscrowJobName.APPOINTMENT_BACKSTOP,
+      { escrowId: escrow.id },
+      {
+        delay: Math.max(deadline.getTime() - Date.now(), 0),
+        jobId: `appointment-backstop-${escrow.id}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1000 },
+      },
+    );
+
+    const itemTitle = await this.getItemTitle(escrow);
+    const timeLabel = this.formatAppointment(appointmentAt);
+    try {
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.APPOINTMENT_AGREED,
+        title: 'Appointment agreed',
+        body: `"${itemTitle}" (${escrow.orderNumber}) is booked for ${timeLabel}. Your delivery code is ${deliveryCode.code} — share it once the service is done. From 30 minutes past the appointment you can claim a full refund if the vendor doesn't show.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          appointmentAt: appointmentAt.toISOString(),
+          deliveryCode: deliveryCode.code,
+        },
+      });
+      await this.notificationsService.createNotification({
+        userId: escrow.sellerId,
+        type: NotificationType.APPOINTMENT_AGREED,
+        title: 'Appointment agreed',
+        body: `"${itemTitle}" (${escrow.orderNumber}) is booked for ${timeLabel}. Collect the buyer's 4-digit code at the appointment; the order auto-cancels with a full refund if it isn't confirmed within ${policy.appointmentBackstopHours}h after the appointment.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          appointmentAt: appointmentAt.toISOString(),
+        },
+      });
+
+      const buyer = await this.userRepo.findOne({
+        where: { id: escrow.buyerId },
+      });
+      if (buyer?.email) {
+        await this.resendService.sendEmail({
+          to: buyer.email,
+          subject: `Appointment Confirmed — ${escrow.orderNumber}`,
+          template: 'deliveryDetailsBuyer',
+          context: {
+            buyerName: buyer.fullName,
+            orderNumber: escrow.orderNumber,
+            deliveryCode: deliveryCode.code,
+            deliveryMethod: escrow.deliveryMethod,
+            deliveryDate: timeLabel,
+            deliveryTime: '',
+            deliveryLocation: escrow.deliveryLocation ?? '',
+          },
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Appointment-agreed side effects failed for ${escrow.id}: ${error}`,
+      );
+    }
+
+    this.logger.log(
+      `Service order ${escrow.id} appointment agreed for ${timeLabel} (deadline ${deadline.toISOString()})`,
+    );
+    return { escrow, deliveryCode };
+  }
+
+  /**
+   * Agreement-timeout backstop (72h, TimingPolicy — spec FIG 03.5): no
+   * appointment agreed → auto-cancel with a full refund. The 3-day rule
+   * polices negotiation for services, not delivery.
+   */
+  async handleAgreementTimeout(escrowId: string): Promise<void> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow) {
+      this.logger.warn(`Escrow ${escrowId} not found for agreement timeout`);
+      return;
+    }
+    if (escrow.status !== EscrowStatus.PENDING_CONFIRMATION) {
+      this.logger.log(
+        `Escrow ${escrowId} status is ${escrow.status}, skipping agreement timeout`,
+      );
+      return;
+    }
+
+    await this.terminatePendingOrder(escrow, 'system', 'agreement_timeout');
+
+    try {
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ORDER_REJECTED,
+        title: 'Booking auto-cancelled — full refund issued',
+        body: `No appointment time was agreed for booking ${escrow.orderNumber} in time, so it was cancelled and you've been refunded in full.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+      await this.notificationsService.createNotification({
+        userId: escrow.sellerId,
+        type: NotificationType.ORDER_EXPIRED,
+        title: 'Booking lapsed',
+        body: `Booking ${escrow.orderNumber} was auto-cancelled — no appointment time was agreed in time. The buyer was refunded in full.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Agreement-timeout notification failed for ${escrowId}: ${error}`,
+      );
+    }
+
+    this.logger.log(`Service order ${escrowId} auto-cancelled (agreement timeout)`);
+  }
+
+  /**
+   * Appointment backstop (appointment + 24h, spec 03.6): the service was
+   * never confirmed as delivered — auto-cancel with a full refund. The
+   * neutral safety net when neither side acts.
+   */
+  async handleAppointmentBackstop(escrowId: string): Promise<void> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow) {
+      this.logger.warn(`Escrow ${escrowId} not found for appointment backstop`);
+      return;
+    }
+    if (escrow.status !== EscrowStatus.SELLER_READY) {
+      this.logger.log(
+        `Escrow ${escrowId} status is ${escrow.status}, skipping appointment backstop`,
+      );
+      return;
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await this.walletService.refundFunds(
+        escrow.buyerId,
+        Number(escrow.amount),
+        `ESCROW_EXPIRED_${escrow.id}`,
+        queryRunner,
+        escrow.market ?? null,
+      );
+
+      escrow.status = EscrowStatus.EXPIRED;
+      escrow.cancelledBy = 'system';
+      escrow.cancelReason = 'appointment_backstop';
+      escrow.refundedAt = new Date();
+      await queryRunner.manager.save(escrow);
+
+      await this.restoreVendorStock(queryRunner.manager, escrow.id);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    try {
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ORDER_EXPIRED,
+        title: 'Booking expired — full refund issued',
+        body: `Booking ${escrow.orderNumber} wasn't confirmed as delivered within 24 hours of the appointment, so it was cancelled and you've been refunded in full.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+      await this.notificationsService.createNotification({
+        userId: escrow.sellerId,
+        type: NotificationType.ORDER_EXPIRED,
+        title: 'Booking expired',
+        body: `Booking ${escrow.orderNumber} wasn't confirmed as delivered within 24 hours of the appointment. It was cancelled and the buyer refunded in full.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Backstop notification failed for ${escrowId}: ${error}`,
+      );
+    }
+
+    this.logger.log(
+      `Service order ${escrowId} expired (appointment backstop), full refund issued`,
+    );
+  }
+
+  /**
+   * Vendor no-show claim (rev-2 03.6): from 30 minutes past the appointment,
+   * the buyer gets an immediate full refund — no dispute, no waiting for the
+   * 24h backstop.
+   */
+  async claimNoShow(
+    escrowId: string,
+    buyerId: string,
+  ): Promise<EscrowTransaction> {
+    const escrow = await this.escrowRepo.findOne({ where: { id: escrowId } });
+    if (!escrow) throw new NotFoundException('Order not found');
+    if (escrow.buyerId !== buyerId) {
+      throw new ForbiddenException('Only the buyer can claim a no-show');
+    }
+    if (escrow.status !== EscrowStatus.SELLER_READY) {
+      throw new BadRequestException(
+        `Cannot claim a no-show. Order status is: ${escrow.status}`,
+      );
+    }
+    if (!escrow.appointmentAt) {
+      throw new BadRequestException(
+        'No-show claims apply to service orders with an agreed appointment',
+      );
+    }
+
+    const policy = this.timingPolicy.resolve({
+      market: 'vendor',
+      itemType: 'vendor_service',
+    });
+    const graceEndsAt = new Date(
+      new Date(escrow.appointmentAt).getTime() +
+        policy.noShowGraceMinutes * 60 * 1000,
+    );
+    if (new Date() < graceEndsAt) {
+      throw new BadRequestException(
+        `The ${policy.noShowGraceMinutes}-minute grace period is still running — you can claim from ${this.formatAppointment(graceEndsAt)}`,
+      );
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await this.walletService.refundFunds(
+        escrow.buyerId,
+        Number(escrow.amount),
+        `ESCROW_NO_SHOW_${escrow.id}`,
+        queryRunner,
+        escrow.market ?? null,
+      );
+
+      escrow.status = EscrowStatus.CANCELLED;
+      escrow.cancelledBy = 'buyer';
+      escrow.cancelReason = 'no_show';
+      escrow.refundedAt = new Date();
+      await queryRunner.manager.save(escrow);
+
+      await this.restoreVendorStock(queryRunner.manager, escrow.id);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.escrowQueue.remove(`appointment-backstop-${escrowId}`);
+
+    try {
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.NO_SHOW_REFUND,
+        title: 'No-show refund issued',
+        body: `You've been refunded ₦${Number(escrow.amount).toLocaleString()} in full for booking ${escrow.orderNumber} — the vendor didn't show.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+      await this.notificationsService.createNotification({
+        userId: escrow.sellerId,
+        type: NotificationType.NO_SHOW_REFUND,
+        title: 'Buyer reported a no-show',
+        body: `The buyer reported a no-show on booking ${escrow.orderNumber} and was refunded in full. Repeated no-shows affect your storefront standing.`,
+        data: { escrowId, orderNumber: escrow.orderNumber },
+      });
+    } catch (error) {
+      this.logger.warn(`No-show notification failed for ${escrowId}: ${error}`);
+    }
+
+    this.logger.log(`Service order ${escrowId} refunded on buyer no-show claim`);
+    return escrow;
+  }
+
   /**
    * Vendor confirms a PENDING_CONFIRMATION order (rev-2 03.5): the standard
    * 3-day fulfillment clock starts NOW (confirmation is commitment, not
@@ -635,6 +1183,16 @@ export class EscrowService {
     if (escrow.status !== EscrowStatus.PENDING_CONFIRMATION) {
       throw new BadRequestException(
         `Cannot confirm. Order status is: ${escrow.status}`,
+      );
+    }
+    // Services never take the goods confirm path — their "confirmation" IS
+    // the time negotiation (rev-2 03.6): accept a proposal instead.
+    const serviceItem = await this.orderItemRepo.findOne({
+      where: { orderId: escrowId, itemType: OrderItemType.VENDOR_SERVICE },
+    });
+    if (serviceItem) {
+      throw new BadRequestException(
+        'Service bookings are agreed through time proposals — respond to the proposed time instead',
       );
     }
 
@@ -767,6 +1325,13 @@ export class EscrowService {
 
       await this.restoreVendorStock(queryRunner.manager, escrow.id);
 
+      // Close out any open time proposal (service orders only; no-op for goods).
+      await queryRunner.manager.update(
+        ServiceTimeProposal,
+        { orderId: escrow.id, status: ProposalStatus.PENDING },
+        { status: ProposalStatus.EXPIRED },
+      );
+
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -775,6 +1340,7 @@ export class EscrowService {
       await queryRunner.release();
     }
     await this.escrowQueue.remove(`confirm-timeout-${escrow.id}`);
+    await this.escrowQueue.remove(`agreement-timeout-${escrow.id}`);
   }
 
   /**
@@ -1598,8 +2164,25 @@ export class EscrowService {
       let sellerCompensation = 0;
       let platformShare = 0;
 
-      // If buyer cancels after seller is ready, apply cancellation fee
-      if (isBuyer && escrow.status === EscrowStatus.SELLER_READY) {
+      // Buyer no-show on a service (rev-2 03.6/FIG 03.4): a vendor cancelling
+      // once the appointment + grace has passed is the "buyer never showed"
+      // branch — the standard post-ready fee compensates the held slot. A
+      // vendor cancelling any earlier stays a free full refund (01.2).
+      const noShowGraceMs =
+        this.timingPolicy.resolve().noShowGraceMinutes * 60 * 1000;
+      const buyerNoShow =
+        isSeller &&
+        escrow.status === EscrowStatus.SELLER_READY &&
+        !!escrow.appointmentAt &&
+        Date.now() >=
+          new Date(escrow.appointmentAt).getTime() + noShowGraceMs;
+
+      // The post-ready cancellation fee: a buyer backing out after ready, or
+      // a service buyer who never showed up (same 10% / 60-40, spec FIG 03.4).
+      if (
+        (isBuyer && escrow.status === EscrowStatus.SELLER_READY) ||
+        buyerNoShow
+      ) {
         // Per-university cancellation policy (settings service; default 10%,
         // enabled — resolved by the buyer's university, rev-2 spec 01.3).
         const settings = await this.universitySettingsService.resolve(
@@ -1664,7 +2247,11 @@ export class EscrowService {
 
       escrow.status = EscrowStatus.CANCELLED;
       escrow.cancelledBy = isBuyer ? 'buyer' : 'seller';
-      escrow.cancelReason = isBuyer ? 'buyer_cancel' : 'seller_cancel';
+      escrow.cancelReason = buyerNoShow
+        ? 'buyer_no_show'
+        : isBuyer
+          ? 'buyer_cancel'
+          : 'seller_cancel';
       escrow.refundedAt = new Date();
 
       await queryRunner.manager.save(escrow);
@@ -1685,6 +2272,13 @@ export class EscrowService {
       }
       await this.restoreVendorStock(queryRunner.manager, escrow.id);
 
+      // Close out any open time proposal (service orders only; no-op for goods).
+      await queryRunner.manager.update(
+        ServiceTimeProposal,
+        { orderId: escrow.id, status: ProposalStatus.PENDING },
+        { status: ProposalStatus.EXPIRED },
+      );
+
       // Revert buy request to OPEN (if buy-request-based escrow)
       if (escrow.buyRequestOfferId) {
         const offer = await this.buyRequestOfferRepo.findOne({
@@ -1701,6 +2295,8 @@ export class EscrowService {
       await this.escrowQueue.remove(`fulfillment-expiry-${escrowId}`);
       await this.escrowQueue.remove(`auto-release-${escrowId}`);
       await this.escrowQueue.remove(`confirm-timeout-${escrowId}`);
+      await this.escrowQueue.remove(`agreement-timeout-${escrowId}`);
+      await this.escrowQueue.remove(`appointment-backstop-${escrowId}`);
       await this.cancelFulfillmentReminders(escrowId);
 
       await queryRunner.commitTransaction();

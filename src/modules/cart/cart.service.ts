@@ -28,6 +28,8 @@ import { AddCartItemDto } from './dto/add-cart-item.dto';
 export interface CartLineView {
   id: string;
   kind: 'p2p' | 'vendor';
+  /** Vendor lines: goods vs service — a service line needs a schedule at checkout. */
+  listingType: 'goods' | 'service' | null;
   listingId: string | null;
   vendorListingId: string | null;
   title: string | null;
@@ -68,8 +70,11 @@ export interface CartView {
 /**
  * The shared cart (rev-2 spec 01.6): NO HOLDS — carting reserves nothing
  * (neither a P2P listing nor a unit of vendor stock); checkout validates and
- * reserves. Stale lines get flags, never silent drops. Since Phase 5 the
- * cart carries vendor GOODS lines too (services arrive in Phase 6).
+ * reserves. Stale lines get flags, never silent drops. Vendor GOODS lines
+ * since Phase 5; SERVICE lines since Phase 6 — always quantity 1, never
+ * merged (each booking is its own sub-order with its own appointment), and
+ * the proposed time is collected at CHECKOUT, not here (a carted time would
+ * go stale).
  */
 @Injectable()
 export class CartService {
@@ -208,9 +213,10 @@ export class CartService {
     ) {
       throw new NotFoundException('Listing not found');
     }
-    if (listing.type === VendorListingType.SERVICE) {
+    const isService = listing.type === VendorListingType.SERVICE;
+    if (isService && quantity !== 1) {
       throw new BadRequestException(
-        'Service bookings are not yet supported (rev-2 Phase 6)',
+        'A service booking is one appointment — add it again for another session',
       );
     }
     if (listing.vendorProfile.userId === user.id) {
@@ -243,10 +249,13 @@ export class CartService {
 
     const cart = await this.getOrCreateCart(user.id);
 
-    // Same listing + same option set merges into one line (quantity adds up).
-    const existing = await this.cartItemRepo.find({
-      where: { cartId: cart.id, vendorListingId: listing.id },
-    });
+    // Same GOODS listing + same option set merges into one line (quantity
+    // adds up). Services never merge: each add is its own booking.
+    const existing = isService
+      ? []
+      : await this.cartItemRepo.find({
+        where: { cartId: cart.id, vendorListingId: listing.id },
+      });
     const wanted = [...selectedOptionIds].sort().join(',');
     let line = existing.find(
       (item) =>
@@ -423,6 +432,7 @@ export class CartService {
     return {
       id: item.id,
       kind: 'p2p',
+      listingType: null,
       listingId: item.listingId,
       vendorListingId: null,
       title: listing?.title ?? null,
@@ -457,8 +467,7 @@ export class CartService {
     if (
       !listing ||
       listing.status !== VendorListingStatus.ACTIVE ||
-      listing.vendorProfile.status !== VendorStatus.ACTIVE ||
-      listing.type === VendorListingType.SERVICE
+      listing.vendorProfile.status !== VendorStatus.ACTIVE
     ) {
       issues.push('listing_unavailable');
     } else {
@@ -492,6 +501,7 @@ export class CartService {
     return {
       id: item.id,
       kind: 'vendor',
+      listingType: listing?.type ?? null,
       listingId: null,
       vendorListingId: item.vendorListingId,
       title: listing?.title ?? null,

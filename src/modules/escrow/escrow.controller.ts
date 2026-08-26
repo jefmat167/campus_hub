@@ -33,10 +33,12 @@ import {
   VerificationTier,
 } from '../../database/entities/user.entity';
 import { EscrowService } from './escrow.service';
+import { ServiceSchedulingService } from './service-scheduling.service';
 import {
   OpenDisputeDto,
   RejectOrderDto,
   ResolveDisputeDto,
+  RespondScheduleDto,
   SellerReadyDto,
   VerifyCodeDto,
 } from './dto';
@@ -48,7 +50,10 @@ import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {
-  constructor(private readonly escrowService: EscrowService) { }
+  constructor(
+    private readonly escrowService: EscrowService,
+    private readonly schedulingService: ServiceSchedulingService,
+  ) { }
 
   // NOTE (rev-2 Phase 3): POST /escrow was retired — purchases go through
   // POST /checkout (cart) or POST /checkout/direct (buy-now), which split a
@@ -105,6 +110,86 @@ export class EscrowController {
       success: true,
       data: escrow,
       message: `Order ${escrow.orderNumber} rejected. The buyer was refunded in full.`,
+    };
+  }
+
+  /**
+   * View the appointment negotiation trail of a service booking (rev-2 03.6).
+   */
+  @Get(':id/schedule')
+  @ApiOperation({
+    summary: 'Get a service booking\'s time proposals (buyer or vendor)',
+    description:
+      'The full negotiation trail: every proposed time with its status ' +
+      '(pending / accepted / rejected / superseded / expired), plus the agreed appointment if any.',
+  })
+  @ApiResponse({ status: 200, description: 'Schedule retrieved' })
+  @ApiResponse({ status: 400, description: 'Not a service booking' })
+  async getSchedule(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.schedulingService.getSchedule(id, user.id);
+  }
+
+  /**
+   * Respond to the open time proposal (rev-2 03.6): accept / reject / counter.
+   */
+  @Post(':id/schedule/respond')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Accept, reject, or counter the open time proposal',
+    description:
+      'Whoever did NOT make the current proposal responds. Accept ⇒ the time becomes the ' +
+      'appointment, the order goes SELLER_READY, and the buyer\'s code is issued (valid from ' +
+      '2h before the appointment to appointment + 24h). Reject ⇒ the booking terminates with a ' +
+      'free full refund. Counter ⇒ a new proposal (48h expiry, ≤14 days from the order); the ' +
+      'overall 72h agreement window is never extended.',
+  })
+  @ApiResponse({ status: 200, description: 'Response applied' })
+  @ApiResponse({ status: 400, description: 'No open proposal / expired / invalid counter time' })
+  @ApiResponse({ status: 403, description: 'It is not your turn to respond' })
+  async respondSchedule(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RespondScheduleDto,
+  ) {
+    const result = await this.schedulingService.respond(id, user.id, dto);
+    const messages = {
+      accept: `Appointment agreed for booking ${result.order.orderNumber}. The buyer's delivery code has been issued.`,
+      reject: `Booking ${result.order.orderNumber} was cancelled with a full refund.`,
+      counter: `Counter-proposal sent for booking ${result.order.orderNumber}.`,
+    } as const;
+    return {
+      success: true,
+      data: result,
+      message: messages[dto.action],
+    };
+  }
+
+  /**
+   * Buyer claims a vendor no-show (rev-2 03.6): instant full refund from
+   * 30 minutes past the appointment.
+   */
+  @Post(':id/no-show')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Claim a vendor no-show (buyer only)',
+    description:
+      'From 30 minutes past the agreed appointment, an undelivered service booking refunds ' +
+      'in full immediately — no dispute, no waiting for the 24h backstop.',
+  })
+  @ApiResponse({ status: 200, description: 'Full refund issued' })
+  @ApiResponse({ status: 400, description: 'Grace period still running / not an agreed service booking' })
+  async claimNoShow(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const escrow = await this.escrowService.claimNoShow(id, user.id);
+    return {
+      success: true,
+      data: escrow,
+      message: `No-show recorded for booking ${escrow.orderNumber}. You've been refunded in full.`,
     };
   }
 
