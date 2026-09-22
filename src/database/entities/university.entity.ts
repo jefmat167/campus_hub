@@ -39,12 +39,8 @@ export class University {
   @Column({ default: true })
   isActive: boolean;
 
-  // Cancellation policy for marketplace transactions
-  @Column({ type: 'decimal', precision: 5, scale: 2, default: 10 })
-  cancellationFeePercent: number; // Default 10%
-
-  @Column({ default: true })
-  cancellationFeeEnabled: boolean;
+  // Per-university money settings (fees, cancellation policy) live in
+  // UniversitySettings — resolved with defaults via UniversitySettingsService.
 
   @OneToMany(() => Faculty, (faculty) => faculty.university)
   faculties: Faculty[];

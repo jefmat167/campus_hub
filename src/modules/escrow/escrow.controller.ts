@@ -21,11 +21,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import {
-  TierGuard,
-  TierAmountLimit,
-  TierAmountLimitGuard,
-} from '../../common/guards/tier.guard';
+import { TierGuard } from '../../common/guards/tier.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -33,18 +29,20 @@ import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import {
-  TransactionPinGuard,
-  RequireTransactionPin,
-} from '../transaction-pin/transaction-pin.guard';
-import {
   User,
   VerificationTier,
 } from '../../database/entities/user.entity';
-import { EscrowService } from './escrow.service';
 import {
-  InitiateEscrowDto,
+  EscrowStatus,
+  OrderMarket,
+} from '../../database/entities/escrow.entity';
+import { EscrowService } from './escrow.service';
+import { ServiceSchedulingService } from './service-scheduling.service';
+import {
   OpenDisputeDto,
+  RejectOrderDto,
   ResolveDisputeDto,
+  RespondScheduleDto,
   SellerReadyDto,
   VerifyCodeDto,
 } from './dto';
@@ -52,61 +50,150 @@ import { AdminListEscrowDto } from './dto/admin-list-escrow.dto';
 
 @ApiTags('Escrow')
 @Controller('escrow')
-@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard, TransactionPinGuard)
+@UseGuards(JwtAuthGuard, TierGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class EscrowController {
-  constructor(private readonly escrowService: EscrowService) { }
+  constructor(
+    private readonly escrowService: EscrowService,
+    private readonly schedulingService: ServiceSchedulingService,
+  ) { }
+
+  // NOTE (rev-2 Phase 3): POST /escrow was retired — purchases go through
+  // POST /checkout (cart) or POST /checkout/direct (buy-now), which split a
+  // single wallet debit into one sub-order per seller. Sub-order lifecycle
+  // endpoints below are unchanged.
+  //
+  // NOTE (rev-2 Phase 5): this controller is party-scoped, NOT student-scoped
+  // — vendor-only sellers operate their orders here too (active vendors are
+  // TIER_2-equivalent via effectiveTier). Buyers are students by construction
+  // (checkout is student-gated); every route checks buyerId/sellerId.
 
   /**
-   * Initiate an escrow transaction
-   * Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited.
-   * Seller has 72 hours to mark ready, otherwise auto-refund.
+   * Vendor confirms a pending order (manual-confirmation flow, rev-2 03.5).
    */
-  @Post()
-  @RequireTransactionPin()
-  @TierAmountLimit('amount', {
-    [VerificationTier.TIER_0]: 30000,
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @Post(':id/confirm')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Initiate escrow',
+    summary: 'Confirm a pending vendor order (seller only)',
     description:
-      'Lock funds in escrow for a transaction. Buying limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited. Seller has 72 hours to confirm readiness.',
+      'PENDING_CONFIRMATION → AWAITING_SELLER; the 72h fulfillment clock starts NOW. ' +
+      'Confirmation is commitment, not readiness — mark ready/out-for-delivery separately.',
   })
-  @ApiResponse({
-    status: 201,
-    description: 'Escrow initiated successfully',
-    schema: {
-      example: {
-        success: true,
-        data: {
-          id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
-          orderNumber: 'ORD-2026-000142',
-          buyerId: '550e8400-e29b-41d4-a716-446655440000',
-          sellerId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
-          listingId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
-          amount: '25000.00',
-          status: 'awaiting_seller',
-          fulfillmentExpiresAt: '2026-03-22T14:30:00.000Z',
-          createdAt: '2026-03-19T14:30:00.000Z',
-          updatedAt: '2026-03-19T14:30:00.000Z',
-        },
-        message: 'Order ORD-2026-000142 created. Seller has 72 hours to confirm readiness.',
-      },
-    },
-  })
-  async initiateEscrow(
+  @ApiResponse({ status: 200, description: 'Order confirmed' })
+  @ApiResponse({ status: 400, description: 'Order is not pending confirmation' })
+  async confirmOrder(
     @CurrentUser() user: User,
-    @Body() dto: InitiateEscrowDto,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
-    const escrow = await this.escrowService.initiateEscrow(user.id, dto);
-
+    const escrow = await this.escrowService.confirmOrder(id, user.id);
     return {
       success: true,
       data: escrow,
-      message: `Order ${escrow.orderNumber} created. Seller has 72 hours to confirm readiness.`,
+      message: `Order ${escrow.orderNumber} confirmed. You have 72 hours to fulfil it.`,
+    };
+  }
+
+  /**
+   * Vendor rejects a pending order: full refund, no fee, stock restored.
+   */
+  @Post(':id/reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reject a pending vendor order (seller only, free full refund)',
+  })
+  @ApiResponse({ status: 200, description: 'Order rejected, buyer refunded in full' })
+  @ApiResponse({ status: 400, description: 'Order is not pending confirmation' })
+  async rejectOrder(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectOrderDto,
+  ) {
+    const escrow = await this.escrowService.rejectOrder(id, user.id, dto.reason);
+    return {
+      success: true,
+      data: escrow,
+      message: `Order ${escrow.orderNumber} rejected. The buyer was refunded in full.`,
+    };
+  }
+
+  /**
+   * View the appointment negotiation trail of a service booking (rev-2 03.6).
+   */
+  @Get(':id/schedule')
+  @ApiOperation({
+    summary: 'Get a service booking\'s time proposals (buyer or vendor)',
+    description:
+      'The full negotiation trail: every proposed time with its status ' +
+      '(pending / accepted / rejected / superseded / expired), plus the agreed appointment if any.',
+  })
+  @ApiResponse({ status: 200, description: 'Schedule retrieved' })
+  @ApiResponse({ status: 400, description: 'Not a service booking' })
+  async getSchedule(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.schedulingService.getSchedule(id, user.id);
+  }
+
+  /**
+   * Respond to the open time proposal (rev-2 03.6): accept / reject / counter.
+   */
+  @Post(':id/schedule/respond')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Accept, reject, or counter the open time proposal',
+    description:
+      'Whoever did NOT make the current proposal responds. Accept ⇒ the time becomes the ' +
+      'appointment, the order goes SELLER_READY, and the buyer\'s code is issued (valid from ' +
+      '2h before the appointment to appointment + 24h). Reject ⇒ the booking terminates with a ' +
+      'free full refund. Counter ⇒ a new proposal (48h expiry, ≤14 days from the order); the ' +
+      'overall 72h agreement window is never extended.',
+  })
+  @ApiResponse({ status: 200, description: 'Response applied' })
+  @ApiResponse({ status: 400, description: 'No open proposal / expired / invalid counter time' })
+  @ApiResponse({ status: 403, description: 'It is not your turn to respond' })
+  async respondSchedule(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RespondScheduleDto,
+  ) {
+    const result = await this.schedulingService.respond(id, user.id, dto);
+    const messages = {
+      accept: `Appointment agreed for booking ${result.order.orderNumber}. The buyer's delivery code has been issued.`,
+      reject: `Booking ${result.order.orderNumber} was cancelled with a full refund.`,
+      counter: `Counter-proposal sent for booking ${result.order.orderNumber}.`,
+    } as const;
+    return {
+      success: true,
+      data: result,
+      message: messages[dto.action],
+    };
+  }
+
+  /**
+   * Buyer claims a vendor no-show (rev-2 03.6): instant full refund from
+   * 30 minutes past the appointment.
+   */
+  @Post(':id/no-show')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Claim a vendor no-show (buyer only)',
+    description:
+      'From 30 minutes past the agreed appointment, an undelivered service booking refunds ' +
+      'in full immediately — no dispute, no waiting for the 24h backstop.',
+  })
+  @ApiResponse({ status: 200, description: 'Full refund issued' })
+  @ApiResponse({ status: 400, description: 'Grace period still running / not an agreed service booking' })
+  async claimNoShow(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const escrow = await this.escrowService.claimNoShow(id, user.id);
+    return {
+      success: true,
+      data: escrow,
+      message: `No-show recorded for booking ${escrow.orderNumber}. You've been refunded in full.`,
     };
   }
 
@@ -120,6 +207,8 @@ export class EscrowController {
       'Retrieve the authenticated user\'s escrow transactions. Filter by role (buyer, seller, or all).',
   })
   @ApiQuery({ name: 'role', required: false, enum: ['buyer', 'seller', 'all'], description: 'Filter by user role in the transaction', example: 'all' })
+  @ApiQuery({ name: 'market', required: false, enum: ['p2p', 'vendor'], description: 'Only orders from one market' })
+  @ApiQuery({ name: 'status', required: false, description: 'Filter by order status (e.g. pending_confirmation, awaiting_seller, seller_ready, delivered, completed)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number', example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page', example: 20 })
   @ApiResponse({
@@ -149,12 +238,27 @@ export class EscrowController {
     @Query('role') role?: 'buyer' | 'seller' | 'all',
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('market') market?: string,
+    @Query('status') status?: string,
   ) {
+    const marketFilter = Object.values(OrderMarket).includes(
+      market as OrderMarket,
+    )
+      ? (market as OrderMarket)
+      : undefined;
+    const statusFilter = Object.values(EscrowStatus).includes(
+      status as EscrowStatus,
+    )
+      ? (status as EscrowStatus)
+      : undefined;
+
     const { escrows, total } = await this.escrowService.getUserEscrows(
       user.id,
       role || 'all',
       Number(page) || 1,
       Number(limit) || 20,
+      marketFilter,
+      statusFilter,
     );
 
     return {
@@ -275,7 +379,10 @@ export class EscrowController {
           validUntil: deliveryCode.validUntil,
         },
       },
-      message: `Delivery scheduled for ${dto.deliveryDate} at ${dto.deliveryTime}. A delivery code has been sent to the buyer.`,
+      message:
+        dto.deliveryDate && dto.deliveryTime
+          ? `Delivery scheduled for ${dto.deliveryDate} at ${dto.deliveryTime}. A delivery code has been sent to the buyer.`
+          : 'Marked ready. A delivery code has been sent to the buyer.',
     };
   }
 

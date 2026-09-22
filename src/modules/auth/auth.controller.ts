@@ -24,6 +24,7 @@ import {
 import { AuthService } from './auth.service';
 import {
   RegisterDto,
+  RegisterVendorDto,
   LoginDto,
   RefreshTokenDto,
   ForgotPasswordDto,
@@ -94,6 +95,63 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Too many registration attempts from this IP' })
   async register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
+  }
+
+  /**
+   * Register an external business as a vendor-only account (Door 2).
+   */
+  @Public()
+  @Post('register/vendor')
+  @HttpCode(HttpStatus.CREATED)
+  @Throttle({ medium: { limit: 5, ttl: 3600000 } }) // 5 per hour per IP
+  @ApiOperation({
+    summary: 'Register an external business (vendor-only account)',
+    description: `
+      Creates a vendor-only account: no academic identity, accountType = 'vendor',
+      one wallet, and a DRAFT vendor profile. Student surfaces (P2P marketplace,
+      social, roommates, chat, buying) are permanently closed to this account type.
+
+      After registration:
+      - Verify the business email (link sent automatically)
+      - Upload the live-captured shopfront photo, then POST /vendors/me/submit
+        to enter the admin review queue
+      - On approval the storefront goes live (vendor status: active)
+    `,
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Vendor account registered; application still in draft',
+    schema: {
+      example: {
+        user: {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          email: 'orders@mamats.ng',
+          fullName: 'Titi Adeyemi',
+          phone: '2348012345678',
+          accountType: 'vendor',
+          verificationTier: 'none',
+          emailVerified: false,
+        },
+        vendor: {
+          id: '660e8400-e29b-41d4-a716-446655440111',
+          businessName: "Mama T's Kitchen",
+          status: 'draft',
+          homeUniversityId: '550e8400-e29b-41d4-a716-446655440000',
+        },
+        tokens: {
+          accessToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+          refreshToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+          expiresIn: 900,
+        },
+        emailSent: true,
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid university selection' })
+  @ApiResponse({ status: 409, description: 'Email or phone already registered' })
+  @ApiResponse({ status: 429, description: 'Too many registration attempts from this IP' })
+  async registerVendor(@Body() dto: RegisterVendorDto) {
+    return this.authService.registerVendor(dto);
   }
 
   @Post('resend-email-verification')

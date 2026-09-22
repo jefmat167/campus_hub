@@ -5,6 +5,9 @@ export const typeOrmConfig = (
   configService: ConfigService,
 ): TypeOrmModuleOptions => {
   const databaseUrl = configService.get<string>('DATABASE_URL');
+  // Full SQL echo is opt-in (DB_LOGGING=true) — it floods the console on every
+  // request. Default: errors/warnings/schema/migration output + slow queries.
+  const logAllQueries = configService.get<string>('DB_LOGGING') === 'true';
 
   return {
     type: 'postgres',
@@ -20,10 +23,11 @@ export const typeOrmConfig = (
         }),
     entities: [__dirname + '/../database/entities/*.entity{.ts,.js}'],
     migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
-    // IMPORTANT: Set to false - use migrations for schema changes
-    // Set to true ONLY for initial rapid prototyping, then run migration:generate
+    // IMPORTANT: never true — schema changes go through hand-written migrations
     synchronize: false,
-    logging: configService.get<string>('NODE_ENV') === 'development',
+    logging: logAllQueries ? 'all' : ['error', 'warn', 'schema', 'migration'],
+    // Queries slower than this are logged regardless of the level above.
+    maxQueryExecutionTime: 1000,
     ssl:
       configService.get<string>('NODE_ENV') === 'production'
         ? { rejectUnauthorized: false }

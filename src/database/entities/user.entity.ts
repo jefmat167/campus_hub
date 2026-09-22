@@ -58,6 +58,17 @@ export enum Gender {
   FEMALE = 'female',
 }
 
+/**
+ * Account kind (marketplace rev-2 spec 01.5). STUDENT accounts carry academic
+ * identity (university/faculty/department/gender); VENDOR accounts (Door-2
+ * external businesses) have none — vendor standing lives on VendorProfile.
+ * Stored as varchar (not a PG enum) so new kinds never need an ALTER TYPE.
+ */
+export enum AccountType {
+  STUDENT = 'student',
+  VENDOR = 'vendor',
+}
+
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn('uuid')
@@ -110,8 +121,10 @@ export class User {
   @Column({ type: 'varchar', length: 255 })
   fullName: string;
 
-  @Column({ type: 'enum', enum: Gender })
-  gender: Gender;
+  // Nullable: vendor-only accounts carry no gender (rev-2 spec 01.5);
+  // required for students at the DTO level.
+  @Column({ type: 'enum', enum: Gender, nullable: true })
+  gender: Gender | null;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   profilePhotoUrl: string;
@@ -126,32 +139,48 @@ export class User {
   })
   yearOfStudy: YearOfStudy;
 
-  // University relationship
-  @Column({ name: 'university_id' })
+  // Academic identity — nullable since rev-2 (vendor-only accounts have none;
+  // student surfaces gate on "has a student identity", not "is logged in").
+  @Column({ name: 'university_id', nullable: true })
   @Index()
-  universityId: string;
+  universityId: string | null;
 
   @ManyToOne(() => University, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'university_id' })
   university: University;
 
-  // Faculty relationship
-  @Column({ name: 'faculty_id' })
+  @Column({ name: 'faculty_id', nullable: true })
   @Index()
-  facultyId: string;
+  facultyId: string | null;
 
   @ManyToOne(() => Faculty, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'faculty_id' })
   faculty: Faculty;
 
-  // Department relationship
-  @Column({ name: 'department_id' })
+  @Column({ name: 'department_id', nullable: true })
   @Index()
-  departmentId: string;
+  departmentId: string | null;
 
   @ManyToOne(() => Department, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'department_id' })
   department: Department;
+
+  // Account kind — see AccountType. Varchar column, indexed.
+  @Column({
+    name: 'account_type',
+    type: 'varchar',
+    length: 20,
+    default: AccountType.STUDENT,
+  })
+  @Index()
+  accountType: AccountType;
+
+  /**
+   * Runtime-only (NOT a column): the caller's vendor-profile status, attached
+   * by JwtStrategy for accountType=VENDOR requests so guards can compute the
+   * effective tier without extra queries (common/utils/effective-tier.ts).
+   */
+  vendorStatus?: string | null;
 
   // Verification Tier System
   @Column({

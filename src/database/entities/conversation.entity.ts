@@ -147,13 +147,15 @@ export class Message {
   @JoinColumn({ name: 'conversation_id' })
   conversation: Conversation;
 
-  @Column({ name: 'sender_id' })
+  // Null for system messages (isSystemMessage = true) — migration
+  // 1742504300000 relaxed the NOT NULL that made every system message fail.
+  @Column({ name: 'sender_id', type: 'uuid', nullable: true })
   @Index()
-  senderId: string;
+  senderId: string | null;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'sender_id' })
-  sender: User;
+  sender: User | null;
 
   @Column({ type: 'text' })
   content: string;

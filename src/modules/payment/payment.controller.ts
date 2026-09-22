@@ -203,7 +203,7 @@ export class PaymentController {
       dto.reference,
     );
     if (existing) {
-      const balance = await this.walletService.getBalance(user.id);
+      const { balance } = await this.walletService.getBalance(user.id);
       return {
         success: true,
         data: { transaction: existing, balance },
@@ -211,8 +211,11 @@ export class PaymentController {
       };
     }
 
-    // Credit wallet (amount is in kobo, convert to naira)
-    const amountInNaira = result.amount / 100;
+    // Credit the requested top-up, not the gross charge: when the Paystack
+    // account passes transaction fees to the customer, `amount` includes the
+    // fee. Never credit more than was actually paid. Kobo → naira.
+    const amountInNaira =
+      Math.min(result.amount, result.requested_amount ?? result.amount) / 100;
 
     const transaction = await this.walletService.creditWallet(
       user.id,
@@ -222,7 +225,7 @@ export class PaymentController {
       dto.reference,
     );
 
-    const balance = await this.walletService.getBalance(user.id);
+    const { balance } = await this.walletService.getBalance(user.id);
 
     return {
       success: true,

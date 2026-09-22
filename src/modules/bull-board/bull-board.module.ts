@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 
 // Queue names - must match the names used in feature modules
-export const QUEUE_NAMES = ['auth', 'notifications', 'moderation', 'users', 'escrow'] as const;
+export const QUEUE_NAMES = ['auth', 'notifications', 'moderation', 'users', 'escrow', 'offers'] as const;
 
 @Module({
   imports: [

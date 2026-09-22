@@ -12,8 +12,7 @@ import {
   MaxLength,
   MinLength,
   ArrayMaxSize,
-  ArrayNotEmpty,
-  ArrayUnique,
+  ArrayMinSize,
   IsUUID,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
@@ -22,21 +21,9 @@ import {
   ListingCategory,
   ListingCondition,
   VisibilityScope,
-  DeliveryMethod,
-  ListingType,
 } from '../../../database/entities/listing.entity';
 
 export class CreateListingDto {
-  @ApiPropertyOptional({
-    description: 'Type of listing',
-    enum: ListingType,
-    default: ListingType.SELL,
-    example: ListingType.SELL,
-  })
-  @IsEnum(ListingType)
-  @IsOptional()
-  type?: ListingType = ListingType.SELL;
-
   @ApiProperty({
     description: 'Title of the listing',
     example: 'iPhone 13 Pro Max - 256GB - Like New',
@@ -128,40 +115,20 @@ export class CreateListingDto {
   departmentId?: string;
 
   @ApiProperty({
-    description: 'Delivery methods offered (at least one). The buyer picks one when ordering.',
-    enum: DeliveryMethod,
+    description:
+      'Named public meet-up points (3–5). P2P handover is meet-up only — the buyer picks one at purchase.',
+    example: ['Main gate', 'Library Building', 'Student Union Building'],
     isArray: true,
-    example: [DeliveryMethod.PICKUP, DeliveryMethod.MEETUP],
+    minItems: 3,
+    maxItems: 5,
   })
   @IsArray()
-  @ArrayNotEmpty()
-  @ArrayUnique()
-  @IsEnum(DeliveryMethod, { each: true })
-  deliveryMethods: DeliveryMethod[];
-
-  @ApiPropertyOptional({
-    description: 'Fixed collection address — required when `pickup` is offered.',
-    example: 'Shop 12, Student Union Building',
-    maxLength: 500,
-  })
-  @IsString()
-  @IsOptional()
-  @MaxLength(500)
-  @Transform(({ value }) => value?.trim())
-  pickupAddress?: string;
-
-  @ApiPropertyOptional({
-    description: 'Meet-up points (max 5) — required when `meetup` is offered.',
-    example: ['Faculty of Science, ground floor', 'Main gate'],
-    isArray: true,
-    maxLength: 500,
-  })
-  @IsArray()
-  @IsOptional()
+  @ArrayMinSize(3)
   @ArrayMaxSize(5)
   @IsString({ each: true })
+  @IsNotEmpty({ each: true })
   @MaxLength(500, { each: true })
-  meetupPoints?: string[];
+  meetupPoints: string[];
 
   @ApiPropertyOptional({
     description: 'Array of image URLs (max 5)',

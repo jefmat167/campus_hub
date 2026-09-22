@@ -10,9 +10,8 @@ import {
   ListingCategory,
   ListingCondition,
   VisibilityScope,
-  DeliveryMethod,
   ListingStatus,
-  ListingType,
+  ListingKind,
 } from '../entities/listing.entity';
 import * as bcrypt from 'bcrypt';
 import * as dotenv from 'dotenv';
@@ -395,34 +394,11 @@ async function seed() {
     'Cafeteria',
   ];
 
-  const pickupAddresses = [
-    'Shop 3, Student Union Building',
-    'Room 12, Boys Hostel Block A',
-    'Department office, ground floor',
-  ];
-
-  // Returns a valid delivery config (>=1 method, with matching addresses).
+  // P2P handover is meet-up only (rev-2 spec 02): every listing names >=3
+  // public meet-up points; the buyer picks one at purchase.
   const randomDeliveryConfig = () => {
-    const roll = Math.random();
-    if (roll < 0.34) {
-      return {
-        deliveryMethods: [DeliveryMethod.PICKUP],
-        pickupAddress: randomElement(pickupAddresses),
-        meetupPoints: null,
-      };
-    }
-    if (roll < 0.67) {
-      return {
-        deliveryMethods: [DeliveryMethod.MEETUP],
-        pickupAddress: null,
-        meetupPoints: [randomElement(meetupLocations)],
-      };
-    }
-    return {
-      deliveryMethods: [DeliveryMethod.PICKUP, DeliveryMethod.MEETUP],
-      pickupAddress: randomElement(pickupAddresses),
-      meetupPoints: [randomElement(meetupLocations)],
-    };
+    const shuffled = [...meetupLocations].sort(() => Math.random() - 0.5);
+    return { meetupPoints: shuffled.slice(0, 3) };
   };
 
   console.log('\nCreating listings...');
@@ -437,7 +413,7 @@ async function seed() {
     const listing = listingRepo.create({
       sellerId: seller.id,
       universityId: university.id,
-      type: ListingType.SELL,
+      kind: ListingKind.P2P,
       title: listingData.title,
       description: listingData.description,
       category,
@@ -465,7 +441,7 @@ async function seed() {
     const listing = listingRepo.create({
       sellerId: seller.id,
       universityId: university.id,
-      type: ListingType.SELL,
+      kind: ListingKind.P2P,
       title: listingData.title,
       description: listingData.description,
       category,
@@ -493,7 +469,7 @@ async function seed() {
     const listing = listingRepo.create({
       sellerId: seller.id,
       universityId: university.id,
-      type: ListingType.SELL,
+      kind: ListingKind.P2P,
       title: listingData.title,
       description: listingData.description,
       category,

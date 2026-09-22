@@ -21,7 +21,9 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
@@ -31,6 +33,7 @@ import {
   CreateBuyRequestDto,
   UpdateBuyRequestDto,
   BuyRequestQueryDto,
+  MyBuyRequestsQueryDto,
 } from './dto';
 
 @ApiTags('Marketplace - Buy Requests')
@@ -39,12 +42,9 @@ export class BuyRequestsController {
   constructor(private readonly buyRequestsService: BuyRequestsService) { }
 
   @Post()
-  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('budgetMax', {
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit(['budgetMax', 'budgetMin'], TIER_BUYING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create a new buy request',
@@ -94,12 +94,12 @@ export class BuyRequestsController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Search buy requests',
     description:
-      'Search and filter buy requests. Public endpoint with optional authentication for personalized results.',
+      'Search and filter buy requests. Requires authentication — results are scoped to YOUR university.',
   })
   @ApiResponse({
     status: 200,
@@ -145,7 +145,7 @@ export class BuyRequestsController {
   }
 
   @Get('my-requests')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @ApiOperation({
@@ -153,14 +153,6 @@ export class BuyRequestsController {
     description:
       'Retrieves all buy requests created by the current user. Requires Tier 1 verification.',
   })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: BuyRequestStatus,
-    example: BuyRequestStatus.OPEN,
-  })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
   @ApiResponse({
     status: 200,
     description: 'User buy requests retrieved successfully',
@@ -189,15 +181,13 @@ export class BuyRequestsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getUserBuyRequests(
     @CurrentUser() user: User,
-    @Query('status') status?: BuyRequestStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: MyBuyRequestsQueryDto,
   ) {
     const result = await this.buyRequestsService.getUserBuyRequests(
       user.id,
-      status,
-      page || 1,
-      limit || 20,
+      query.status,
+      query.page ?? 1,
+      query.limit ?? 20,
     );
     return {
       success: true,
@@ -206,7 +196,7 @@ export class BuyRequestsController {
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get buy request by ID',
@@ -262,12 +252,9 @@ export class BuyRequestsController {
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('budgetMax', {
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null,
-  })
+  @TierAmountLimit(['budgetMax', 'budgetMin'], TIER_BUYING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Update a buy request',
@@ -318,7 +305,7 @@ export class BuyRequestsController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
@@ -358,7 +345,7 @@ export class BuyRequestsController {
   }
 
   @Patch(':id/fulfilled')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @ApiOperation({

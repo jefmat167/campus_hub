@@ -20,6 +20,11 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
+import {
+  requireGender,
+  requireUniversityId,
+} from '../../common/utils/student-identity';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
@@ -33,7 +38,7 @@ import {
 
 @ApiTags('Roommates')
 @Controller('roommates')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @MinTier(VerificationTier.TIER_1)
 @ApiBearerAuth()
 export class RoommateController {
@@ -108,8 +113,8 @@ export class RoommateController {
   ) {
     const profile = await this.roommateService.createOrUpdateProfile(
       user.id,
-      user.universityId,
-      user.gender,
+      requireUniversityId(user),
+      requireGender(user),
       dto,
     );
 
@@ -260,8 +265,8 @@ export class RoommateController {
   ) {
     const { profiles, total } = await this.roommateService.getAllProfiles(
       user.id,
-      user.universityId,
-      user.gender,
+      requireUniversityId(user),
+      requireGender(user),
       dto,
     );
 
@@ -401,7 +406,7 @@ export class RoommateController {
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    const profile = await this.roommateService.getProfile(id, user.gender);
+    const profile = await this.roommateService.getProfile(id, requireGender(user));
 
     return {
       success: true,
@@ -510,7 +515,7 @@ export class RoommateController {
   ) {
     const { matches, total } = await this.roommateService.findMatches(
       user.id,
-      user.gender,
+      requireGender(user),
       Number(page) || 1,
       Number(limit) || 20,
     );
@@ -584,7 +589,7 @@ export class RoommateController {
   ) {
     const interest = await this.roommateService.expressInterest(
       user.id,
-      user.gender,
+      requireGender(user),
       profileId,
       dto,
     );

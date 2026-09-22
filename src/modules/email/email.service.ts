@@ -7,7 +7,7 @@ import {
   EmailVerification,
   EmailVerificationType,
 } from '../../database/entities/email-verification.entity';
-import { User, VerificationTier } from '../../database/entities/user.entity';
+import { AccountType, User, VerificationTier } from '../../database/entities/user.entity';
 import { ResendService } from './resend.service';
 
 export interface SendVerificationEmailResult {
@@ -149,9 +149,12 @@ export class EmailService {
       user.emailVerified = true;
       user.emailVerifiedAt = new Date();
 
-      // Upgrade to Tier 0 when personal email is verified
+      // Upgrade to Tier 0 when personal email is verified. Student accounts
+      // only — tiers are student verification stages; vendor-only accounts
+      // stay NONE and map through effectiveTier() instead (rev-2 spec 01.5).
       if (
         user.emailVerified &&
+        user.accountType === AccountType.STUDENT &&
         user.verificationTier === VerificationTier.NONE
       ) {
         user.verificationTier = VerificationTier.TIER_0;

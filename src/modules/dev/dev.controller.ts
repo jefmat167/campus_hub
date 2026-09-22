@@ -11,13 +11,22 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/s
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import {
   User,
   VerificationTier,
   Tier1ReviewStatus,
   Gender,
+  AccountType,
 } from '../../database/entities/user.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import {
+  VendorProfile,
+  VendorStatus,
+} from '../../database/entities/vendor-profile.entity';
+import { VendorUniversity } from '../../database/entities/vendor-university.entity';
+import { VendorDeliveryPoint } from '../../database/entities/vendor-delivery-point.entity';
+import { DropPoint } from '../../database/entities/drop-point.entity';
 
 /**
  * Development-only controller for testing verification flows.
@@ -33,6 +42,14 @@ export class DevController {
     private userRepo: Repository<User>,
     @InjectRepository(Wallet)
     private walletRepo: Repository<Wallet>,
+    @InjectRepository(VendorProfile)
+    private vendorProfileRepo: Repository<VendorProfile>,
+    @InjectRepository(VendorUniversity)
+    private vendorUniversityRepo: Repository<VendorUniversity>,
+    @InjectRepository(VendorDeliveryPoint)
+    private vendorDeliveryPointRepo: Repository<VendorDeliveryPoint>,
+    @InjectRepository(DropPoint)
+    private dropPointRepo: Repository<DropPoint>,
     private configService: ConfigService,
   ) {
     this.isDevelopment =
@@ -650,6 +667,219 @@ export class DevController {
   }
 
   /**
+   * Create a ready-to-sell test vendor (rev-2 Phase 7): vendor-only account
+   * with a REAL password hash (you can log in), a funded dev wallet, and an
+   * ACTIVE profile serving the given universities — the whole Door-2 +
+   * admin-approval dance skipped.
+   */
+  @ApiOperation({ summary: 'Create an ACTIVE test vendor (login-ready)' })
+  @ApiBody({
+    schema: {
+      example: {
+        businessName: 'Test Chop Bar',
+        homeUniversityId: '550e8400-e29b-41d4-a716-446655440000',
+        servedUniversityIds: ['550e8400-e29b-41d4-a716-446655440000'],
+        shopAddress: 'Shop 3, Campus Plaza',
+        doorDeliveryFee: 'optional naira (default 500; null = no door delivery)',
+        serviceTravelFee: 'optional naira (default 1000; null = at-shop only)',
+        email: 'optional',
+        phone: 'optional',
+        password: 'optional (default DevPass123!)',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Test vendor created (profile already ACTIVE) with a default delivery preset per served campus: ' +
+      'door delivery on the home campus, service travel everywhere, and the first active admin drop point at ₦300',
+    schema: {
+      example: {
+        message: 'Test vendor created and approved',
+        user: { id: 'uuid', email: 'vendor123@test.com', accountType: 'vendor' },
+        vendorProfileId: 'uuid',
+        delivery: [
+          {
+            universityId: 'uuid',
+            isHome: true,
+            doorDeliveryFee: 500,
+            serviceTravelFee: 1000,
+            dropPoints: [{ dropPointId: 'uuid', name: 'Main Gate', fee: 300 }],
+          },
+        ],
+        password: 'DevPass123!',
+        note: 'Log in via POST /auth/login; catalog writes via /vendors/me/listings; delivery preset via GET/PUT /vendors/me/delivery',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @Post('create-test-vendor')
+  async createTestVendor(
+    @Body()
+    body: {
+      businessName?: string;
+      email?: string;
+      phone?: string;
+      password?: string;
+      homeUniversityId: string;
+      servedUniversityIds?: string[];
+      shopAddress?: string;
+      /** Naira; null = no door delivery. Default ₦500 on the home campus. */
+      doorDeliveryFee?: number | null;
+      /** Naira; null = at-shop only. Default ₦1,000 on every served campus. */
+      serviceTravelFee?: number | null;
+    },
+  ) {
+    this.checkDevMode();
+
+    if (!body.homeUniversityId) {
+      throw new NotFoundException('homeUniversityId is required');
+    }
+
+    const timestamp = Date.now();
+    const businessName = body.businessName || `Test Vendor ${timestamp}`;
+    const email = body.email || `vendor${timestamp}@test.com`;
+    const phone = body.phone || `+234${timestamp.toString().slice(-10)}`;
+    const password = body.password || 'DevPass123!';
+
+    // Vendor-only account: no student identity (rev-2 spec 01.5).
+    const user = this.userRepo.create({
+      email,
+      phone,
+      fullName: businessName,
+      gender: null,
+      universityId: null,
+      facultyId: null,
+      departmentId: null,
+      accountType: AccountType.VENDOR,
+      verificationTier: VerificationTier.NONE,
+      passwordHash: await bcrypt.hash(password, 12),
+      emailVerified: true,
+      emailVerifiedAt: new Date(),
+      phoneVerified: true,
+      phoneVerifiedAt: new Date(),
+    });
+    await this.userRepo.save(user);
+
+    // Dev wallets start funded, mirroring dev vendor registration.
+    await this.walletRepo.save(
+      this.walletRepo.create({ userId: user.id, balance: 1000000 }),
+    );
+
+    const profile = this.vendorProfileRepo.create({
+      userId: user.id,
+      businessName,
+      homeUniversityId: body.homeUniversityId,
+      shopAddress: body.shopAddress ?? null,
+      status: VendorStatus.ACTIVE,
+      shopfrontPhotoUrl: 'https://cdn.example.com/dev-shopfront.jpg',
+      photoCapturedLive: true,
+      submittedAt: new Date(),
+      reviewedAt: new Date(),
+      reviewedBy: 'dev-controller',
+    });
+    await this.vendorProfileRepo.save(profile);
+
+    // Served campuses double as the vendor's DELIVERY PRESET (2026-09-21
+    // amendment to spec 03.2). Stamp usable defaults so the flow is testable
+    // without visiting the settings screen: door delivery on the home campus,
+    // service travel everywhere, and the first active admin drop point at
+    // each campus (if admins have added any) at ₦300.
+    const doorDeliveryFee =
+      body.doorDeliveryFee === undefined ? 500 : body.doorDeliveryFee;
+    const serviceTravelFee =
+      body.serviceTravelFee === undefined ? 1000 : body.serviceTravelFee;
+    const served = Array.from(
+      new Set([body.homeUniversityId, ...(body.servedUniversityIds ?? [])]),
+    );
+    const delivery: Array<Record<string, unknown>> = [];
+    for (const universityId of served) {
+      const isHome = universityId === body.homeUniversityId;
+      const row = await this.vendorUniversityRepo.save(
+        this.vendorUniversityRepo.create({
+          vendorProfileId: profile.id,
+          universityId,
+          doorDeliveryFee: isHome ? doorDeliveryFee : null,
+          serviceTravelFee,
+        }),
+      );
+      const dropPoint = await this.dropPointRepo.findOne({
+        where: { universityId, isActive: true },
+        order: { name: 'ASC' },
+      });
+      if (dropPoint) {
+        await this.vendorDeliveryPointRepo.save(
+          this.vendorDeliveryPointRepo.create({
+            vendorUniversityId: row.id,
+            dropPointId: dropPoint.id,
+            fee: 300,
+          }),
+        );
+      }
+      delivery.push({
+        universityId,
+        isHome,
+        doorDeliveryFee: isHome ? doorDeliveryFee : null,
+        serviceTravelFee,
+        dropPoints: dropPoint
+          ? [{ dropPointId: dropPoint.id, name: dropPoint.name, fee: 300 }]
+          : [],
+      });
+    }
+
+    return {
+      message: 'Test vendor created and approved',
+      user: { id: user.id, email: user.email, accountType: user.accountType },
+      vendorProfileId: profile.id,
+      servedUniversityIds: served,
+      delivery,
+      password,
+      note:
+        'Log in via POST /auth/login; catalog writes via /vendors/me/listings; ' +
+        'delivery preset via GET/PUT /vendors/me/delivery',
+    };
+  }
+
+  /**
+   * Flip any vendor profile straight to ACTIVE — skips the admin cookie dance.
+   */
+  @ApiOperation({ summary: 'Approve a vendor profile (any status → ACTIVE)' })
+  @ApiParam({ name: 'profileId', description: 'UUID of the vendor profile' })
+  @ApiResponse({ status: 201, description: 'Vendor profile activated' })
+  @ApiResponse({ status: 403, description: 'Forbidden - only available in development mode' })
+  @ApiResponse({ status: 404, description: 'Vendor profile not found' })
+  @Post('vendors/:profileId/approve')
+  async approveVendor(@Param('profileId') profileId: string) {
+    this.checkDevMode();
+
+    const profile = await this.vendorProfileRepo.findOne({
+      where: { id: profileId },
+    });
+    if (!profile) {
+      throw new NotFoundException('Vendor profile not found');
+    }
+
+    const previousStatus = profile.status;
+    profile.status = VendorStatus.ACTIVE;
+    profile.reviewedAt = new Date();
+    profile.reviewedBy = 'dev-controller';
+    profile.rejectionReason = null;
+    profile.suspensionReason = null;
+    if (!profile.shopfrontPhotoUrl) {
+      profile.shopfrontPhotoUrl = 'https://cdn.example.com/dev-shopfront.jpg';
+      profile.photoCapturedLive = true;
+    }
+    await this.vendorProfileRepo.save(profile);
+
+    return {
+      message: `Vendor profile moved from ${previousStatus} to active`,
+      vendorProfileId: profile.id,
+      userId: profile.userId,
+      status: profile.status,
+    };
+  }
+
+  /**
    * List all available dev endpoints
    */
   @ApiOperation({ summary: 'List all available dev endpoints' })
@@ -725,12 +955,37 @@ export class DevController {
           },
           description: 'Create a test user at specified tier',
         },
+        {
+          method: 'POST',
+          path: '/dev/create-test-vendor',
+          body: {
+            businessName: 'optional',
+            email: 'optional',
+            phone: 'optional',
+            password: 'optional (default DevPass123!)',
+            homeUniversityId: 'required',
+            servedUniversityIds: 'optional (home always included)',
+            shopAddress: 'optional',
+            doorDeliveryFee: 'optional naira (default 500; null = none)',
+            serviceTravelFee: 'optional naira (default 1000; null = none)',
+          },
+          description:
+            'Create a login-ready, already-ACTIVE vendor-only account (rev-2) with a default ' +
+            'delivery preset per served campus (door fee at home, travel fee everywhere, first ' +
+            'active admin drop point at ₦300) — edit via GET/PUT /vendors/me/delivery',
+        },
+        {
+          method: 'POST',
+          path: '/dev/vendors/:profileId/approve',
+          description: 'Flip a vendor profile straight to ACTIVE',
+        },
       ],
       tierInfo: {
         none: 'Browse only',
         tier_0: 'Phone + Email verified: Buy ≤₦30k, chat, posts, fund wallet',
-        tier_1: 'Documents approved: Sell ≤₦30k, buy ≤₦60k, housing ≤₦50k/month',
+        tier_1: 'Documents approved: Sell ≤₦50k, buy ≤₦60k, roommate features',
         tier_2: 'KYC verified: Unlimited access',
+        vendor: 'Active vendor-only accounts are TIER_2-equivalent (effectiveTier)',
       },
     };
   }

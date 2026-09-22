@@ -8,7 +8,11 @@ import {
   IsString,
   IsIn,
 } from 'class-validator';
-import { ListingStatus, ListingCategory } from '../../../database/entities/listing.entity';
+import {
+  ListingCategory,
+  ListingKind,
+  ListingStatus,
+} from '../../../database/entities/listing.entity';
 
 export class AdminListListingsDto {
   @ApiPropertyOptional({ description: 'Search title/description' })
@@ -20,6 +24,14 @@ export class AdminListListingsDto {
   @IsOptional()
   @IsEnum(ListingStatus)
   status?: ListingStatus;
+
+  @ApiPropertyOptional({
+    enum: ListingKind,
+    description: 'Narrow to student items (p2p), shop goods or bookable services',
+  })
+  @IsOptional()
+  @IsEnum(ListingKind)
+  kind?: ListingKind;
 
   @ApiPropertyOptional({ enum: ListingCategory })
   @IsOptional()

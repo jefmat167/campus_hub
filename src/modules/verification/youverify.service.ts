@@ -1,7 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, QueryRunner } from 'typeorm';
 import {
   KycVerification,
   KycType,
@@ -11,7 +11,10 @@ import {
   User,
   VerificationTier,
 } from '../../database/entities/user.entity';
-import { Wallet } from '../../database/entities/wallet.entity';
+import { WalletTransactionType } from '../../database/entities/wallet.entity';
+import { PlatformTransactionType } from '../../database/entities/platform-wallet.entity';
+import { WalletService } from '../wallet/wallet.service';
+import { PlatformWalletService } from '../wallet/platform-wallet.service';
 
 export interface YouVerifyBvnResponse {
   success: boolean;
@@ -47,7 +50,8 @@ export interface KycVerificationResult {
   tier2Achieved?: boolean;
 }
 
-const KYC_FEE = 100; // ₦100 fee for KYC verification
+const KYC_FEE = 100; // ₦100 fee for KYC verification (naira)
+const KYC_FEE_INSUFFICIENT = `Insufficient wallet balance. KYC verification requires ₦${KYC_FEE}. Please fund your wallet.`;
 
 @Injectable()
 export class YouVerifyService {
@@ -61,10 +65,10 @@ export class YouVerifyService {
     private kycRepo: Repository<KycVerification>,
     @InjectRepository(User)
     private userRepo: Repository<User>,
-    @InjectRepository(Wallet)
-    private walletRepo: Repository<Wallet>,
     private configService: ConfigService,
     private dataSource: DataSource,
+    private walletService: WalletService,
+    private platformWalletService: PlatformWalletService,
   ) {
     this.apiKey = this.configService.get<string>('YOUVERIFY_API_KEY', '');
     this.baseUrl = this.configService.get<string>(
@@ -137,15 +141,11 @@ export class YouVerifyService {
       );
     }
 
-    // Check wallet balance for fee (only charge if not already Tier 2)
+    // Check wallet balance for the fee up front (only the first Tier-2 upgrade
+    // pays) so a student never burns one of their 3 attempts on a check they
+    // cannot pay for.
     if (user.verificationTier !== VerificationTier.TIER_2) {
-      const wallet = await this.walletRepo.findOne({ where: { userId } });
-
-      if (!wallet || wallet.availableBalance < KYC_FEE) {
-        throw new BadRequestException(
-          `Insufficient wallet balance. KYC verification requires ₦${KYC_FEE}. Please fund your wallet.`,
-        );
-      }
+      await this.assertCanPayKycFee(userId);
     }
 
     // Create KYC verification record
@@ -198,20 +198,11 @@ export class YouVerifyService {
           user.tier2VerifiedAt = new Date();
           tier2Achieved = true;
 
-          // Charge KYC fee only for first upgrade to Tier 2
-          const wallet = await queryRunner.manager.findOne(Wallet, {
-            where: { userId },
-            lock: { mode: 'pessimistic_write' },
-          });
-
-          if (!wallet || wallet.availableBalance < KYC_FEE) {
-            throw new BadRequestException(
-              `Insufficient wallet balance. KYC verification requires ₦${KYC_FEE}. Please fund your wallet.`,
-            );
-          }
-
-          wallet.balance = Number(wallet.balance) - KYC_FEE;
-          await queryRunner.manager.save(wallet);
+          // Charge the one-time KYC fee for the first upgrade to Tier 2: a real
+          // ledger row on the student's wallet (type `fee`) and the matching
+          // credit on the platform wallet, both on THIS transaction so a
+          // failure leaves neither side half-applied.
+          await this.chargeKycFee(queryRunner, userId, type, verification.id);
         }
 
         await queryRunner.manager.save(user);
@@ -361,6 +352,55 @@ export class YouVerifyService {
         user.verificationTier === VerificationTier.TIER_1,
       recentVerifications,
     };
+  }
+
+  /** Pre-flight: the student can cover the fee (friendly 400 instead of a generic one). */
+  private async assertCanPayKycFee(userId: string): Promise<void> {
+    const wallet = await this.walletService.getWallet(userId).catch(() => null);
+    if (!wallet || Number(wallet.availableBalance) < KYC_FEE) {
+      throw new BadRequestException(KYC_FEE_INSUFFICIENT);
+    }
+  }
+
+  /**
+   * Debit the fee via WalletService (pessimistic wallet lock + `fee` ledger
+   * row, reference `KYC_FEE_<kycVerificationId>`) and book it to the platform
+   * wallet as `KYC_FEE` — on the caller's query runner.
+   */
+  private async chargeKycFee(
+    queryRunner: QueryRunner,
+    userId: string,
+    type: KycType,
+    kycVerificationId: string,
+  ): Promise<void> {
+    const reference = `KYC_FEE_${kycVerificationId}`;
+    const label = type.toUpperCase();
+    try {
+      await this.walletService.debitWallet(
+        userId,
+        KYC_FEE,
+        reference,
+        WalletTransactionType.FEE,
+        undefined,
+        queryRunner,
+        `KYC verification fee (${label} → Tier 2)`,
+      );
+    } catch (error) {
+      if (
+        error instanceof BadRequestException &&
+        /insufficient/i.test(error.message)
+      ) {
+        throw new BadRequestException(KYC_FEE_INSUFFICIENT);
+      }
+      throw error;
+    }
+    await this.platformWalletService.creditPlatformFee(
+      KYC_FEE,
+      null,
+      PlatformTransactionType.KYC_FEE,
+      `KYC verification fee — ${label}, user ${userId} (${reference})`,
+      queryRunner,
+    );
   }
 
   /**

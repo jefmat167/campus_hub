@@ -5,15 +5,24 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder, In, Brackets } from 'typeorm';
+import {
+  Repository,
+  SelectQueryBuilder,
+  WhereExpressionBuilder,
+  In,
+  Brackets,
+} from 'typeorm';
 import { toKobo } from '../../common/utils/money';
 import {
   Listing,
   ListingImage,
+  ListingKind,
   ListingStatus,
   VisibilityScope,
-  DeliveryMethod,
 } from '../../database/entities/listing.entity';
+import { VendorStatus } from '../../database/entities/vendor-profile.entity';
+import { VendorMarketService } from '../vendors/vendor-market.service';
+import { isListingSoldOut } from '../vendors/vendor-listing.util';
 import { Favorite } from '../../database/entities/favorite.entity';
 import { User } from '../../database/entities/user.entity';
 import { Faculty } from '../../database/entities/faculty.entity';
@@ -44,6 +53,7 @@ export class MarketplaceService {
     @InjectRepository(Department)
     private readonly departmentRepository: Repository<Department>,
     private readonly uploadService: UploadService,
+    private readonly vendorMarketService: VendorMarketService,
   ) { }
 
   /**
@@ -87,6 +97,62 @@ export class MarketplaceService {
     return listings.map((listing) => this.sanitizeListingSeller(listing));
   }
 
+  /**
+   * Public shape for one feed / favorites row on the unified marketplace.
+   * P2P rows carry the sanitized seller card. Vendor rows swap the seller card
+   * for the BUSINESS (never the owner's personal contact), add `vendor` and
+   * `isSoldOut`, and drop the raw vendorProfile relation (CAC numbers,
+   * rejection reasons, …) before anything leaves the API.
+   */
+  private shapeListing(listing: Listing): Listing {
+    if (listing.kind === ListingKind.P2P) {
+      return this.sanitizeListingSeller(listing);
+    }
+    const row = listing as any;
+    const profile = listing.vendorProfile;
+    const owner = listing.seller;
+    row.vendor = profile
+      ? {
+        id: profile.id,
+        businessName: profile.businessName,
+        isVerified: profile.isVerified,
+        homeUniversityId: profile.homeUniversityId,
+        shopfrontPhotoUrl: profile.shopfrontPhotoUrl ?? null,
+        rating: owner ? Number(owner.sellerRating) : null,
+        ratingCount: owner ? owner.sellerRatingCount : null,
+      }
+      : null;
+    row.seller = profile
+      ? {
+        id: listing.sellerId,
+        fullName: profile.businessName,
+        profilePhotoUrl: profile.shopfrontPhotoUrl ?? null,
+        verificationTier: owner?.verificationTier ?? null,
+        sellerRating: owner ? Number(owner.sellerRating) : null,
+        sellerRatingCount: owner?.sellerRatingCount ?? null,
+        isVendor: true,
+      }
+      : null;
+    row.isSoldOut = isListingSoldOut(listing);
+    // Buyers only ever see the derived flag — raw stock figures stay vendor-plane (03.3).
+    delete row.stock;
+    delete row.vendorProfile;
+    return listing;
+  }
+
+  private shapeListings(listings: Listing[]): Listing[] {
+    return listings.map((listing) => this.shapeListing(listing));
+  }
+
+  /** Student-listing writes only — shop items are managed from the vendor catalog. */
+  private assertP2p(listing: Listing): void {
+    if (listing.kind !== ListingKind.P2P) {
+      throw new ForbiddenException(
+        'Shop listings are managed from the vendor catalog',
+      );
+    }
+  }
+
   async createListing(userId: string, dto: CreateListingDto): Promise<Listing> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -95,6 +161,11 @@ export class MarketplaceService {
 
     if (!user) {
       throw new NotFoundException('User not found');
+    }
+    // Vendor-only accounts have no academic identity (rev-2 01.5); the
+    // controller guard blocks them, this is defence in depth + narrows the type.
+    if (!user.universityId) {
+      throw new ForbiddenException('Only student accounts can create listings');
     }
 
     // Validate facultyId if provided
@@ -117,12 +188,8 @@ export class MarketplaceService {
       }
     }
 
-    // Delivery config must be coherent (>=1 method + matching addresses).
-    this.validateDeliveryConfig(
-      dto.deliveryMethods,
-      dto.pickupAddress,
-      dto.meetupPoints,
-    );
+    // P2P handover is meet-up only (rev-2 spec 02): >=3 usable public points.
+    this.validateMeetupPoints(dto.meetupPoints);
 
     // Reject before creating anything if an uploaded image's real size differs
     // from what was declared when its presigned URL was issued.
@@ -134,6 +201,8 @@ export class MarketplaceService {
     // Only set facultyId/departmentId if explicitly provided in the DTO
     const listing = this.listingRepository.create({
       ...dto,
+      kind: ListingKind.P2P,
+      isNegotiable: dto.isNegotiable ?? true,
       sellerId: userId,
       universityId: user.universityId,
       facultyId: dto.facultyId ?? null,
@@ -173,6 +242,7 @@ export class MarketplaceService {
     if (listing.sellerId !== userId) {
       throw new ForbiddenException('You can only update your own listings');
     }
+    this.assertP2p(listing);
 
     // Validate facultyId if provided
     if (dto.facultyId) {
@@ -227,17 +297,9 @@ export class MarketplaceService {
       await this.listingImageRepository.save(newImages);
     }
 
-    // If any delivery field is changing, re-validate the resulting config.
-    if (
-      dto.deliveryMethods !== undefined ||
-      dto.pickupAddress !== undefined ||
-      dto.meetupPoints !== undefined
-    ) {
-      this.validateDeliveryConfig(
-        dto.deliveryMethods ?? listing.deliveryMethods,
-        dto.pickupAddress !== undefined ? dto.pickupAddress : listing.pickupAddress,
-        dto.meetupPoints !== undefined ? dto.meetupPoints : listing.meetupPoints,
-      );
+    // Replacement meet-up points must still satisfy the >=3 rule.
+    if (dto.meetupPoints !== undefined) {
+      this.validateMeetupPoints(dto.meetupPoints);
     }
 
     // Remove imageUrls from dto before updating listing
@@ -249,28 +311,17 @@ export class MarketplaceService {
   }
 
   /**
-   * Validate a listing's delivery config: at least one method, and each offered
-   * method has its required address(es). Used on create and update.
+   * P2P handover rule (rev-2 spec 02): every listing names at least 3 usable
+   * public meet-up points (the DTO enforces shape; this guards trimmed
+   * emptiness and any non-DTO caller). Used on create and update.
    */
-  private validateDeliveryConfig(
-    methods: DeliveryMethod[] | undefined,
-    pickupAddress: string | null | undefined,
+  private validateMeetupPoints(
     meetupPoints: string[] | null | undefined,
   ): void {
-    if (!methods || methods.length === 0) {
-      throw new BadRequestException('At least one delivery method is required');
-    }
-    if (methods.includes(DeliveryMethod.PICKUP) && !pickupAddress?.trim()) {
+    const usable = (meetupPoints ?? []).filter((p) => p?.trim()).length;
+    if (usable < 3) {
       throw new BadRequestException(
-        'A pickup address is required when "pickup" is offered',
-      );
-    }
-    if (
-      methods.includes(DeliveryMethod.MEETUP) &&
-      (meetupPoints ?? []).filter((p) => p?.trim()).length === 0
-    ) {
-      throw new BadRequestException(
-        'At least one meet-up point is required when "meetup" is offered',
+        'At least 3 meet-up points are required for a listing',
       );
     }
   }
@@ -278,7 +329,7 @@ export class MarketplaceService {
   async getListingById(listingId: string, userId?: string): Promise<Listing> {
     const listing = await this.listingRepository.findOne({
       where: { id: listingId },
-      relations: ['seller', 'seller.faculty', 'seller.department', 'images', 'university', 'faculty', 'department'],
+      relations: ['seller', 'seller.faculty', 'seller.department', 'images', 'university', 'faculty', 'department', 'vendorProfile'],
     });
 
     if (!listing) {
@@ -286,18 +337,53 @@ export class MarketplaceService {
     }
 
     // Check if user has favorited this listing
+    let isFavorited = false;
     if (userId) {
       const favorite = await this.favoriteRepository.findOne({
         where: { userId, listingId },
       });
-      (listing as any).isFavorited = !!favorite;
+      isFavorited = !!favorite;
     }
 
+    // Shop items: the vendor-shaped detail (options with soldOut flags,
+    // fulfillment for the viewer's campus, service-area 404) — one URL for
+    // every kind, the payload says what it is.
+    if (listing.kind !== ListingKind.P2P) {
+      const detail = await this.getVendorListingDetail(listing.id, userId);
+      (detail as any).isFavorited = isFavorited;
+      return detail as unknown as Listing;
+    }
+
+    if (userId) {
+      (listing as any).isFavorited = isFavorited;
+    }
     return this.sanitizeListingSeller(listing);
+  }
+
+  private async getVendorListingDetail(
+    listingId: string,
+    userId?: string,
+  ): Promise<Record<string, unknown>> {
+    const viewer = userId
+      ? await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'universityId'],
+      })
+      : null;
+    if (!viewer) {
+      // Browse is authenticated by design; a shop item needs the viewer's
+      // campus to resolve fulfillment and the vendor's service area.
+      throw new NotFoundException('Listing not found');
+    }
+    // Vendor detail counts its own view.
+    return this.vendorMarketService.getListingDetail(viewer as User, listingId);
   }
 
   async getListingByIdAndIncrementViews(listingId: string, userId?: string): Promise<Listing> {
     const listing = await this.getListingById(listingId, userId);
+    if ((listing as any).kind !== ListingKind.P2P) {
+      return listing; // the vendor detail already counted the view
+    }
 
     // Increment view count
     await this.listingRepository.increment({ id: listingId }, 'viewCount', 1);
@@ -313,13 +399,42 @@ export class MarketplaceService {
       .leftJoinAndSelect('seller.faculty', 'sellerFaculty')
       .leftJoinAndSelect('seller.department', 'sellerDepartment')
       .leftJoinAndSelect('listing.images', 'images')
-      .leftJoinAndSelect('listing.university', 'university');
+      .leftJoinAndSelect('listing.university', 'university')
+      .leftJoinAndSelect('listing.vendorProfile', 'vendorProfile');
 
-    // Apply visibility scope filtering based on current user
-    if (currentUser) {
-      this.applyVisibilityFilter(qb, currentUser);
+    // Unified feed (one table, three kinds): a student sees
+    //  - student listings under the P2P university / faculty / department rules
+    //  - shop goods & services from any ACTIVE vendor whose service area
+    //    covers their campus
+    // An account without a university (vendor-only) falls back to
+    // university-wide student listings only.
+    if (currentUser?.universityId) {
+      const viewer = currentUser;
+      qb.andWhere(
+        new Brackets((scope) => {
+          scope.where(
+            new Brackets((p2p) => {
+              p2p.where('listing.kind = :p2pKind', { p2pKind: ListingKind.P2P });
+              this.applyVisibilityFilter(p2p, viewer);
+            }),
+          );
+          scope.orWhere(
+            new Brackets((vendor) => {
+              vendor
+                .where('listing.kind <> :p2pKindV', { p2pKindV: ListingKind.P2P })
+                .andWhere('vendorProfile.status = :vendorActive', {
+                  vendorActive: VendorStatus.ACTIVE,
+                })
+                .andWhere(
+                  'EXISTS (SELECT 1 FROM vendor_universities vu WHERE vu.vendor_profile_id = listing.vendor_profile_id AND vu.university_id = :viewerUniversityId)',
+                  { viewerUniversityId: viewer.universityId },
+                );
+            }),
+          );
+        }),
+      );
     } else {
-      // Only show university-wide listings for non-authenticated users
+      qb.andWhere('listing.kind = :p2pKindOnly', { p2pKindOnly: ListingKind.P2P });
       qb.andWhere('listing.visibilityScope = :scope', {
         scope: VisibilityScope.UNIVERSITY,
       });
@@ -367,9 +482,9 @@ export class MarketplaceService {
       });
     }
 
-    // Filter by type
-    if (query.type) {
-      qb.andWhere('listing.type = :type', { type: query.type });
+    // Filter by kind (student items / shop goods / bookable services)
+    if (query.kinds && query.kinds.length > 0) {
+      qb.andWhere('listing.kind IN (:...kinds)', { kinds: query.kinds });
     }
 
     // Filter by price range
@@ -415,17 +530,34 @@ export class MarketplaceService {
       });
     }
 
-    // Filter by verified sellers only (TIER_2 + high trust)
+    // Filter by verified sellers only: TIER_2 + high trust for students,
+    // the CAC badge for shops.
     if (query.verifiedSellersOnly) {
-      qb.andWhere('seller.completedTransactions >= :minTransactions', {
-        minTransactions: 10,
-      })
-        .andWhere('seller.sellerRating >= :minRating', {
-          minRating: 4.5,
-        })
-        .andWhere('seller.verificationTier = :verifiedTier', {
-          verifiedTier: 'tier_2',
-        });
+      qb.andWhere(
+        new Brackets((trusted) => {
+          trusted
+            .where(
+              new Brackets((student) => {
+                student
+                  .where('listing.kind = :trustP2p', { trustP2p: ListingKind.P2P })
+                  .andWhere('seller.completedTransactions >= :minTransactions', {
+                    minTransactions: 10,
+                  })
+                  .andWhere('seller.sellerRating >= :minRating', { minRating: 4.5 })
+                  .andWhere('seller.verificationTier = :verifiedTier', {
+                    verifiedTier: 'tier_2',
+                  });
+              }),
+            )
+            .orWhere(
+              new Brackets((shop) => {
+                shop
+                  .where('listing.kind <> :trustP2pV', { trustP2pV: ListingKind.P2P })
+                  .andWhere('vendorProfile.isVerified = true');
+              }),
+            );
+        }),
+      );
     }
 
     // Apply sorting
@@ -458,8 +590,8 @@ export class MarketplaceService {
       });
     }
 
-    // Sanitize seller data in all listings
-    const sanitizedListings = this.sanitizeListingsSellers(listings);
+    // Public shape per kind (sanitized seller / business card + isSoldOut)
+    const sanitizedListings = this.shapeListings(listings);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -474,7 +606,7 @@ export class MarketplaceService {
     };
   }
 
-  private applyVisibilityFilter(qb: SelectQueryBuilder<Listing>, user: User): void {
+  private applyVisibilityFilter(qb: WhereExpressionBuilder, user: User): void {
     qb.andWhere(
       new Brackets((subQb) => {
         // University-wide listings from same university
@@ -567,6 +699,7 @@ export class MarketplaceService {
     if (listing.sellerId !== userId) {
       throw new ForbiddenException('You can only delete your own listings');
     }
+    this.assertP2p(listing);
 
     // Soft delete by changing status
     await this.listingRepository.update(listingId, {
@@ -586,6 +719,7 @@ export class MarketplaceService {
     if (listing.sellerId !== userId) {
       throw new ForbiddenException('You can only update your own listings');
     }
+    this.assertP2p(listing);
 
     if (listing.status !== ListingStatus.ACTIVE) {
       throw new BadRequestException('Listing is not active');
@@ -655,7 +789,7 @@ export class MarketplaceService {
 
     const [favorites, total] = await this.favoriteRepository.findAndCount({
       where: { userId },
-      relations: ['listing', 'listing.seller', 'listing.seller.faculty', 'listing.seller.department', 'listing.images'],
+      relations: ['listing', 'listing.seller', 'listing.seller.faculty', 'listing.seller.department', 'listing.images', 'listing.vendorProfile'],
       order: { createdAt: 'DESC' },
       skip: offset,
       take: limit,
@@ -666,8 +800,8 @@ export class MarketplaceService {
       return f.listing;
     });
 
-    // Sanitize seller data in all listings
-    const sanitizedListings = this.sanitizeListingsSellers(listings);
+    // Public shape per kind (sanitized seller / business card + isSoldOut)
+    const sanitizedListings = this.shapeListings(listings);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -733,13 +867,18 @@ export class MarketplaceService {
     const qb = this.listingRepository.createQueryBuilder('l')
       .leftJoinAndSelect('l.seller', 'seller')
       .leftJoinAndSelect('l.images', 'images')
-      .leftJoinAndSelect('l.university', 'university');
+      .leftJoinAndSelect('l.university', 'university')
+      // Shop rows: the admin table shows the business, not just the owner.
+      .leftJoinAndSelect('l.vendorProfile', 'vendorProfile');
 
     if (dto.search) {
       qb.andWhere('(l.title ILIKE :search OR l.description ILIKE :search)', { search: `%${dto.search}%` });
     }
     if (dto.status) {
       qb.andWhere('l.status = :status', { status: dto.status });
+    }
+    if (dto.kind) {
+      qb.andWhere('l.kind = :kind', { kind: dto.kind });
     }
     if (dto.category) {
       qb.andWhere('l.category = :category', { category: dto.category });

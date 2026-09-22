@@ -12,6 +12,8 @@ import {
   tierMeetsRequirement,
 } from '../decorators/min-tier.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { TIER_LIMIT_TABLES, TierLimitType } from '../constants/tier-limits';
+import { effectiveTier } from '../utils/effective-tier';
 
 /**
  * Guard that checks if the user meets the minimum verification tier requirement.
@@ -55,7 +57,9 @@ export class TierGuard implements CanActivate {
       throw new ForbiddenException('User not authenticated');
     }
 
-    const userTier = user.verificationTier || VerificationTier.NONE;
+    // Effective tier: students = their real tier; vendor-only accounts map
+    // from vendor verification (active → TIER_2-equivalent) — rev-2 01.5.
+    const userTier = effectiveTier(user);
 
     if (!tierMeetsRequirement(userTier, requiredTier)) {
       const tierMessages: Record<VerificationTier, string> = {
@@ -90,7 +94,8 @@ export const TIER_AMOUNT_LIMIT_KEY = 'tierAmountLimit';
  * Interface for tier-based amount limits
  */
 export interface TierAmountLimitConfig {
-  field: string;
+  /** One body field, or several — every field that is present is capped. */
+  field: string | string[];
   limits: Partial<Record<VerificationTier, number | null>>;
 }
 
@@ -107,11 +112,15 @@ export interface TierAmountLimitConfig {
  * @Post('escrow')
  * createEscrow() { ... }
  * ```
+ *
+ * Pass an array to cap several fields at once — e.g. a budget range
+ * `['budgetMax', 'budgetMin']`, so omitting the optional max can't dodge the
+ * cap by carrying the whole amount in the min.
  */
 import { SetMetadata } from '@nestjs/common';
 
 export const TierAmountLimit = (
-  field: string,
+  field: string | string[],
   limits: Partial<Record<VerificationTier, number | null>>,
 ) => SetMetadata(TIER_AMOUNT_LIMIT_KEY, { field, limits });
 
@@ -150,7 +159,7 @@ export class TierAmountLimitGuard implements CanActivate {
       throw new ForbiddenException('User not authenticated');
     }
 
-    const userTier: VerificationTier = user.verificationTier || VerificationTier.NONE;
+    const userTier: VerificationTier = effectiveTier(user);
     const limit = config.limits[userTier as VerificationTier];
 
     // null means unlimited
@@ -158,22 +167,26 @@ export class TierAmountLimitGuard implements CanActivate {
       return true;
     }
 
-    const amount = this.getNestedValue(body, config.field);
+    const fields = Array.isArray(config.field) ? config.field : [config.field];
 
-    if (typeof amount !== 'number') {
-      // If amount is not provided or not a number, let validation handle it
-      return true;
-    }
+    for (const field of fields) {
+      const amount = this.getNestedValue(body, field);
 
-    if (amount > limit) {
-      throw new ForbiddenException({
-        message: `Amount exceeds your tier limit. Maximum allowed: ₦${limit.toLocaleString()}`,
-        field: config.field,
-        limit,
-        amount,
-        currentTier: userTier,
-        upgradeRequired: true,
-      });
+      if (typeof amount !== 'number') {
+        // Not provided or not a number — DTO validation owns that case
+        continue;
+      }
+
+      if (amount > limit) {
+        throw new ForbiddenException({
+          message: `Amount exceeds your tier limit. Maximum allowed: ₦${limit.toLocaleString()}`,
+          field,
+          limit,
+          amount,
+          currentTier: userTier,
+          upgradeRequired: true,
+        });
+      }
     }
 
     return true;
@@ -189,30 +202,14 @@ export class TierAmountLimitGuard implements CanActivate {
 }
 
 /**
- * Helper function to get amount limit for a user's tier
+ * Helper function to get amount limit for a user's tier.
+ * The tables live in src/common/constants/tier-limits.ts — the single source
+ * shared with the @TierAmountLimit decorator configs and service-level checks.
  */
-export function getAmountLimitForTier(tier: VerificationTier, type: 'buying' | 'selling' | 'housing'): number | null {
-  const limits: Record<string, Record<VerificationTier, number | null>> = {
-    buying: {
-      [VerificationTier.NONE]: 0,
-      [VerificationTier.TIER_0]: 30000,
-      [VerificationTier.TIER_1]: 60000,
-      [VerificationTier.TIER_2]: null,
-    },
-    selling: {
-      [VerificationTier.NONE]: 0,
-      [VerificationTier.TIER_0]: 0,
-      [VerificationTier.TIER_1]: 50000,
-      [VerificationTier.TIER_2]: null,
-    },
-    housing: {
-      [VerificationTier.NONE]: 0,
-      [VerificationTier.TIER_0]: 0,
-      [VerificationTier.TIER_1]: 50000,
-      [VerificationTier.TIER_2]: null,
-    },
-  };
-
-  const limit = limits[type]?.[tier];
+export function getAmountLimitForTier(
+  tier: VerificationTier,
+  type: TierLimitType,
+): number | null {
+  const limit = TIER_LIMIT_TABLES[type]?.[tier];
   return limit === undefined ? 0 : limit;
 }

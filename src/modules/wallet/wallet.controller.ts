@@ -66,6 +66,13 @@ export class WalletController {
   @ApiOperation({ summary: 'Get transaction history' })
   @ApiQuery({ name: 'page', required: false, example: 1, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, example: 20, description: 'Items per page (max 50)' })
+  @ApiQuery({
+    name: 'market',
+    required: false,
+    enum: ['p2p', 'vendor'],
+    description:
+      "Only rows from one market — 'vendor' slices a student-vendor's history down to business income (escrow rows are market-tagged; deposits/withdrawals are not)",
+  })
   @ApiResponse({
     status: 200,
     description: 'Paginated transaction history',
@@ -89,8 +96,14 @@ export class WalletController {
     @CurrentUser('id') userId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('market') market?: string,
   ) {
-    return this.walletService.getTransactions(userId, page, Math.min(limit, 50));
+    return this.walletService.getTransactions(
+      userId,
+      page,
+      Math.min(limit, 50),
+      market === 'p2p' || market === 'vendor' ? market : undefined,
+    );
   }
 
   @Get('transactions/:id')

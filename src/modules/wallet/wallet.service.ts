@@ -90,11 +90,15 @@ export class WalletService {
     userId: string,
     page = 1,
     limit = 20,
+    market?: 'p2p' | 'vendor',
   ): Promise<{ transactions: WalletTransaction[]; total: number }> {
     const wallet = await this.getWallet(userId);
 
+    // market filters down to one market's rows (rev-2 spec 01.1: a
+    // student-vendor slicing their history to business income). Escrow rows
+    // are tagged since the rev-2 rewrite; deposits/withdrawals stay untagged.
     const [transactions, total] = await this.transactionRepo.findAndCount({
-      where: { walletId: wallet.id },
+      where: { walletId: wallet.id, ...(market ? { market } : {}) },
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -191,7 +195,9 @@ export class WalletService {
   }
 
   /**
-   * Debit wallet (withdrawal)
+   * Debit wallet (withdrawal / fee). Pass `externalQueryRunner` to make the
+   * debit part of a caller's transaction (mirrors `creditWallet`); the caller
+   * then owns commit/rollback.
    */
   async debitWallet(
     userId: string,
@@ -199,14 +205,21 @@ export class WalletService {
     reference: string,
     type: WalletTransactionType = WalletTransactionType.WITHDRAWAL,
     externalReference?: string,
+    externalQueryRunner?: QueryRunner,
+    description?: string,
   ): Promise<WalletTransaction> {
     if (amount <= 0) {
       throw new BadRequestException('Amount must be positive');
     }
 
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const isExternalTx = !!externalQueryRunner;
+    const queryRunner =
+      externalQueryRunner || this.dataSource.createQueryRunner();
+
+    if (!isExternalTx) {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+    }
 
     try {
       const wallet = await queryRunner.manager.findOne(Wallet, {
@@ -238,19 +251,27 @@ export class WalletService {
         status: WalletTransactionStatus.COMPLETED,
         reference,
         externalReference,
+        ...(description ? { description } : {}),
         balanceBefore,
         balanceAfter: Number(wallet.balance),
       });
 
       await queryRunner.manager.save(transaction);
-      await queryRunner.commitTransaction();
+
+      if (!isExternalTx) {
+        await queryRunner.commitTransaction();
+      }
 
       return transaction;
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (!isExternalTx) {
+        await queryRunner.rollbackTransaction();
+      }
       throw error;
     } finally {
-      await queryRunner.release();
+      if (!isExternalTx) {
+        await queryRunner.release();
+      }
     }
   }
 
@@ -346,6 +367,7 @@ export class WalletService {
     amount: number,
     reference: string,
     externalQueryRunner?: QueryRunner,
+    market?: string | null,
   ): Promise<WalletTransaction> {
     const isExternalTx = !!externalQueryRunner;
     const queryRunner =
@@ -387,6 +409,7 @@ export class WalletService {
         balanceBefore: Number(wallet.balance),
         balanceAfter: Number(wallet.balance),
         metadata: { refundedAmount: amount },
+        market: market ?? null,
       });
 
       await queryRunner.manager.save(transaction);
@@ -431,6 +454,7 @@ export class WalletService {
     opts: { total: number; toSeller: number; toPlatform: number },
     reference: string,
     queryRunner: QueryRunner,
+    market?: string | null,
   ): Promise<void> {
     const total = Number(opts.total);
     const toSeller = Number(opts.toSeller);
@@ -509,6 +533,7 @@ export class WalletService {
           balanceBefore: buyerBalanceBefore,
           balanceAfter: Number(buyerWallet.balance),
           metadata: { toSeller, toPlatform },
+          market: market ?? null,
         }),
       );
     }
@@ -525,6 +550,7 @@ export class WalletService {
           balanceBefore: Number(buyerWallet.balance),
           balanceAfter: Number(buyerWallet.balance),
           metadata: { refundedAmount: refund },
+          market: market ?? null,
         }),
       );
     }
@@ -540,6 +566,7 @@ export class WalletService {
           reference: `${reference}_release`,
           balanceBefore: sellerBalanceBefore,
           balanceAfter: Number(sellerWallet.balance),
+          market: market ?? null,
         }),
       );
     }
