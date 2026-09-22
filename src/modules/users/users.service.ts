@@ -91,7 +91,17 @@ export class UsersService {
     const user = await this.findById(userId);
 
     // Exclude sensitive fields and format relations (same as auth register response)
-    const { passwordHash, refreshTokenHash, university, faculty, department, ...sanitized } = user;
+    const {
+      passwordHash,
+      refreshTokenHash,
+      pinHash,
+      pinAttempts,
+      pinLockedUntil,
+      university,
+      faculty,
+      department,
+      ...sanitized
+    } = user;
 
     return {
       ...sanitized,
@@ -551,7 +561,7 @@ export class UsersService {
       .getManyAndCount();
 
     const sanitized = users.map((u) => {
-      const { passwordHash, refreshTokenHash, ...rest } = u;
+      const { passwordHash, refreshTokenHash, pinHash, pinAttempts, pinLockedUntil, ...rest } = u;
       return rest;
     });
 
@@ -594,7 +604,7 @@ export class UsersService {
         this.warningRepo.count({ where: { userId, isActive: true } }),
       ]);
 
-    const { passwordHash, refreshTokenHash, ...sanitizedUser } = user;
+    const { passwordHash, refreshTokenHash, pinHash, pinAttempts, pinLockedUntil, ...sanitizedUser } = user;
 
     return {
       ...sanitizedUser,

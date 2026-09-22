@@ -709,7 +709,17 @@ export class AuthService {
   }
 
   private sanitizeUser(user: User): Record<string, any> {
-    const { passwordHash, refreshTokenHash, university, faculty, department, ...sanitized } = user;
+    const {
+      passwordHash,
+      refreshTokenHash,
+      pinHash,
+      pinAttempts,
+      pinLockedUntil,
+      university,
+      faculty,
+      department,
+      ...sanitized
+    } = user;
 
     return {
       ...sanitized,
@@ -729,7 +739,14 @@ export class AuthService {
     faculty: { id: string; name: string; code: string },
     department: { id: string; name: string; code: string },
   ): Record<string, any> {
-    const { passwordHash, refreshTokenHash, ...sanitized } = user;
+    const {
+      passwordHash,
+      refreshTokenHash,
+      pinHash,
+      pinAttempts,
+      pinLockedUntil,
+      ...sanitized
+    } = user;
 
     return {
       ...sanitized,

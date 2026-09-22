@@ -26,6 +26,37 @@ import {
 
 @Injectable()
 export class ChatService {
+  /**
+   * Strip credentials/PII from a User relation before it leaves the API or
+   * the WebSocket gateway. @Exclude() on the entity is inert (no
+   * ClassSerializerInterceptor), so a raw participant/sender would serialize
+   * passwordHash, pinHash and refreshTokenHash.
+   */
+  private static sanitizeChatUser(user: any): any {
+    if (!user) return user;
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      profilePhotoUrl: user.profilePhotoUrl,
+      verificationTier: user.verificationTier,
+    };
+  }
+
+  private static sanitizeConversation(conversation: Conversation): Conversation {
+    const conv = conversation as any;
+    if (conv.participant1) conv.participant1 = ChatService.sanitizeChatUser(conv.participant1);
+    if (conv.participant2) conv.participant2 = ChatService.sanitizeChatUser(conv.participant2);
+    if (conv.otherParticipant) conv.otherParticipant = ChatService.sanitizeChatUser(conv.otherParticipant);
+    return conversation;
+  }
+
+  private static sanitizeMessage(message: Message): Message {
+    if ((message as any).sender) {
+      (message as any).sender = ChatService.sanitizeChatUser((message as any).sender);
+    }
+    return message;
+  }
+
   constructor(
     @InjectRepository(Conversation)
     private readonly conversationRepository: Repository<Conversation>,
@@ -411,7 +442,7 @@ export class ChatService {
         ? conversation.participant2
         : conversation.participant1;
 
-    return conversation;
+    return ChatService.sanitizeConversation(conversation);
   }
 
   async getUserConversations(
@@ -458,6 +489,7 @@ export class ChatService {
           : conv.participant2UnreadCount;
       (conv as any).otherParticipant =
         conv.participant1Id === userId ? conv.participant2 : conv.participant1;
+      ChatService.sanitizeConversation(conv);
     });
 
     const totalPages = Math.ceil(total / limit);
@@ -495,6 +527,8 @@ export class ChatService {
     });
 
     const totalPages = Math.ceil(total / limit);
+
+    messages.forEach((m) => ChatService.sanitizeMessage(m));
 
     return {
       messages: messages.reverse(), // Return in chronological order
@@ -568,7 +602,9 @@ export class ChatService {
       throw new NotFoundException('Message not found');
     }
 
-    return message;
+    // Also covers the WS gateway: sendMessage() returns this, and the gateway
+    // emits it to conversation/recipient rooms (interceptors don't run there).
+    return ChatService.sanitizeMessage(message);
   }
 
   async getTotalUnreadCount(userId: string): Promise<number> {
@@ -610,7 +646,7 @@ export class ChatService {
   ): Promise<Message> {
     const message = this.messageRepository.create({
       conversationId,
-      senderId: null as any, // System message has no sender
+      senderId: null, // System message has no sender (column is nullable)
       content,
       isSystemMessage: true,
       metadata,
