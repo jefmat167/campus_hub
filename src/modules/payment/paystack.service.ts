@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  HttpException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,7 +19,12 @@ export interface PaystackInitResponse {
 export interface PaystackVerifyResponse {
   status: string;
   reference: string;
+  /** What the customer was charged, in kobo. When the Paystack account passes
+   *  transaction fees to the customer this is requested_amount + fees. */
   amount: number;
+  /** What the merchant asked to collect, in kobo — the amount to credit. */
+  requested_amount?: number;
+  fees?: number;
   currency: string;
   channel: string;
   paid_at: string;
@@ -115,6 +121,9 @@ export class PaystackService {
       this.logger.log(`Transaction initialized: ${reference}`);
       return response.data.data;
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       this.logger.error('Failed to initialize transaction', error.response?.data || error.message);
       throw new InternalServerErrorException('Failed to initialize payment');
     }
@@ -137,7 +146,17 @@ export class PaystackService {
 
       return response.data.data;
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       this.logger.error('Failed to verify transaction', error.response?.data || error.message);
+      const httpStatus: number | undefined = error.response?.status;
+      // Paystack 4xx = unknown/invalid reference — the caller's input, not an outage.
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        throw new BadRequestException(
+          error.response?.data?.message || 'Transaction reference not found',
+        );
+      }
       throw new InternalServerErrorException('Failed to verify payment');
     }
   }

@@ -20,6 +20,9 @@ interface PaystackWebhookEvent {
   data: {
     reference: string;
     amount: number;
+    // The requested top-up in kobo; `amount` also includes the Paystack fee
+    // when the account passes fees to the customer.
+    requested_amount?: number;
     status: string;
     metadata?: Record<string, unknown>;
     transfer_code?: string;
@@ -105,7 +108,7 @@ export class WebhookController {
   }
 
   private async handleChargeSuccess(data: PaystackWebhookEvent['data']) {
-    const { reference, amount, metadata } = data;
+    const { reference, amount, requested_amount, metadata } = data;
 
     // Check if this is a wallet funding
     if (metadata?.type !== 'wallet_funding') {
@@ -126,8 +129,9 @@ export class WebhookController {
       return;
     }
 
-    // Credit wallet (amount is in kobo)
-    const amountInNaira = amount / 100;
+    // Same rule as POST /payment/fund/verify: credit the requested top-up,
+    // never the gross charge (which includes customer-borne Paystack fees).
+    const amountInNaira = Math.min(amount, requested_amount ?? amount) / 100;
     await this.walletService.creditWallet(
       userId,
       amountInNaira,
