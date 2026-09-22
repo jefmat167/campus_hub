@@ -27,6 +27,11 @@ export enum NotificationType {
   DELIVERY_CONFIRMED = 'delivery_confirmed', // Code verified
   ORDER_AUTO_COMPLETED = 'order_auto_completed', // 24h auto-release
   ORDER_EXPIRED = 'order_expired', // 72h fulfillment expired
+  ORDER_CONFIRMED = 'order_confirmed', // Vendor confirmed a manual order (rev-2 03.5)
+  ORDER_REJECTED = 'order_rejected', // Vendor rejected / confirmation timed out
+  APPOINTMENT_PROPOSED = 'appointment_proposed', // Service time proposed/countered (rev-2 03.6)
+  APPOINTMENT_AGREED = 'appointment_agreed', // Service time accepted — order is "ready"
+  NO_SHOW_REFUND = 'no_show_refund', // Vendor no-show claim honoured / buyer no-show fee
   FULFILLMENT_REMINDER = 'fulfillment_reminder', // nudge seller while AWAITING_SELLER
   ESCROW_RELEASED = 'escrow_released',
   ESCROW_CANCELLED = 'escrow_cancelled',

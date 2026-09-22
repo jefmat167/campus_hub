@@ -18,31 +18,32 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiParam,
-  ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
-import { OfferStatus } from '../../database/entities/offer.entity';
 import { OffersService } from './offers.service';
-import { CreateOfferDto, RespondOfferDto } from './dto';
+import {
+  CreateOfferDto,
+  RespondOfferDto,
+  OfferQueryDto,
+  OfferStatusQueryDto,
+} from './dto';
 
 @ApiTags('Offers')
 @Controller('offers')
-@UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class OffersController {
   constructor(private readonly offersService: OffersService) {}
 
   @Post()
-  @TierAmountLimit('amount', {
-    [VerificationTier.TIER_0]: 30000,
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('amount', TIER_BUYING_LIMITS)
   @ApiOperation({
     summary: 'Create a new offer',
     description: 'Creates a new offer on a listing. Buyers can make offers below the listing price. Amount limits: Tier 0 ≤₦30k, Tier 1 ≤₦60k, Tier 2 unlimited.',
@@ -84,17 +85,9 @@ export class OffersController {
   @Get('my/sent')
   @ApiOperation({
     summary: 'Get offers sent by current user',
-    description: 'Retrieves all offers made by the current user as a buyer.',
+    description:
+      'Retrieves all offers made by the current user as a buyer. Query: status (offer status enum), page (≥1), limit (1–100).',
   })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: OfferStatus,
-    description: 'Filter by offer status',
-    example: OfferStatus.PENDING,
-  })
-  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default 20)' })
   @ApiResponse({
     status: 200,
     description: 'Offers retrieved successfully',
@@ -111,7 +104,7 @@ export class OffersController {
                 id: '550e8400-e29b-41d4-a716-446655440001',
                 title: 'iPhone 13 Pro Max',
                 price: 450000,
-                imageUrls: ['https://storage.example.com/img1.jpg'],
+                images: [{ url: 'https://storage.example.com/img1.jpg', position: 0 }],
               },
               seller: {
                 id: '550e8400-e29b-41d4-a716-446655440002',
@@ -130,15 +123,13 @@ export class OffersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getBuyerOffers(
     @CurrentUser() user: User,
-    @Query('status') status?: OfferStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: OfferQueryDto,
   ) {
     const result = await this.offersService.getBuyerOffers(
       user.id,
-      status,
-      page ? Number(page) : 1,
-      limit ? Number(limit) : 20,
+      query.status,
+      query.page ?? 1,
+      query.limit ?? 20,
     );
     return {
       success: true,
@@ -150,17 +141,9 @@ export class OffersController {
   @MinTier(VerificationTier.TIER_1)
   @ApiOperation({
     summary: 'Get offers received by current user',
-    description: 'Retrieves all offers received on the current user\'s listings as a seller. Requires Tier 1 verification.',
+    description:
+      'Retrieves all offers received on the current user\'s listings as a seller. Requires Tier 1 verification. Query: status, page (≥1), limit (1–100).',
   })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: OfferStatus,
-    description: 'Filter by offer status',
-    example: OfferStatus.PENDING,
-  })
-  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default 20)' })
   @ApiResponse({
     status: 200,
     description: 'Offers retrieved successfully',
@@ -197,15 +180,13 @@ export class OffersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getSellerOffers(
     @CurrentUser() user: User,
-    @Query('status') status?: OfferStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: OfferQueryDto,
   ) {
     const result = await this.offersService.getSellerOffers(
       user.id,
-      status,
-      page ? Number(page) : 1,
-      limit ? Number(limit) : 20,
+      query.status,
+      query.page ?? 1,
+      query.limit ?? 20,
     );
     return {
       success: true,
@@ -217,18 +198,13 @@ export class OffersController {
   @MinTier(VerificationTier.TIER_1)
   @ApiOperation({
     summary: 'Get offers for a specific listing',
-    description: 'Retrieves all offers for a listing. Only the listing owner can see all offers. Requires Tier 1 verification.',
+    description:
+      'Retrieves all offers for a listing. Only the listing owner can see all offers. Requires Tier 1 verification. Query: status.',
   })
   @ApiParam({
     name: 'listingId',
     description: 'Listing UUID',
     example: '550e8400-e29b-41d4-a716-446655440000',
-  })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: OfferStatus,
-    description: 'Filter by offer status',
   })
   @ApiResponse({
     status: 200,
@@ -257,12 +233,12 @@ export class OffersController {
   async getOffersForListing(
     @Param('listingId', ParseUUIDPipe) listingId: string,
     @CurrentUser() user: User,
-    @Query('status') status?: OfferStatus,
+    @Query() query: OfferStatusQueryDto,
   ) {
     const offers = await this.offersService.getOffersForListing(
       listingId,
       user.id,
-      status,
+      query.status,
     );
     return {
       success: true,

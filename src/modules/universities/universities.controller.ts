@@ -1,6 +1,7 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { UniversitiesService } from './universities.service';
+import { UniversitySettingsService } from './university-settings.service';
 import { University } from '../../database/entities/university.entity';
 import { Faculty } from '../../database/entities/faculty.entity';
 import { Department } from '../../database/entities/department.entity';
@@ -8,7 +9,24 @@ import { Department } from '../../database/entities/department.entity';
 @ApiTags('Universities')
 @Controller('universities')
 export class UniversitiesController {
-  constructor(private readonly universitiesService: UniversitiesService) { }
+  constructor(
+    private readonly universitiesService: UniversitiesService,
+    private readonly universitySettingsService: UniversitySettingsService,
+  ) { }
+
+  /**
+   * Active drop points for a university — buyers pick one at checkout for
+   * vendor delivery (mandatory for neighboring-campus vendors, rev-2 03.2).
+   */
+  @Get(':id/drop-points')
+  @ApiOperation({
+    summary: 'Active drop points at a university (vendor-delivery destinations)',
+  })
+  @ApiParam({ name: 'id', description: 'University UUID' })
+  @ApiResponse({ status: 200, description: 'Active drop points' })
+  async listDropPoints(@Param('id', ParseUUIDPipe) id: string) {
+    return this.universitySettingsService.listDropPoints(id, false);
+  }
 
   @Get()
   @ApiOperation({ summary: 'Get all universities' })

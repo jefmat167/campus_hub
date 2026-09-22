@@ -5,16 +5,20 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  OneToMany,
   JoinColumn,
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
-import { Listing, DeliveryMethod } from './listing.entity';
-import { Offer } from './offer.entity';
+import { DeliveryMethod } from './listing.entity';
 import { BuyRequestOffer } from './buy-request-offer.entity';
+import { Checkout } from './checkout.entity';
+import { OrderItem } from './order-item.entity';
+import { DropPoint } from './drop-point.entity';
 import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum EscrowStatus {
+  PENDING_CONFIRMATION = 'pending_confirmation', // Vendor manual-confirm / service time-negotiation (rev-2 03.5/03.6, used from Phase 5)
   AWAITING_SELLER = 'awaiting_seller', // Waiting for seller to click "I'm Ready"
   SELLER_READY = 'seller_ready', // Seller set delivery details, code generated
   DELIVERED = 'delivered', // Code verified, in 24h dispute window
@@ -23,6 +27,12 @@ export enum EscrowStatus {
   REFUNDED = 'refunded', // Dispute resolved for buyer
   CANCELLED = 'cancelled', // Cancelled before delivery
   EXPIRED = 'expired', // 72h fulfillment timer expired
+}
+
+/** Which market a sub-order belongs to (wallet rows are tagged with this). */
+export enum OrderMarket {
+  P2P = 'p2p',
+  VENDOR = 'vendor',
 }
 
 @Entity('escrow_transactions')
@@ -49,13 +59,17 @@ export class EscrowTransaction {
   @JoinColumn({ name: 'seller_id' })
   seller: User;
 
-  @Column({ type: 'uuid', name: 'listing_id', nullable: true })
+  // Sub-order grouping (rev-2 spec 01.6/03.4): the checkout this order was
+  // split out of. Null on buy-request escrows (their own direct path).
+  @Column({ type: 'uuid', name: 'checkout_id', nullable: true })
   @Index()
-  listingId: string | null;
+  checkoutId: string | null;
 
-  @ManyToOne(() => Listing, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'listing_id' })
-  listing: Listing | null;
+  @ManyToOne(() => Checkout, (checkout) => checkout.orders, {
+    onDelete: 'RESTRICT',
+  })
+  @JoinColumn({ name: 'checkout_id' })
+  checkout: Checkout | null;
 
   @Column({ type: 'uuid', name: 'buy_request_offer_id', nullable: true })
   @Index()
@@ -65,15 +79,27 @@ export class EscrowTransaction {
   @JoinColumn({ name: 'buy_request_offer_id' })
   buyRequestOffer: BuyRequestOffer | null;
 
-  @Column({ type: 'uuid', name: 'offer_id', nullable: true })
-  offerId: string | null;
+  // The lines inside this sub-order (item links + price/title snapshots).
+  @OneToMany(() => OrderItem, (item) => item.order)
+  orderItems: OrderItem[];
 
-  @ManyToOne(() => Offer, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'offer_id' })
-  offer: Offer | null;
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  market: OrderMarket | null;
 
   @Column({ type: 'bigint', transformer: KoboColumnTransformer })
   amount: number;
+
+  // Money breakdown (rev-2 01.3): platform fee applies to itemsSubtotal;
+  // deliveryFee passes through to the seller/vendor in full.
+  @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
+  itemsSubtotal: number | null;
+
+  @Column({ type: 'bigint', default: 0, transformer: KoboColumnTransformer })
+  deliveryFee: number;
+
+  // Deposit-model seam (rev-2 spec 05) — v1 is always full_upfront.
+  @Column({ type: 'varchar', length: 20, default: 'full_upfront' })
+  paymentPlan: string;
 
   @Column({
     type: 'enum',
@@ -109,6 +135,31 @@ export class EscrowTransaction {
   @Column({ type: 'text', nullable: true })
   deliveryLocation: string | null;
 
+  // Vendor door delivery (Phase 5): full address, or an admin drop point.
+  @Column({ type: 'text', nullable: true })
+  deliveryAddress: string | null;
+
+  @Column({ type: 'uuid', name: 'drop_point_id', nullable: true })
+  dropPointId: string | null;
+
+  @ManyToOne(() => DropPoint, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'drop_point_id' })
+  dropPoint: DropPoint | null;
+
+  // Vendor manual confirmation (rev-2 03.5, Phase 5): commitment, not readiness.
+  @Column({ default: false })
+  confirmationRequired: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  confirmedAt: Date | null;
+
+  // Services (rev-2 03.6, Phase 6): agreed appointment; deadlines re-key to it.
+  @Column({ type: 'timestamptz', nullable: true })
+  appointmentAt: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  agreedAt: Date | null;
+
   // Delivery confirmation
   @Column({ type: 'timestamp', nullable: true })
   deliveredAt: Date | null;
@@ -136,6 +187,13 @@ export class EscrowTransaction {
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  // Cancellation provenance (rev-2 01.2 is direction-sensitive).
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  cancelledBy: 'buyer' | 'seller' | 'system' | null;
+
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  cancelReason: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown> | null;

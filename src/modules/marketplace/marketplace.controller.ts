@@ -21,9 +21,11 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TierGuard, TierAmountLimit, TierAmountLimitGuard } from '../../common/guards/tier.guard';
+import { TIER_SELLING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -51,12 +53,9 @@ export class MarketplaceController {
   ) {}
 
   @Post('listings')
-  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('price', {
-    [VerificationTier.TIER_1]: 50000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('price', TIER_SELLING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create a new listing',
@@ -104,11 +103,11 @@ export class MarketplaceController {
   }
 
   @Get('listings')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Search listings',
-    description: 'Search and filter marketplace listings. Public endpoint with optional authentication for personalized results.',
+    description: 'Search and filter marketplace listings. Requires authentication — results are scoped to YOUR university (rev-2: browse is never cross-campus).',
   })
   @ApiResponse({
     status: 200,
@@ -155,7 +154,7 @@ export class MarketplaceController {
   }
 
   @Get('listings/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get listing by ID',
@@ -184,9 +183,7 @@ export class MarketplaceController {
           viewCount: 125,
           favoriteCount: 15,
           isFavorited: true,
-          deliveryMethods: ['pickup', 'meetup'],
-          pickupAddress: 'Shop 12, Student Union Building',
-          meetupPoints: ['Faculty of Science Building', 'Main gate'],
+          meetupPoints: ['Faculty of Science Building', 'Main gate', 'Library Building'],
           imageUrls: [
             'https://storage.example.com/listings/img1.jpg',
             'https://storage.example.com/listings/img2.jpg',
@@ -220,12 +217,9 @@ export class MarketplaceController {
   }
 
   @Patch('listings/:id')
-  @UseGuards(JwtAuthGuard, TierGuard, TierAmountLimitGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('price', {
-    [VerificationTier.TIER_1]: 50000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('price', TIER_SELLING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Update a listing',
@@ -274,7 +268,7 @@ export class MarketplaceController {
   }
 
   @Delete('listings/:id')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
@@ -312,7 +306,7 @@ export class MarketplaceController {
   }
 
   @Patch('listings/:id/sold')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @ApiOperation({
@@ -355,7 +349,7 @@ export class MarketplaceController {
   }
 
   @Post('favorites/:listingId')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
@@ -392,7 +386,7 @@ export class MarketplaceController {
   }
 
   @Delete('favorites/:listingId')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
@@ -428,7 +422,7 @@ export class MarketplaceController {
   }
 
   @Get('favorites')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
   @ApiBearerAuth()
   @ApiOperation({
@@ -478,7 +472,7 @@ export class MarketplaceController {
   }
 
   @Get('my-listings')
-  @UseGuards(JwtAuthGuard, TierGuard)
+  @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
   @MinTier(VerificationTier.TIER_1)
   @ApiBearerAuth()
   @ApiOperation({

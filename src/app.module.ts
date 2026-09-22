@@ -34,6 +34,10 @@ import { DevModule } from './modules/dev/dev.module';
 import { BullBoardModule } from './modules/bull-board/bull-board.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PermissionsModule } from './common/modules/permissions.module';
+import { TimingPolicyModule } from './common/modules/timing-policy.module';
+import { VendorsModule } from './modules/vendors/vendors.module';
+import { CartModule } from './modules/cart/cart.module';
+import { CheckoutModule } from './modules/checkout/checkout.module';
 import { TransactionPinModule } from './modules/transaction-pin/transaction-pin.module';
 import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
 
@@ -133,6 +137,10 @@ import { ResponseTransformInterceptor } from './common/interceptors/response-tra
     BullBoardModule,
     AdminModule,
     PermissionsModule,
+    TimingPolicyModule,
+    VendorsModule,
+    CartModule,
+    CheckoutModule,
     TransactionPinModule,
   ],
   providers: [

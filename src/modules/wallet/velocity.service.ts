@@ -17,7 +17,11 @@ import {
   TransactionCapType,
   TransactionCapPeriod,
 } from '../../database/entities/transaction-cap.entity';
-import { User, VerificationTier } from '../../database/entities/user.entity';
+import { AccountType, User, VerificationTier } from '../../database/entities/user.entity';
+import {
+  VendorProfile,
+  VendorStatus,
+} from '../../database/entities/vendor-profile.entity';
 import { toKobo, toNaira } from '../../common/utils/money';
 
 /** { tier: { capType: { period: amountNaira | null } } } — null = unlimited. */
@@ -84,9 +88,23 @@ export class VelocityService {
     // Resolve tier fresh from the DB — never trust a possibly-stale JWT tier.
     const user = await manager.findOne(User, {
       where: { id: userId },
-      select: ['id', 'verificationTier'],
+      select: ['id', 'verificationTier', 'accountType'],
     });
-    const tier = user?.verificationTier ?? VerificationTier.NONE;
+    let tier = user?.verificationTier ?? VerificationTier.NONE;
+
+    // Vendor-only accounts hold no student tier: active vendors move money
+    // under TIER_2 caps; everything pre-approval is bounded by TIER_0 caps
+    // (rev-2 spec 01.5). Resolved fresh here, same as the tier itself.
+    if (user?.accountType === AccountType.VENDOR) {
+      const profile = await manager.findOne(VendorProfile, {
+        where: { userId },
+        select: ['id', 'status'],
+      });
+      tier =
+        profile?.status === VendorStatus.ACTIVE
+          ? VerificationTier.TIER_2
+          : VerificationTier.TIER_0;
+    }
 
     // v1 enforces the DAILY window only.
     const period = TransactionCapPeriod.DAILY;

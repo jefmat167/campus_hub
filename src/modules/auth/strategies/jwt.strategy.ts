@@ -7,12 +7,14 @@ import { Repository } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { Request } from 'express';
-import { User } from '../../../database/entities/user.entity';
+import { AccountType, User } from '../../../database/entities/user.entity';
+import { VendorProfile } from '../../../database/entities/vendor-profile.entity';
 
 export interface JwtPayload {
   sub: string; // userId
   email: string;
-  universityId: string;
+  universityId: string | null; // null for vendor-only accounts (rev-2 01.5)
+  accountType?: string; // 'student' | 'vendor' (absent on pre-rev-2 tokens)
   jti?: string; // JWT ID for blacklisting
   iat?: number;
   exp?: number;
@@ -39,6 +41,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     configService: ConfigService,
     @InjectRepository(User)
     private userRepo: Repository<User>,
+    @InjectRepository(VendorProfile)
+    private vendorProfileRepo: Repository<VendorProfile>,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
   ) {
@@ -81,7 +85,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         'isDeactivated',
         'profilePhotoUrl',
         'yearOfStudy',
-        'role'
+        'role',
+        'accountType'
       ],
     });
 
@@ -102,6 +107,17 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     // Check if user is banned
     if (user.isBanned && (!user.banExpiresAt || user.banExpiresAt > new Date())) {
       throw new UnauthorizedException('Your account has been suspended');
+    }
+
+    // Vendor-only accounts hold no student tier — attach the vendor-profile
+    // status so guards can compute the effective tier without extra queries
+    // (common/utils/effective-tier.ts). Student requests skip the lookup.
+    if (user.accountType === AccountType.VENDOR) {
+      const profile = await this.vendorProfileRepo.findOne({
+        where: { userId: user.id },
+        select: ['id', 'status'],
+      });
+      user.vendorStatus = profile?.status ?? null;
     }
 
     return user;

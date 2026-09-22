@@ -18,6 +18,7 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { UniversitiesService } from './universities.service';
+import { UniversitySettingsService } from './university-settings.service';
 import { AdminAuditService } from '../admin/admin-audit.service';
 import { AuditAction, AuditTargetType } from '../../database/entities/admin-audit-log.entity';
 import { CreateUniversityDto } from './dto/create-university.dto';
@@ -27,6 +28,9 @@ import { UpdateFacultyDto } from './dto/update-faculty.dto';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
 import { AdminListUniversitiesDto } from './dto/admin-list-universities.dto';
+import { UpdateUniversitySettingsDto } from './dto/update-university-settings.dto';
+import { CreateDropPointDto } from './dto/create-drop-point.dto';
+import { UpdateDropPointDto } from './dto/update-drop-point.dto';
 
 @ApiTags('Universities (Admin)')
 @Controller('admin/universities')
@@ -35,6 +39,7 @@ import { AdminListUniversitiesDto } from './dto/admin-list-universities.dto';
 export class AdminUniversitiesController {
   constructor(
     private readonly universitiesService: UniversitiesService,
+    private readonly universitySettingsService: UniversitySettingsService,
     private readonly auditService: AdminAuditService,
   ) { }
 
@@ -758,5 +763,188 @@ export class AdminUniversitiesController {
     );
 
     return { success: true, message: 'Department activated' };
+  }
+
+  // ─── Per-university settings & drop points (marketplace rev-2, spec 01.3/04.1) ───
+
+  @Get(':id/settings')
+  @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
+  @ApiOperation({
+    summary: 'Get per-university money settings (overrides + effective values)',
+    description:
+      'Returns the raw override row (null when none exists), the platform defaults, and the ' +
+      "effective values the money paths actually use. Fees are resolved by the BUYER's university.",
+  })
+  @ApiParam({ name: 'id', description: 'University UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Settings for the university',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          defaults: {
+            p2pFeePercent: 2.5,
+            vendorFeePercent: 2.5,
+            cancellationFeePercent: 10,
+            cancellationFeeEnabled: true,
+          },
+          overrides: null,
+          effective: {
+            p2pFeePercent: 2.5,
+            vendorFeePercent: 2.5,
+            cancellationFeePercent: 10,
+            cancellationFeeEnabled: true,
+          },
+        },
+      },
+    },
+  })
+  async getUniversitySettings(@Param('id', ParseUUIDPipe) id: string) {
+    const data = await this.universitySettingsService.getForAdmin(id);
+    return { success: true, data };
+  }
+
+  @Patch(':id/settings')
+  @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
+  @ApiOperation({
+    summary: 'Update per-university money settings',
+    description:
+      'Partial update: omitted keys are untouched; an explicit null clears that override back ' +
+      'to the platform default. Takes effect immediately (cache busted on write).',
+  })
+  @ApiParam({ name: 'id', description: 'University UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Settings updated',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'f1e2d3c4-b5a6-7890-abcd-ef1234567890',
+          universityId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          p2pFeePercent: 3,
+          vendorFeePercent: null,
+          cancellationFeePercent: null,
+          cancellationFeeEnabled: null,
+        },
+        message: 'University settings updated',
+      },
+    },
+  })
+  async updateUniversitySettings(
+    @CurrentAdmin('id') adminId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateUniversitySettingsDto,
+  ) {
+    const settings = await this.universitySettingsService.updateSettings(id, dto);
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.UNIVERSITY_SETTINGS_UPDATE,
+      AuditTargetType.UNIVERSITY,
+      id,
+      undefined,
+      dto as unknown as Record<string, unknown>,
+    );
+
+    return {
+      success: true,
+      data: settings,
+      message: 'University settings updated',
+    };
+  }
+
+  @Get(':id/drop-points')
+  @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
+  @ApiOperation({
+    summary: 'List drop points for a university (including inactive)',
+  })
+  @ApiParam({ name: 'id', description: 'University UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Drop points',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 'd1e2f3a4-b5c6-7890-abcd-ef1234567890',
+            universityId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            name: 'Main Gate',
+            directions: 'Security post beside the pedestrian gate',
+            isActive: true,
+          },
+        ],
+      },
+    },
+  })
+  async listDropPoints(@Param('id', ParseUUIDPipe) id: string) {
+    const dropPoints = await this.universitySettingsService.listDropPoints(
+      id,
+      true,
+    );
+    return { success: true, data: dropPoints };
+  }
+
+  @Post(':id/drop-points')
+  @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
+  @ApiOperation({
+    summary: 'Create a drop point (vetted public handover location)',
+  })
+  @ApiParam({ name: 'id', description: 'University UUID' })
+  @ApiResponse({ status: 201, description: 'Drop point created' })
+  async createDropPoint(
+    @CurrentAdmin('id') adminId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateDropPointDto,
+  ) {
+    const dropPoint = await this.universitySettingsService.createDropPoint(
+      id,
+      dto,
+    );
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.DROP_POINT_CREATE,
+      AuditTargetType.UNIVERSITY,
+      dropPoint.id,
+      undefined,
+      { universityId: id, ...dto } as unknown as Record<string, unknown>,
+    );
+
+    return { success: true, data: dropPoint, message: 'Drop point created' };
+  }
+
+  @Patch('drop-points/:dropPointId')
+  @RequirePermission(AdminPermissions.UNIVERSITIES_MANAGE)
+  @ApiOperation({
+    summary: 'Update a drop point',
+    description:
+      'Rename, change directions, or soft-disable (isActive: false). Points are never ' +
+      'hard-deleted — historical orders keep referencing their snapshot.',
+  })
+  @ApiParam({ name: 'dropPointId', description: 'Drop point UUID' })
+  @ApiResponse({ status: 200, description: 'Drop point updated' })
+  async updateDropPoint(
+    @CurrentAdmin('id') adminId: string,
+    @Param('dropPointId', ParseUUIDPipe) dropPointId: string,
+    @Body() dto: UpdateDropPointDto,
+  ) {
+    const dropPoint = await this.universitySettingsService.updateDropPoint(
+      dropPointId,
+      dto,
+    );
+
+    await this.auditService.log(
+      adminId,
+      AuditAction.DROP_POINT_UPDATE,
+      AuditTargetType.UNIVERSITY,
+      dropPointId,
+      undefined,
+      dto as unknown as Record<string, unknown>,
+    );
+
+    return { success: true, data: dropPoint, message: 'Drop point updated' };
   }
 }

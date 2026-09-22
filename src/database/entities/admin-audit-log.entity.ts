@@ -41,6 +41,14 @@ export enum AuditAction {
   ADMIN_PERMISSION_REVOKE = 'admin_permission_revoke',
   ADMIN_DEACTIVATE = 'admin_deactivate',
   TRANSACTION_CAP_UPDATE = 'transaction_cap_update',
+  UNIVERSITY_SETTINGS_UPDATE = 'university_settings_update',
+  DROP_POINT_CREATE = 'drop_point_create',
+  DROP_POINT_UPDATE = 'drop_point_update',
+  VENDOR_APPROVE = 'vendor_approve',
+  VENDOR_REJECT = 'vendor_reject',
+  VENDOR_SUSPEND = 'vendor_suspend',
+  VENDOR_REACTIVATE = 'vendor_reactivate',
+  VENDOR_CAC_VERIFY = 'vendor_cac_verify',
 }
 
 export enum AuditTargetType {

@@ -1,0 +1,28 @@
+# The entire verification story (there is no linter): type-check + unit tests.
+# Unit tests are self-contained (no Postgres/Redis needed) — see jest.config.js.
+name: CI
+
+on:
+  push:
+    branches: [main, zik-dev, marketplace-rewrite]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test -- --ci

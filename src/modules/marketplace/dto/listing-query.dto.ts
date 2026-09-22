@@ -16,7 +16,7 @@ import {
   ListingCondition,
   VisibilityScope,
   ListingStatus,
-  ListingType,
+  ListingKind,
 } from '../../../database/entities/listing.entity';
 
 export enum ListingSortBy {
@@ -80,13 +80,17 @@ export class ListingQueryDto {
   conditions?: ListingCondition[];
 
   @ApiPropertyOptional({
-    description: 'Filter by listing type',
-    enum: ListingType,
-    example: ListingType.SELL,
+    description:
+      'Restrict the unified feed to listing kinds (student items, shop goods, bookable services). Default: all.',
+    enum: ListingKind,
+    isArray: true,
+    example: [ListingKind.P2P, ListingKind.VENDOR_GOODS],
   })
-  @IsEnum(ListingType)
+  @IsArray()
+  @IsEnum(ListingKind, { each: true })
   @IsOptional()
-  type?: ListingType;
+  @Transform(({ value }) => (typeof value === 'string' ? [value] : value))
+  kinds?: ListingKind[];
 
   @ApiPropertyOptional({
     description: 'Minimum price in Naira',

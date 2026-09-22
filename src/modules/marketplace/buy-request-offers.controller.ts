@@ -21,11 +21,13 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import {
   TierGuard,
   TierAmountLimit,
   TierAmountLimitGuard,
 } from '../../common/guards/tier.guard';
+import { TIER_BUYING_LIMITS } from '../../common/constants/tier-limits';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
 import { User, VerificationTier } from '../../database/entities/user.entity';
@@ -35,11 +37,12 @@ import {
   CreateBuyRequestOfferDto,
   RespondBuyRequestOfferDto,
   BuyRequestOfferQueryDto,
+  MyResponsesQueryDto,
 } from './dto';
 
 @ApiTags('Marketplace - Buy Request Offers')
 @Controller('marketplace/requests')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @ApiBearerAuth()
 export class BuyRequestOffersController {
   constructor(private readonly offersService: BuyRequestOffersService) {}
@@ -47,10 +50,7 @@ export class BuyRequestOffersController {
   @Post(':requestId/offers')
   @UseGuards(TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('proposedPrice', {
-    [VerificationTier.TIER_1]: 60000,
-    [VerificationTier.TIER_2]: null, // unlimited
-  })
+  @TierAmountLimit('proposedPrice', TIER_BUYING_LIMITS)
   @ApiOperation({
     summary: 'Submit an offer to a buy request',
     description:
@@ -103,9 +103,6 @@ export class BuyRequestOffersController {
     description: 'Requester views all offers received on their buy request.',
   })
   @ApiParam({ name: 'requestId', description: 'Buy Request UUID' })
-  @ApiQuery({ name: 'status', enum: BuyRequestOfferStatus, required: false })
-  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default 20)' })
   @ApiResponse({
     status: 200,
     description: 'Offers retrieved successfully',
@@ -141,16 +138,14 @@ export class BuyRequestOffersController {
   async getOffersForRequest(
     @Param('requestId', ParseUUIDPipe) requestId: string,
     @CurrentUser() user: User,
-    @Query('status') status?: BuyRequestOfferStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: BuyRequestOfferQueryDto,
   ) {
     const result = await this.offersService.getOffersForRequest(
       requestId,
       user.id,
-      status,
-      page ? Number(page) : 1,
-      limit ? Number(limit) : 20,
+      query.status,
+      query.page ?? 1,
+      query.limit ?? 20,
     );
     return {
       success: true,
@@ -239,7 +234,7 @@ export class BuyRequestOffersController {
  */
 @ApiTags('Marketplace - My Offers')
 @Controller('marketplace/offers')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @MinTier(VerificationTier.TIER_1)
 @ApiBearerAuth()
 export class MyBuyRequestOffersController {
@@ -248,7 +243,8 @@ export class MyBuyRequestOffersController {
   @Get('my-responses')
   @ApiOperation({
     summary: 'Get offers I have submitted',
-    description: 'Retrieves all offers the current user has submitted as a responder.',
+    description:
+      'Retrieves all offers the current user has submitted as a responder. Query: status, page, limit, and buyRequestId to narrow to one request (e.g. "my offer on this request").',
   })
   @ApiResponse({
     status: 200,
@@ -280,13 +276,14 @@ export class MyBuyRequestOffersController {
   })
   async getMyResponses(
     @CurrentUser() user: User,
-    @Query() query: BuyRequestOfferQueryDto,
+    @Query() query: MyResponsesQueryDto,
   ) {
     const result = await this.offersService.getResponderOffers(
       user.id,
       query.status,
       query.page,
       query.limit,
+      query.buyRequestId,
     );
     return {
       success: true,

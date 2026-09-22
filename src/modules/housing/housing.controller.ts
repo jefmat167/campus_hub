@@ -21,6 +21,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { requireUniversityId } from '../../common/utils/student-identity';
 import { AdminJwtAuthGuard } from '../admin/guards/admin-jwt-auth.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -192,7 +193,7 @@ export class HousingController {
   async createListing(@CurrentUser() user: User, @Body() dto: CreateHousingDto) {
     const listing = await this.housingService.createListing(
       user.id,
-      user.universityId,
+      requireUniversityId(user),
       dto,
     );
     return {
@@ -215,7 +216,7 @@ export class HousingController {
     @Query() dto: SearchHousingDto,
   ) {
     const { listings, total } = await this.housingService.searchListings(
-      user.universityId,
+      requireUniversityId(user),
       dto,
     );
     return {

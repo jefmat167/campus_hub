@@ -14,6 +14,9 @@ interface ErrorResponse {
   error: string;
   timestamp: string;
   path: string;
+  // Structured fields passed through from the thrower (code, requiredTier,
+  // limit, scope, issues, …) — additive, never overriding the keys above.
+  [key: string]: unknown;
 }
 
 @Catch()
@@ -28,6 +31,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let status: number;
     let message: string | string[];
     let error: string;
+    let extras: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -37,6 +41,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
         const responseObj = exceptionResponse as Record<string, unknown>;
         message = (responseObj.message as string | string[]) || exception.message;
         error = (responseObj.error as string) || exception.name;
+        // Pass through the thrower's structured fields (tier guard's
+        // requiredTier/limit, PIN codes, checkout issues[], …) so clients
+        // can branch on them instead of parsing message strings.
+        const {
+          statusCode: _statusCode,
+          message: _message,
+          error: _error,
+          ...rest
+        } = responseObj;
+        extras = rest;
       } else {
         message = exception.message;
         error = exception.name;
@@ -57,7 +71,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       error = 'InternalServerError';
     }
 
+    // Extras first: the canonical keys always win over anything the thrower set.
     const errorResponse: ErrorResponse = {
+      ...extras,
       statusCode: status,
       message,
       error,

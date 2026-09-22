@@ -138,6 +138,12 @@ export class WalletTransaction {
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown>;
 
+  // Which market produced this row ('p2p' | 'vendor'; rev-2 spec 01.1) —
+  // lets a student-vendor filter their history down to business income.
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  @Index()
+  market: string | null;
+
   @Column({ type: 'bigint', nullable: true, transformer: KoboColumnTransformer })
   balanceBefore: number;
 

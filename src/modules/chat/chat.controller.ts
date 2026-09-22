@@ -20,6 +20,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StudentAccountGuard } from '../../common/guards/student-account.guard';
 import { TierGuard } from '../../common/guards/tier.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MinTier } from '../../common/decorators/min-tier.decorator';
@@ -33,7 +34,7 @@ import {
 
 @ApiTags('Chat')
 @Controller('chat')
-@UseGuards(JwtAuthGuard, TierGuard)
+@UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard)
 @MinTier(VerificationTier.TIER_0)
 @ApiBearerAuth()
 export class ChatController {
