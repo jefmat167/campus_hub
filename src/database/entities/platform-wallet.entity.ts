@@ -15,6 +15,8 @@ export enum PlatformTransactionType {
   ESCROW_FEE = 'escrow_fee',
   CANCELLATION_FEE = 'cancellation_fee',
   WITHDRAWAL_FEE = 'withdrawal_fee',
+  /** One-time ₦100 BVN/NIN (Tier 2) verification fee — migration 1742504500000. */
+  KYC_FEE = 'kyc_fee',
 }
 
 @Entity('platform_wallet')

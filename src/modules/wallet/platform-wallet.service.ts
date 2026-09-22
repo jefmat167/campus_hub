@@ -8,6 +8,13 @@ import {
   PlatformTransactionType,
 } from '../../database/entities/platform-wallet.entity';
 
+const DEFAULT_DESCRIPTIONS: Record<PlatformTransactionType, string> = {
+  [PlatformTransactionType.ESCROW_FEE]: 'Platform fee from escrow completion',
+  [PlatformTransactionType.CANCELLATION_FEE]: 'Platform share of cancellation fee',
+  [PlatformTransactionType.WITHDRAWAL_FEE]: 'Withdrawal fee',
+  [PlatformTransactionType.KYC_FEE]: 'KYC (BVN/NIN) verification fee',
+};
+
 @Injectable()
 export class PlatformWalletService {
   private readonly logger = new Logger(PlatformWalletService.name);
@@ -91,11 +98,7 @@ export class PlatformWalletService {
         amount,
         reference: this.generateReference(type),
         escrowId,
-        description:
-          description ||
-          (type === PlatformTransactionType.ESCROW_FEE
-            ? 'Platform fee from escrow completion'
-            : 'Platform share of cancellation fee'),
+        description: description || DEFAULT_DESCRIPTIONS[type],
         balanceBefore,
         balanceAfter: Number(wallet.balance),
       });
