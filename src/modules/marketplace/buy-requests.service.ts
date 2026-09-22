@@ -3,19 +3,22 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder, Brackets } from 'typeorm';
+import { Repository, SelectQueryBuilder, Brackets, DataSource } from 'typeorm';
 import { toKobo } from '../../common/utils/money';
 import {
   BuyRequest,
   BuyRequestStatus,
   RequestUrgency,
 } from '../../database/entities/buy-request.entity';
+import { BuyRequestOffer } from '../../database/entities/buy-request-offer.entity';
 import { VisibilityScope } from '../../database/entities/listing.entity';
 import { User } from '../../database/entities/user.entity';
 import { Faculty } from '../../database/entities/faculty.entity';
 import { Department } from '../../database/entities/department.entity';
+import { BuyRequestOffersService } from './buy-request-offers.service';
 import {
   CreateBuyRequestDto,
   UpdateBuyRequestDto,
@@ -35,10 +38,15 @@ export class BuyRequestsService {
     private readonly facultyRepository: Repository<Faculty>,
     @InjectRepository(Department)
     private readonly departmentRepository: Repository<Department>,
+    private readonly buyRequestOffersService: BuyRequestOffersService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
-   * Sanitize requester object to remove sensitive data
+   * Public requester card. No email / phone: the browse feed is visible to
+   * every student on campus, and contact happens through the chat thread the
+   * offer creates (the marketplace seller card still carries contact details —
+   * a seller advertises; a requester merely asks).
    */
   private sanitizeRequester(requester: User): Record<string, any> {
     if (!requester) return requester;
@@ -46,8 +54,6 @@ export class BuyRequestsService {
     return {
       id: requester.id,
       fullName: requester.fullName,
-      email: requester.email,
-      phone: requester.phone,
       profilePhotoUrl: requester.profilePhotoUrl,
       verificationTier: requester.verificationTier,
       faculty: requester.faculty
@@ -96,39 +102,93 @@ export class BuyRequestsService {
       throw new BadRequestException('Maximum budget must be greater than or equal to minimum budget');
     }
 
-    // Validate facultyId if provided
-    if (dto.facultyId) {
-      const faculty = await this.facultyRepository.findOne({
-        where: { id: dto.facultyId },
-      });
-      if (!faculty) {
-        throw new BadRequestException('Faculty not found');
-      }
-    }
-
-    // Validate departmentId if provided
-    if (dto.departmentId) {
-      const department = await this.departmentRepository.findOne({
-        where: { id: dto.departmentId },
-      });
-      if (!department) {
-        throw new BadRequestException('Department not found');
-      }
-    }
+    const { facultyId, departmentId } = await this.resolveScopeTargets(
+      {
+        universityId: user.universityId,
+        facultyId: user.facultyId,
+        departmentId: user.departmentId,
+      },
+      dto.visibilityScope ?? VisibilityScope.UNIVERSITY,
+      dto.facultyId,
+      dto.departmentId,
+    );
 
     // Create the buy request
     const buyRequest = this.buyRequestRepository.create({
       ...dto,
       requesterId: userId,
       universityId: user.universityId,
-      facultyId: dto.facultyId ?? null,
-      departmentId: dto.departmentId ?? null,
+      facultyId,
+      departmentId,
       status: BuyRequestStatus.OPEN,
     });
 
     const savedRequest = await this.buyRequestRepository.save(buyRequest);
 
     return this.getBuyRequestById(savedRequest.id, userId);
+  }
+
+  /**
+   * Pin a request to the faculty / department its visibility scope names.
+   * `applyVisibilityFilter` matches FACULTY-scoped requests on
+   * `request.facultyId = viewer.facultyId` (same for DEPARTMENT), so a scoped
+   * request WITHOUT an id was visible to nobody but its owner. Default the ids
+   * from the requester's own academic identity, derive the faculty from a
+   * department, and refuse ids outside the requester's university / faculty.
+   */
+  private async resolveScopeTargets(
+    user: { universityId: string; facultyId?: string | null; departmentId?: string | null },
+    scope: VisibilityScope,
+    facultyIdInput: string | null | undefined,
+    departmentIdInput: string | null | undefined,
+  ): Promise<{ facultyId: string | null; departmentId: string | null }> {
+    let facultyId = facultyIdInput ?? null;
+    let departmentId = departmentIdInput ?? null;
+
+    if (scope === VisibilityScope.DEPARTMENT) {
+      departmentId = departmentId ?? user.departmentId ?? null;
+      if (!departmentId) {
+        throw new BadRequestException(
+          'A department is required for a department-scoped request — set one on your profile or pass departmentId',
+        );
+      }
+    }
+
+    if (departmentId) {
+      const department = await this.departmentRepository.findOne({
+        where: { id: departmentId },
+      });
+      if (!department) {
+        throw new BadRequestException('Department not found');
+      }
+      if (facultyId && department.facultyId !== facultyId) {
+        throw new BadRequestException('Department does not belong to the given faculty');
+      }
+      facultyId = facultyId ?? department.facultyId;
+    }
+
+    if (scope === VisibilityScope.FACULTY) {
+      facultyId = facultyId ?? user.facultyId ?? null;
+      if (!facultyId) {
+        throw new BadRequestException(
+          'A faculty is required for a faculty-scoped request — set one on your profile or pass facultyId',
+        );
+      }
+    }
+
+    if (facultyId) {
+      const faculty = await this.facultyRepository.findOne({
+        where: { id: facultyId },
+      });
+      if (!faculty) {
+        throw new BadRequestException('Faculty not found');
+      }
+      if (faculty.universityId !== user.universityId) {
+        throw new BadRequestException('Faculty does not belong to your university');
+      }
+    }
+
+    return { facultyId, departmentId };
   }
 
   async updateBuyRequest(
@@ -159,27 +219,24 @@ export class BuyRequestsService {
       throw new BadRequestException('Maximum budget must be greater than or equal to minimum budget');
     }
 
-    // Validate facultyId if provided
-    if (dto.facultyId) {
-      const faculty = await this.facultyRepository.findOne({
-        where: { id: dto.facultyId },
-      });
-      if (!faculty) {
-        throw new BadRequestException('Faculty not found');
-      }
-    }
+    // Re-resolve the scope targets against the merged state, so a scope change
+    // (or a new faculty/department) is validated exactly like on create.
+    const requester = await this.userRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'universityId', 'facultyId', 'departmentId'],
+    });
+    const { facultyId, departmentId } = await this.resolveScopeTargets(
+      { ...requester, universityId: buyRequest.universityId },
+      dto.visibilityScope ?? buyRequest.visibilityScope,
+      dto.facultyId ?? buyRequest.facultyId,
+      dto.departmentId ?? buyRequest.departmentId,
+    );
 
-    // Validate departmentId if provided
-    if (dto.departmentId) {
-      const department = await this.departmentRepository.findOne({
-        where: { id: dto.departmentId },
-      });
-      if (!department) {
-        throw new BadRequestException('Department not found');
-      }
-    }
-
-    await this.buyRequestRepository.update(requestId, dto);
+    await this.buyRequestRepository.update(requestId, {
+      ...dto,
+      facultyId,
+      departmentId,
+    });
 
     return this.getBuyRequestById(requestId, userId);
   }
@@ -240,6 +297,13 @@ export class BuyRequestsService {
     qb.andWhere('request.status = :status', {
       status: query.status || BuyRequestStatus.OPEN,
     });
+
+    // Narrow to one scope level (within what the viewer may see)
+    if (query.visibilityScope) {
+      qb.andWhere('request.visibilityScope = :visibilityScopeFilter', {
+        visibilityScopeFilter: query.visibilityScope,
+      });
+    }
 
     // Search by text
     if (query.search) {
@@ -448,30 +512,32 @@ export class BuyRequestsService {
     qb.addOrderBy('request.id', 'ASC');
   }
 
+  /** Soft delete: status → CANCELLED, and every pending offer on it is rejected. */
   async cancelBuyRequest(requestId: string, userId: string): Promise<void> {
-    const buyRequest = await this.buyRequestRepository.findOne({
-      where: { id: requestId },
-    });
-
-    if (!buyRequest) {
-      throw new NotFoundException('Buy request not found');
-    }
-
-    if (buyRequest.requesterId !== userId) {
-      throw new ForbiddenException('You can only cancel your own buy requests');
-    }
-
-    if (buyRequest.status !== BuyRequestStatus.OPEN) {
-      throw new BadRequestException('Only open buy requests can be cancelled');
-    }
-
-    // Soft delete by changing status
-    await this.buyRequestRepository.update(requestId, {
-      status: BuyRequestStatus.CANCELLED,
-    });
+    await this.closeBuyRequest(requestId, userId, BuyRequestStatus.CANCELLED);
   }
 
+  /** Requester closes the request themselves; pending offers are rejected. */
   async markAsFulfilled(requestId: string, userId: string): Promise<BuyRequest> {
+    await this.closeBuyRequest(requestId, userId, BuyRequestStatus.FULFILLED);
+    return this.getBuyRequestById(requestId, userId);
+  }
+
+  /**
+   * Close an OPEN request (cancel or manual fulfil) in ONE transaction with the
+   * cascade to its offers: the request flips via a conditional update (0 rows
+   * → someone else closed it first, e.g. an accept landing concurrently) and
+   * every PENDING offer becomes REJECTED. Losers are notified after commit.
+   * Without the cascade, a closed request kept live offers that could still
+   * be accepted — creating an escrow on a cancelled request.
+   */
+  private async closeBuyRequest(
+    requestId: string,
+    userId: string,
+    target: BuyRequestStatus.CANCELLED | BuyRequestStatus.FULFILLED,
+  ): Promise<void> {
+    const cancelling = target === BuyRequestStatus.CANCELLED;
+
     const buyRequest = await this.buyRequestRepository.findOne({
       where: { id: requestId },
     });
@@ -481,18 +547,69 @@ export class BuyRequestsService {
     }
 
     if (buyRequest.requesterId !== userId) {
-      throw new ForbiddenException('You can only update your own buy requests');
+      throw new ForbiddenException(
+        cancelling
+          ? 'You can only cancel your own buy requests'
+          : 'You can only update your own buy requests',
+      );
     }
 
     if (buyRequest.status !== BuyRequestStatus.OPEN) {
-      throw new BadRequestException('Only open buy requests can be marked as fulfilled');
+      throw new BadRequestException(
+        cancelling
+          ? 'Only open buy requests can be cancelled'
+          : 'Only open buy requests can be marked as fulfilled',
+      );
     }
 
-    await this.buyRequestRepository.update(requestId, {
-      status: BuyRequestStatus.FULFILLED,
-    });
+    const now = new Date();
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    return this.getBuyRequestById(requestId, userId);
+    let rejectedOffers: BuyRequestOffer[] = [];
+    try {
+      const flip = await queryRunner.manager.update(
+        BuyRequest,
+        { id: requestId, status: BuyRequestStatus.OPEN },
+        { status: target },
+      );
+      if (!flip.affected) {
+        throw new ConflictException('This buy request is no longer open');
+      }
+
+      rejectedOffers = await this.buyRequestOffersService.rejectPendingOffersForRequest(
+        requestId,
+        now,
+        queryRunner.manager,
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.buyRequestOffersService.notifyOffersRejected(
+      rejectedOffers,
+      cancelling
+        ? {
+            chatText: 'This buy request has been cancelled by the requester.',
+            chatType: 'request_cancelled',
+            title: 'Buy request cancelled',
+            body: (o) =>
+              `"${o.buyRequest?.title ?? buyRequest.title}" was cancelled by the requester, so your offer is no longer active.`,
+          }
+        : {
+            chatText: 'The requester marked this buy request as fulfilled.',
+            chatType: 'request_fulfilled',
+            title: 'Buy request fulfilled',
+            body: (o) =>
+              `The requester closed "${o.buyRequest?.title ?? buyRequest.title}" as fulfilled, so your offer is no longer active.`,
+          },
+    );
   }
 
   async getUserBuyRequests(

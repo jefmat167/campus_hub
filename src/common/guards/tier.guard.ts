@@ -94,7 +94,8 @@ export const TIER_AMOUNT_LIMIT_KEY = 'tierAmountLimit';
  * Interface for tier-based amount limits
  */
 export interface TierAmountLimitConfig {
-  field: string;
+  /** One body field, or several — every field that is present is capped. */
+  field: string | string[];
   limits: Partial<Record<VerificationTier, number | null>>;
 }
 
@@ -111,11 +112,15 @@ export interface TierAmountLimitConfig {
  * @Post('escrow')
  * createEscrow() { ... }
  * ```
+ *
+ * Pass an array to cap several fields at once — e.g. a budget range
+ * `['budgetMax', 'budgetMin']`, so omitting the optional max can't dodge the
+ * cap by carrying the whole amount in the min.
  */
 import { SetMetadata } from '@nestjs/common';
 
 export const TierAmountLimit = (
-  field: string,
+  field: string | string[],
   limits: Partial<Record<VerificationTier, number | null>>,
 ) => SetMetadata(TIER_AMOUNT_LIMIT_KEY, { field, limits });
 
@@ -162,22 +167,26 @@ export class TierAmountLimitGuard implements CanActivate {
       return true;
     }
 
-    const amount = this.getNestedValue(body, config.field);
+    const fields = Array.isArray(config.field) ? config.field : [config.field];
 
-    if (typeof amount !== 'number') {
-      // If amount is not provided or not a number, let validation handle it
-      return true;
-    }
+    for (const field of fields) {
+      const amount = this.getNestedValue(body, field);
 
-    if (amount > limit) {
-      throw new ForbiddenException({
-        message: `Amount exceeds your tier limit. Maximum allowed: ₦${limit.toLocaleString()}`,
-        field: config.field,
-        limit,
-        amount,
-        currentTier: userTier,
-        upgradeRequired: true,
-      });
+      if (typeof amount !== 'number') {
+        // Not provided or not a number — DTO validation owns that case
+        continue;
+      }
+
+      if (amount > limit) {
+        throw new ForbiddenException({
+          message: `Amount exceeds your tier limit. Maximum allowed: ₦${limit.toLocaleString()}`,
+          field,
+          limit,
+          amount,
+          currentTier: userTier,
+          upgradeRequired: true,
+        });
+      }
     }
 
     return true;

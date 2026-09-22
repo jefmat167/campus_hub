@@ -379,7 +379,10 @@ export class EscrowController {
           validUntil: deliveryCode.validUntil,
         },
       },
-      message: `Delivery scheduled for ${dto.deliveryDate} at ${dto.deliveryTime}. A delivery code has been sent to the buyer.`,
+      message:
+        dto.deliveryDate && dto.deliveryTime
+          ? `Delivery scheduled for ${dto.deliveryDate} at ${dto.deliveryTime}. A delivery code has been sent to the buyer.`
+          : 'Marked ready. A delivery code has been sent to the buyer.',
     };
   }
 

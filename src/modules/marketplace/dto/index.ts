@@ -7,3 +7,4 @@ export * from './buy-request-query.dto';
 export * from './create-buy-request-offer.dto';
 export * from './respond-buy-request-offer.dto';
 export * from './buy-request-offer-query.dto';
+export * from './my-buy-requests-query.dto';

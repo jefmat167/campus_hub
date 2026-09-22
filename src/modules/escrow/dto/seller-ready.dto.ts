@@ -1,4 +1,12 @@
-import { IsDateString, IsOptional, Matches } from 'class-validator';
+import {
+  IsDateString,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class SellerReadyDto {
@@ -19,4 +27,18 @@ export class SellerReadyDto {
   })
   @IsOptional()
   deliveryTime?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Meet-up location. Required — and only accepted — for buy-request orders, which have no meet-up point snapshotted at order time (checkout orders carry the buyer\'s chosen point and reject this field).',
+    example: 'Faculty of Engineering, near the main gate',
+    minLength: 3,
+    maxLength: 500,
+  })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsOptional()
+  deliveryLocation?: string;
 }

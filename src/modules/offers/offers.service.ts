@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
@@ -8,8 +9,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, Not, In } from 'typeorm';
 import { Offer, OfferStatus } from '../../database/entities/offer.entity';
-import { Listing, ListingStatus } from '../../database/entities/listing.entity';
+import { Listing, ListingKind, ListingStatus } from '../../database/entities/listing.entity';
 import { User } from '../../database/entities/user.entity';
+import { NotificationType } from '../../database/entities/notification.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   CreateOfferDto,
   RespondOfferDto,
@@ -18,6 +21,8 @@ import {
 
 @Injectable()
 export class OffersService {
+  private readonly logger = new Logger(OffersService.name);
+
   constructor(
     @InjectRepository(Offer)
     private readonly offerRepository: Repository<Offer>,
@@ -25,7 +30,38 @@ export class OffersService {
     private readonly listingRepository: Repository<Listing>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly notificationsService: NotificationsService,
   ) {}
+
+  /**
+   * Strip credentials/PII from a User relation before it leaves the API.
+   * There is no global ClassSerializerInterceptor, so @Exclude() on the
+   * entity does nothing — raw relations would serialize passwordHash,
+   * pinHash and refreshTokenHash. Mirrors marketplace's sanitizeSeller.
+   */
+  private sanitizeParty(user: User): Record<string, any> {
+    if (!user) return user;
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      profilePhotoUrl: user.profilePhotoUrl,
+      verificationTier: user.verificationTier,
+      sellerRating: user.sellerRating,
+      sellerRatingCount: user.sellerRatingCount,
+    };
+  }
+
+  private sanitizeOffer(offer: Offer): Offer {
+    if (offer.buyer) {
+      (offer as any).buyer = this.sanitizeParty(offer.buyer);
+    }
+    if (offer.seller) {
+      (offer as any).seller = this.sanitizeParty(offer.seller);
+    }
+    return offer;
+  }
 
   async createOffer(userId: string, dto: CreateOfferDto): Promise<Offer> {
     // Find the listing
@@ -40,6 +76,12 @@ export class OffersService {
 
     if (listing.status !== ListingStatus.ACTIVE) {
       throw new BadRequestException('Listing is not available for offers');
+    }
+    // Negotiation is a student-resale thing; shop prices are fixed.
+    if (listing.kind !== ListingKind.P2P) {
+      throw new BadRequestException(
+        'Offers are only available on student listings — shop items sell at their listed price',
+      );
     }
 
     // Prevent seller from making offer on their own listing
@@ -259,7 +301,7 @@ export class OffersService {
       throw new ForbiddenException('You do not have access to this offer');
     }
 
-    return offer;
+    return this.sanitizeOffer(offer);
   }
 
   async getOffersForListing(
@@ -287,11 +329,13 @@ export class OffersService {
       whereClause.status = status;
     }
 
-    return this.offerRepository.find({
+    const offers = await this.offerRepository.find({
       where: whereClause,
       relations: ['buyer', 'listing'],
       order: { createdAt: 'DESC' },
     });
+
+    return offers.map((offer) => this.sanitizeOffer(offer));
   }
 
   async getBuyerOffers(
@@ -315,7 +359,12 @@ export class OffersService {
       take: limit,
     });
 
-    return { offers, total, page, totalPages: Math.ceil(total / limit) };
+    return {
+      offers: offers.map((offer) => this.sanitizeOffer(offer)),
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async getSellerOffers(
@@ -339,21 +388,60 @@ export class OffersService {
       take: limit,
     });
 
-    return { offers, total, page, totalPages: Math.ceil(total / limit) };
+    return {
+      offers: offers.map((offer) => this.sanitizeOffer(offer)),
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
-  // Job to mark expired offers
+  /**
+   * Flip every PENDING / COUNTERED offer past its `expiresAt` to EXPIRED and
+   * tell the buyer. Runs from the `offers` queue every 15 minutes
+   * (`OffersProcessor`); respond / accept-counter still check expiry lazily
+   * so the sweep cadence is never load-bearing.
+   */
   async markExpiredOffers(): Promise<number> {
-    const result = await this.offerRepository.update(
-      {
+    const expired = await this.offerRepository.find({
+      where: {
         status: In([OfferStatus.PENDING, OfferStatus.COUNTERED]),
         expiresAt: LessThan(new Date()),
       },
+      relations: ['listing'],
+    });
+    if (expired.length === 0) return 0;
+
+    const result = await this.offerRepository.update(
       {
-        status: OfferStatus.EXPIRED,
+        id: In(expired.map((o) => o.id)),
+        status: In([OfferStatus.PENDING, OfferStatus.COUNTERED]),
       },
+      { status: OfferStatus.EXPIRED },
     );
 
-    return result.affected || 0;
+    // Best-effort: the state change is done; a lost push must not fail the job.
+    await Promise.all(
+      expired.map(async (offer) => {
+        try {
+          await this.notificationsService.createNotification({
+            userId: offer.buyerId,
+            type: NotificationType.OFFER_EXPIRED,
+            title: 'Your offer expired',
+            body:
+              offer.status === OfferStatus.COUNTERED
+                ? `The seller's counter on "${offer.listing?.title ?? 'a listing'}" expired before you accepted it.`
+                : `Your offer on "${offer.listing?.title ?? 'a listing'}" expired without a response from the seller.`,
+            data: { offerId: offer.id, listingId: offer.listingId },
+          });
+        } catch (error) {
+          this.logger.warn(
+            `Failed to notify buyer ${offer.buyerId} about expired offer ${offer.id}: ${error}`,
+          );
+        }
+      }),
+    );
+
+    return result.affected ?? expired.length;
   }
 }

@@ -33,6 +33,7 @@ import {
   CreateBuyRequestDto,
   UpdateBuyRequestDto,
   BuyRequestQueryDto,
+  MyBuyRequestsQueryDto,
 } from './dto';
 
 @ApiTags('Marketplace - Buy Requests')
@@ -43,7 +44,7 @@ export class BuyRequestsController {
   @Post()
   @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('budgetMax', TIER_BUYING_LIMITS)
+  @TierAmountLimit(['budgetMax', 'budgetMin'], TIER_BUYING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create a new buy request',
@@ -152,14 +153,6 @@ export class BuyRequestsController {
     description:
       'Retrieves all buy requests created by the current user. Requires Tier 1 verification.',
   })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: BuyRequestStatus,
-    example: BuyRequestStatus.OPEN,
-  })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
   @ApiResponse({
     status: 200,
     description: 'User buy requests retrieved successfully',
@@ -188,15 +181,13 @@ export class BuyRequestsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getUserBuyRequests(
     @CurrentUser() user: User,
-    @Query('status') status?: BuyRequestStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: MyBuyRequestsQueryDto,
   ) {
     const result = await this.buyRequestsService.getUserBuyRequests(
       user.id,
-      status,
-      page || 1,
-      limit || 20,
+      query.status,
+      query.page ?? 1,
+      query.limit ?? 20,
     );
     return {
       success: true,
@@ -263,7 +254,7 @@ export class BuyRequestsController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, StudentAccountGuard, TierGuard, TierAmountLimitGuard)
   @MinTier(VerificationTier.TIER_1)
-  @TierAmountLimit('budgetMax', TIER_BUYING_LIMITS)
+  @TierAmountLimit(['budgetMax', 'budgetMin'], TIER_BUYING_LIMITS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Update a buy request',
