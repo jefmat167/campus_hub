@@ -23,6 +23,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { UploadModule } from '../upload/upload.module';
 import { AdminModule } from '../admin/admin.module';
 import { TransactionPinModule } from '../transaction-pin/transaction-pin.module';
+import { VendorsModule } from '../vendors/vendors.module';
 
 @Module({
   imports: [
@@ -43,6 +44,9 @@ import { TransactionPinModule } from '../transaction-pin/transaction-pin.module'
     UploadModule,
     AdminModule,
     TransactionPinModule,
+    // Unified feed: vendor-shaped detail + option/fulfillment helpers.
+    // VendorsModule never imports MarketplaceModule, so no cycle.
+    VendorsModule,
   ],
   controllers: [
     MarketplaceController,

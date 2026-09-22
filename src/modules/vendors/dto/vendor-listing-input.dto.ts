@@ -13,7 +13,6 @@ import {
   IsOptional,
   IsPositive,
   IsString,
-  IsUUID,
   IsUrl,
   Max,
   MaxLength,
@@ -22,11 +21,11 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { ListingCategory } from '../../../database/entities/listing.entity';
 import {
-  VendorListingStatus,
-  VendorListingType,
-} from '../../../database/entities/vendor-listing.entity';
+  ListingCategory,
+  ListingKind,
+  ListingStatus,
+} from '../../../database/entities/listing.entity';
 import { OptionSelectionType } from '../../../database/entities/vendor-option.entity';
 
 export class VendorOptionInputDto {
@@ -88,37 +87,14 @@ export class VendorOptionGroupInputDto {
   options: VendorOptionInputDto[];
 }
 
-export class VendorFulfillmentInputDto {
-  @ApiProperty({
-    description: 'A university this vendor serves',
-    format: 'uuid',
-  })
-  @IsUUID()
-  universityId: string;
-
-  @ApiProperty({
-    description: 'Whether this listing delivers to that university',
-    example: true,
-  })
-  @IsBoolean()
-  deliveryEnabled: boolean;
-
-  @ApiPropertyOptional({
-    description:
-      'Delivery/travel fee to that university in naira (0 = free). Ignored when delivery is disabled.',
-    example: 500,
-  })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Max(1000000)
-  deliveryFee?: number;
-}
-
 export class CreateVendorListingDto {
-  @ApiProperty({ enum: VendorListingType, example: VendorListingType.GOODS })
-  @IsEnum(VendorListingType)
-  type: VendorListingType;
+  @ApiProperty({
+    description: 'Shop item or bookable service',
+    enum: [ListingKind.VENDOR_GOODS, ListingKind.VENDOR_SERVICE],
+    example: ListingKind.VENDOR_GOODS,
+  })
+  @IsIn([ListingKind.VENDOR_GOODS, ListingKind.VENDOR_SERVICE])
+  kind: ListingKind.VENDOR_GOODS | ListingKind.VENDOR_SERVICE;
 
   @ApiProperty({ example: 'Jollof rice (party pack)', minLength: 2, maxLength: 255 })
   @IsString()
@@ -138,11 +114,11 @@ export class CreateVendorListingDto {
   @IsEnum(ListingCategory)
   category: ListingCategory;
 
-  @ApiProperty({ description: 'Base price in naira', example: 3500 })
+  @ApiProperty({ description: 'Base price in naira (before option deltas)', example: 3500 })
   @IsNumber()
   @IsPositive()
   @Max(10000000)
-  basePrice: number;
+  price: number;
 
   @ApiPropertyOptional({
     description:
@@ -179,16 +155,13 @@ export class CreateVendorListingDto {
   optionGroups?: VendorOptionGroupInputDto[];
 
   @ApiPropertyOptional({
-    description: 'Per-university delivery opt-in (⊆ served universities)',
-    type: [VendorFulfillmentInputDto],
-    maxItems: 3,
+    description:
+      'Opt this ONE listing out of your delivery preset (PUT /vendors/me/delivery): goods are pickup-only, services at-the-shop only. Default false = inherits the preset.',
+    example: false,
   })
   @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(3)
-  @ValidateNested({ each: true })
-  @Type(() => VendorFulfillmentInputDto)
-  fulfillment?: VendorFulfillmentInputDto[];
+  @IsBoolean()
+  pickupOnly?: boolean;
 }
 
 export class UpdateVendorListingDto {
@@ -213,12 +186,12 @@ export class UpdateVendorListingDto {
   @IsEnum(ListingCategory)
   category?: ListingCategory;
 
-  @ApiPropertyOptional({ description: 'Base price in naira' })
+  @ApiPropertyOptional({ description: 'Base price in naira (before option deltas)' })
   @IsOptional()
   @IsNumber()
   @IsPositive()
   @Max(10000000)
-  basePrice?: number;
+  price?: number;
 
   @ApiPropertyOptional({
     description:
@@ -237,12 +210,20 @@ export class UpdateVendorListingDto {
   manualConfirm?: boolean;
 
   @ApiPropertyOptional({
-    description: 'active | paused',
-    enum: [VendorListingStatus.ACTIVE, VendorListingStatus.PAUSED],
+    description:
+      'Opt this listing out of (true) or back into (false) your vendor-level delivery preset',
   })
   @IsOptional()
-  @IsIn([VendorListingStatus.ACTIVE, VendorListingStatus.PAUSED])
-  status?: VendorListingStatus;
+  @IsBoolean()
+  pickupOnly?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'active | paused',
+    enum: [ListingStatus.ACTIVE, ListingStatus.PAUSED],
+  })
+  @IsOptional()
+  @IsIn([ListingStatus.ACTIVE, ListingStatus.PAUSED])
+  status?: ListingStatus;
 
   @ApiPropertyOptional({
     description: 'Image URLs to APPEND (max 5 total)',
@@ -267,20 +248,6 @@ export class ReplaceOptionGroupsDto {
   @ValidateNested({ each: true })
   @Type(() => VendorOptionGroupInputDto)
   groups: VendorOptionGroupInputDto[];
-}
-
-export class ReplaceFulfillmentDto {
-  @ApiProperty({
-    description:
-      'Full replacement set of per-university delivery config (⊆ served universities; empty = pickup only everywhere)',
-    type: [VendorFulfillmentInputDto],
-    maxItems: 3,
-  })
-  @IsArray()
-  @ArrayMaxSize(3)
-  @ValidateNested({ each: true })
-  @Type(() => VendorFulfillmentInputDto)
-  universities: VendorFulfillmentInputDto[];
 }
 
 export class AdjustStockDto {

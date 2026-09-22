@@ -6,19 +6,19 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Not, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Not, Repository } from 'typeorm';
 import {
-  VendorListing,
-  VendorListingImage,
-  VendorListingStatus,
-  VendorListingType,
-} from '../../database/entities/vendor-listing.entity';
+  Listing,
+  ListingImage,
+  ListingKind,
+  ListingStatus,
+  VENDOR_LISTING_KINDS,
+  VisibilityScope,
+} from '../../database/entities/listing.entity';
 import {
   VendorOption,
   VendorOptionGroup,
 } from '../../database/entities/vendor-option.entity';
-import { VendorListingFulfillment } from '../../database/entities/vendor-listing-fulfillment.entity';
-import { VendorUniversity } from '../../database/entities/vendor-university.entity';
 import {
   VendorProfile,
   VendorStatus,
@@ -28,35 +28,33 @@ import { isListingSoldOut } from './vendor-listing.util';
 import {
   AdjustStockDto,
   CreateVendorListingDto,
-  ReplaceFulfillmentDto,
   ReplaceOptionGroupsDto,
   UpdateVendorListingDto,
-  VendorFulfillmentInputDto,
   VendorOptionGroupInputDto,
 } from './dto/vendor-listing-input.dto';
 
 const MAX_IMAGES = 5;
 
 /**
- * The vendor write plane for the catalog (rev-2 spec 03.3 / 03.5):
- * goods & services with option groups, per-option stock, and per-university
- * fulfillment. Confirmation rule (decision log #8): services and
- * untracked-stock goods are always manual-confirm; auto-confirmation requires
- * tracked stock.
+ * The vendor write plane for the catalog (rev-2 spec 03.3 / 03.5) on the ONE
+ * listings table (unified marketplace): goods & services with option groups
+ * and per-option stock. Delivery is NOT configured here any more (2026-09-21
+ * amendment): it is the vendor's per-campus preset (`VendorDeliveryService`),
+ * inherited by every listing — a listing only opts out via `pickupOnly`.
+ * Confirmation rule (decision log #8): services and untracked-stock goods are
+ * always manual-confirm; auto-confirmation requires tracked stock.
  */
 @Injectable()
 export class VendorCatalogService {
   private readonly logger = new Logger(VendorCatalogService.name);
 
   constructor(
-    @InjectRepository(VendorListing)
-    private listingRepo: Repository<VendorListing>,
-    @InjectRepository(VendorListingImage)
-    private imageRepo: Repository<VendorListingImage>,
+    @InjectRepository(Listing)
+    private listingRepo: Repository<Listing>,
+    @InjectRepository(ListingImage)
+    private imageRepo: Repository<ListingImage>,
     @InjectRepository(VendorOptionGroup)
     private groupRepo: Repository<VendorOptionGroup>,
-    @InjectRepository(VendorUniversity)
-    private vendorUniversityRepo: Repository<VendorUniversity>,
     private dataSource: DataSource,
     private uploadService: UploadService,
   ) { }
@@ -67,14 +65,15 @@ export class VendorCatalogService {
   ): Promise<Record<string, unknown>> {
     this.assertActive(profile);
 
-    if (dto.type === VendorListingType.SERVICE && dto.stock !== undefined) {
+    const isService = dto.kind === ListingKind.VENDOR_SERVICE;
+    if (isService && dto.stock !== undefined) {
       throw new BadRequestException(
         'Services carry no stock — there is nothing to count (rev-2 03.3)',
       );
     }
-    const stock = dto.type === VendorListingType.SERVICE ? null : dto.stock ?? null;
+    const stock = isService ? null : dto.stock ?? null;
     const manualConfirm = this.resolveManualConfirm(
-      dto.type,
+      dto.kind,
       stock,
       dto.manualConfirm,
     );
@@ -82,29 +81,35 @@ export class VendorCatalogService {
     if (dto.imageUrls && dto.imageUrls.length > 0) {
       await this.uploadService.verifyUploadedFileSizes(dto.imageUrls);
     }
-    if (dto.fulfillment && dto.fulfillment.length > 0) {
-      await this.assertFulfillmentWithinServed(profile.id, dto.fulfillment);
-    }
 
     const listingId = await this.dataSource.transaction(async (manager) => {
       const listing = await manager.save(
-        manager.create(VendorListing, {
+        manager.create(Listing, {
+          kind: dto.kind,
+          // The vendor's one account is the seller; the business identity,
+          // service area and verification stay on the profile.
+          sellerId: profile.userId,
           vendorProfileId: profile.id,
-          type: dto.type,
+          universityId: profile.homeUniversityId,
+          visibilityScope: VisibilityScope.UNIVERSITY,
           title: dto.title,
           description: dto.description,
           category: dto.category,
-          basePrice: dto.basePrice,
+          price: dto.price,
+          condition: null,
+          isNegotiable: false,
+          meetupPoints: null,
           stock,
           manualConfirm,
-          status: VendorListingStatus.ACTIVE,
+          pickupOnly: dto.pickupOnly ?? false,
+          status: ListingStatus.ACTIVE,
         }),
       );
 
       for (const [index, url] of (dto.imageUrls ?? []).entries()) {
         await manager.save(
-          manager.create(VendorListingImage, {
-            vendorListingId: listing.id,
+          manager.create(ListingImage, {
+            listingId: listing.id,
             url,
             position: index,
           }),
@@ -112,7 +117,6 @@ export class VendorCatalogService {
       }
 
       await this.insertOptionGroups(manager, listing.id, dto.optionGroups ?? []);
-      await this.insertFulfillment(manager, listing.id, dto.fulfillment ?? []);
 
       return listing.id;
     });
@@ -123,17 +127,18 @@ export class VendorCatalogService {
 
   async listOwn(
     profile: VendorProfile,
-    status?: VendorListingStatus,
+    status?: ListingStatus,
   ): Promise<Record<string, unknown>[]> {
     const listings = await this.listingRepo.find({
       where: {
         vendorProfileId: profile.id,
-        status: status ?? Not(VendorListingStatus.DELETED),
+        kind: In([...VENDOR_LISTING_KINDS]),
+        status: status ?? Not(ListingStatus.DELETED),
       },
       relations: ['images', 'optionGroups', 'optionGroups.options'],
       order: { createdAt: 'DESC' },
     });
-    return listings.map((listing) => this.toOwnView(listing, false));
+    return listings.map((listing) => this.toOwnView(listing));
   }
 
   async getOwnListing(
@@ -141,7 +146,7 @@ export class VendorCatalogService {
     listingId: string,
   ): Promise<Record<string, unknown>> {
     const listing = await this.findOwn(profile, listingId, true);
-    return this.toOwnView(listing, true);
+    return this.toOwnView(listing);
   }
 
   async updateListing(
@@ -152,23 +157,24 @@ export class VendorCatalogService {
     this.assertActive(profile);
     const listing = await this.findOwn(profile, listingId, false);
 
-    if (dto.stock !== undefined && listing.type === VendorListingType.SERVICE) {
+    if (dto.stock !== undefined && listing.kind === ListingKind.VENDOR_SERVICE) {
       throw new BadRequestException('Services carry no stock');
     }
 
     if (dto.title !== undefined) listing.title = dto.title;
     if (dto.description !== undefined) listing.description = dto.description;
     if (dto.category !== undefined) listing.category = dto.category;
-    if (dto.basePrice !== undefined) listing.basePrice = dto.basePrice;
+    if (dto.price !== undefined) listing.price = dto.price;
     if (dto.status !== undefined) listing.status = dto.status;
     if (dto.stock !== undefined) listing.stock = dto.stock;
+    if (dto.pickupOnly !== undefined) listing.pickupOnly = dto.pickupOnly;
 
     // Re-derive the confirmation rule against the (possibly new) stock. An
     // EXPLICIT manualConfirm=false with untracked stock is a 400; an inherited
     // false is silently forced back to manual when stock stops being tracked.
     if (dto.manualConfirm !== undefined) {
       listing.manualConfirm = this.resolveManualConfirm(
-        listing.type,
+        listing.kind,
         listing.stock,
         dto.manualConfirm,
       );
@@ -179,7 +185,7 @@ export class VendorCatalogService {
     if (dto.imageUrls && dto.imageUrls.length > 0) {
       await this.uploadService.verifyUploadedFileSizes(dto.imageUrls);
       const existing = await this.imageRepo.count({
-        where: { vendorListingId: listing.id },
+        where: { listingId: listing.id },
       });
       if (existing + dto.imageUrls.length > MAX_IMAGES) {
         throw new BadRequestException(
@@ -189,7 +195,7 @@ export class VendorCatalogService {
       for (const [index, url] of dto.imageUrls.entries()) {
         await this.imageRepo.save(
           this.imageRepo.create({
-            vendorListingId: listing.id,
+            listingId: listing.id,
             url,
             position: existing + index,
           }),
@@ -207,7 +213,7 @@ export class VendorCatalogService {
   ): Promise<{ deleted: true }> {
     this.assertActive(profile);
     const listing = await this.findOwn(profile, listingId, false);
-    listing.status = VendorListingStatus.DELETED;
+    listing.status = ListingStatus.DELETED;
     await this.listingRepo.save(listing);
     return { deleted: true };
   }
@@ -222,28 +228,8 @@ export class VendorCatalogService {
     await this.findOwn(profile, listingId, false);
 
     await this.dataSource.transaction(async (manager) => {
-      await manager.delete(VendorOptionGroup, { vendorListingId: listingId });
+      await manager.delete(VendorOptionGroup, { listingId });
       await this.insertOptionGroups(manager, listingId, dto.groups);
-    });
-
-    return this.getOwnListing(profile, listingId);
-  }
-
-  /** Full replacement of the per-university fulfillment config. */
-  async replaceFulfillment(
-    profile: VendorProfile,
-    listingId: string,
-    dto: ReplaceFulfillmentDto,
-  ): Promise<Record<string, unknown>> {
-    this.assertActive(profile);
-    await this.findOwn(profile, listingId, false);
-    await this.assertFulfillmentWithinServed(profile.id, dto.universities);
-
-    await this.dataSource.transaction(async (manager) => {
-      await manager.delete(VendorListingFulfillment, {
-        vendorListingId: listingId,
-      });
-      await this.insertFulfillment(manager, listingId, dto.universities);
     });
 
     return this.getOwnListing(profile, listingId);
@@ -256,7 +242,7 @@ export class VendorCatalogService {
   ): Promise<Record<string, unknown>> {
     this.assertActive(profile);
     const listing = await this.findOwn(profile, listingId, false);
-    if (listing.type === VendorListingType.SERVICE) {
+    if (listing.kind === ListingKind.VENDOR_SERVICE) {
       throw new BadRequestException('Services carry no stock');
     }
     listing.stock = dto.stock;
@@ -279,7 +265,7 @@ export class VendorCatalogService {
     const group = await this.groupRepo
       .createQueryBuilder('g')
       .innerJoinAndSelect('g.options', 'o', 'o.id = :optionId', { optionId })
-      .where('g.vendorListingId = :listingId', { listingId })
+      .where('g.listingId = :listingId', { listingId })
       .getOne();
     const option = group?.options?.[0];
     if (!option) {
@@ -304,11 +290,11 @@ export class VendorCatalogService {
 
   /** Confirmation rule (rev-2 03.5 + decision log #8). */
   private resolveManualConfirm(
-    type: VendorListingType,
+    kind: ListingKind,
     stock: number | null,
     requested?: boolean,
   ): boolean {
-    if (type === VendorListingType.SERVICE) {
+    if (kind === ListingKind.VENDOR_SERVICE) {
       if (requested === false) {
         throw new BadRequestException(
           'Services always require manual confirmation — there is no stock signal to trust',
@@ -327,38 +313,15 @@ export class VendorCatalogService {
     return requested ?? false;
   }
 
-  private async assertFulfillmentWithinServed(
-    vendorProfileId: string,
-    rows: VendorFulfillmentInputDto[],
-  ): Promise<void> {
-    const ids = rows.map((row) => row.universityId);
-    if (new Set(ids).size !== ids.length) {
-      throw new BadRequestException(
-        'Duplicate university in the fulfillment config',
-      );
-    }
-    const served = await this.vendorUniversityRepo.find({
-      where: { vendorProfileId },
-    });
-    const servedSet = new Set(served.map((vu) => vu.universityId));
-    for (const id of ids) {
-      if (!servedSet.has(id)) {
-        throw new BadRequestException(
-          'Fulfillment can only be configured for universities this vendor serves',
-        );
-      }
-    }
-  }
-
   private async insertOptionGroups(
     manager: EntityManager,
-    vendorListingId: string,
+    listingId: string,
     groups: VendorOptionGroupInputDto[],
   ): Promise<void> {
     for (const [groupIndex, groupInput] of groups.entries()) {
       const group = await manager.save(
         manager.create(VendorOptionGroup, {
-          vendorListingId,
+          listingId,
           name: groupInput.name,
           selectionType: groupInput.selectionType,
           required: groupInput.required,
@@ -379,57 +342,40 @@ export class VendorCatalogService {
     }
   }
 
-  private async insertFulfillment(
-    manager: EntityManager,
-    vendorListingId: string,
-    rows: VendorFulfillmentInputDto[],
-  ): Promise<void> {
-    for (const row of rows) {
-      await manager.save(
-        manager.create(VendorListingFulfillment, {
-          vendorListingId,
-          universityId: row.universityId,
-          deliveryEnabled: row.deliveryEnabled,
-          deliveryFee: row.deliveryEnabled ? row.deliveryFee ?? 0 : null,
-        }),
-      );
-    }
-  }
-
   private async findOwn(
     profile: VendorProfile,
     listingId: string,
     withRelations: boolean,
-  ): Promise<VendorListing> {
+  ): Promise<Listing> {
     const listing = await this.listingRepo.findOne({
       where: { id: listingId, vendorProfileId: profile.id },
       relations: withRelations
-        ? ['images', 'optionGroups', 'optionGroups.options', 'fulfillment']
+        ? ['images', 'optionGroups', 'optionGroups.options']
         : [],
     });
-    if (!listing || listing.status === VendorListingStatus.DELETED) {
+    if (!listing || listing.status === ListingStatus.DELETED) {
       throw new NotFoundException('Listing not found');
     }
     return listing;
   }
 
   /** Vendor-plane view: includes raw stock figures. */
-  private toOwnView(
-    listing: VendorListing,
-    full: boolean,
-  ): Record<string, unknown> {
+  private toOwnView(listing: Listing): Record<string, unknown> {
     const sortedGroups = (listing.optionGroups ?? [])
       .slice()
       .sort((a, b) => a.position - b.position);
     return {
       id: listing.id,
-      type: listing.type,
+      kind: listing.kind,
       title: listing.title,
       description: listing.description,
       category: listing.category,
-      basePrice: Number(listing.basePrice),
+      price: Number(listing.price),
       stock: listing.stock,
       manualConfirm: listing.manualConfirm,
+      // Opt-out of the vendor's delivery preset for this one item (list AND
+      // detail views — the catalog list renders a chip).
+      pickupOnly: !!listing.pickupOnly,
       status: listing.status,
       isSoldOut: isListingSoldOut(listing),
       viewCount: listing.viewCount,
@@ -452,13 +398,6 @@ export class VendorCatalogService {
             stock: option.stock,
           })),
       })),
-      ...(full && {
-        fulfillment: (listing.fulfillment ?? []).map((row) => ({
-          universityId: row.universityId,
-          deliveryEnabled: row.deliveryEnabled,
-          deliveryFee: row.deliveryFee !== null ? Number(row.deliveryFee) : null,
-        })),
-      }),
       createdAt: listing.createdAt,
     };
   }

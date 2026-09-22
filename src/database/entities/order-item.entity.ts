@@ -10,7 +10,6 @@ import {
 import { EscrowTransaction } from './escrow.entity';
 import { Listing } from './listing.entity';
 import { Offer } from './offer.entity';
-import { VendorListing } from './vendor-listing.entity';
 import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum OrderItemType {
@@ -22,8 +21,9 @@ export enum OrderItemType {
 /**
  * A line inside a sub-order (rev-2 spec 03.4): one sub-order can bundle
  * several items from the same seller. Title and price are SNAPSHOTS taken at
- * checkout — later listing edits never change what was bought. Exactly one of
- * listingId / vendorListingId is set (DB CHECK).
+ * checkout — later listing edits never change what was bought. `listingId`
+ * points at the merged listings table for every kind; `itemType` is the kind
+ * snapshot (a listing deleted later leaves the FK NULL).
  */
 @Entity('order_items')
 export class OrderItem {
@@ -50,13 +50,6 @@ export class OrderItem {
   @ManyToOne(() => Listing, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'listing_id' })
   listing: Listing | null;
-
-  @Column({ name: 'vendor_listing_id', type: 'uuid', nullable: true })
-  vendorListingId: string | null;
-
-  @ManyToOne(() => VendorListing, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'vendor_listing_id' })
-  vendorListing: VendorListing | null;
 
   // The accepted P2P offer this line's price came from (receipt, not a hold).
   @Column({ name: 'offer_id', type: 'uuid', nullable: true })

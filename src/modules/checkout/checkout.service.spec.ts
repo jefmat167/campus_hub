@@ -4,7 +4,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { CheckoutService } from './checkout.service';
-import { ListingStatus } from '../../database/entities/listing.entity';
+import { ListingKind, ListingStatus } from '../../database/entities/listing.entity';
 import { OfferStatus } from '../../database/entities/offer.entity';
 import {
   AccountType,
@@ -28,6 +28,7 @@ const buyer: any = {
 function listing(id: string, sellerId: string, price: number, over: any = {}) {
   return {
     id,
+    kind: ListingKind.P2P,
     sellerId,
     price,
     title: `Item ${id}`,
@@ -37,12 +38,30 @@ function listing(id: string, sellerId: string, price: number, over: any = {}) {
   };
 }
 
+/**
+ * The vendor's delivery preset for the buyer's campus, keyed by vendor profile
+ * id (2026-09-21 amendment: vendor-level, not per listing). `null` = the vendor
+ * doesn't serve that campus. Default: home-campus vendor with ₦500 door
+ * delivery, no drop points, no service travel.
+ */
+function defaultPreset(vendorProfileId: string, universityId: string) {
+  const isHome = universityId === 'u1';
+  return {
+    vendorProfileId,
+    businessName: 'Jollof Palace',
+    universityId,
+    isHome,
+    doorDeliveryFee: isHome ? 500 : null,
+    serviceTravelFee: null,
+    dropPoints: [],
+  };
+}
+
 function makeService(opts: {
   listings?: Record<string, any>;
   offers?: Record<string, any>;
   vendorListings?: Record<string, any>;
-  dropPoints?: Record<string, any>;
-  vendorServes?: boolean;
+  delivery?: Record<string, any | null>;
   rawItems?: Array<{
     cartItemId?: string;
     listingId?: string;
@@ -54,20 +73,21 @@ function makeService(opts: {
   flipAffected?: (listingId: string) => number;
   stockUpdateFails?: boolean;
 } = {}) {
+  // Every kind lives on the one listings table now.
+  const anyListing = (id: string) =>
+    opts.listings?.[id] ?? opts.vendorListings?.[id] ?? null;
   const listingRepo: any = {
-    findOne: jest.fn(async ({ where }: any) => opts.listings?.[where.id] ?? null),
+    findOne: jest.fn(async ({ where }: any) => anyListing(where.id)),
   };
   const offerRepo: any = {
     findOne: jest.fn(async ({ where }: any) => opts.offers?.[where.id] ?? null),
   };
-  const vendorListingRepo: any = {
-    findOne: jest.fn(async ({ where }: any) => opts.vendorListings?.[where.id] ?? null),
-  };
-  const vendorUniversityRepo: any = {
-    findOne: jest.fn(async () => (opts.vendorServes === false ? null : { id: 'vu1' })),
-  };
-  const dropPointRepo: any = {
-    findOne: jest.fn(async ({ where }: any) => opts.dropPoints?.[where.id] ?? null),
+  const vendorDelivery: any = {
+    resolveForCampus: jest.fn(async (vendorProfileId: string, universityId: string) =>
+      opts.delivery && vendorProfileId in opts.delivery
+        ? opts.delivery[vendorProfileId]
+        : defaultPreset(vendorProfileId, universityId),
+    ),
   };
   const queryRunner: any = {
     connect: jest.fn(async () => {}),
@@ -84,9 +104,7 @@ function makeService(opts: {
       query: jest.fn(async () =>
         opts.stockUpdateFails ? [] : [{ id: 'row' }],
       ),
-      findOne: jest.fn(async (_entity: any, { where }: any) =>
-        opts.vendorListings?.[where.id] ?? null,
-      ),
+      findOne: jest.fn(async (_entity: any, { where }: any) => anyListing(where.id)),
     },
   };
   const dataSource: any = {
@@ -96,9 +114,8 @@ function makeService(opts: {
     getRawItems: jest.fn(async () =>
       (opts.rawItems ?? []).map((raw, index) => ({
         id: raw.cartItemId ?? `ci-${index}`,
-        listingId: raw.listingId ?? null,
+        listingId: raw.listingId ?? raw.vendorListingId ?? null,
         offerId: raw.offerId ?? null,
-        vendorListingId: raw.vendorListingId ?? null,
         quantity: raw.quantity ?? 1,
         selectedOptions: raw.selectedOptionIds
           ? { optionIds: raw.selectedOptionIds }
@@ -139,8 +156,8 @@ function makeService(opts: {
       checkoutId: params.checkoutId,
     })),
     createServiceSubOrder: jest.fn(async (_qr: any, params: any) => ({
-      id: `esc-svc-${params.line.vendorListingId}`,
-      orderNumber: `ORD-SVC-${params.line.vendorListingId}`,
+      id: `esc-svc-${params.line.listingId}`,
+      orderNumber: `ORD-SVC-${params.line.listingId}`,
       sellerId: params.sellerId,
       amount: params.amount,
       market: 'vendor',
@@ -175,9 +192,7 @@ function makeService(opts: {
     dataSource,
     listingRepo,
     offerRepo,
-    vendorListingRepo,
-    vendorUniversityRepo,
-    dropPointRepo,
+    vendorDelivery,
     cartService,
     escrowService,
     schedulingService,
@@ -192,12 +207,15 @@ function makeService(opts: {
     escrowService,
     schedulingService,
     walletService,
+    vendorDelivery,
   };
 }
 
 function vendorListing(id: string, over: any = {}) {
   return {
     id,
+    kind: ListingKind.VENDOR_GOODS,
+    sellerId: 'vendor-user',
     vendorProfileId: 'vp1',
     vendorProfile: {
       id: 'vp1',
@@ -207,16 +225,13 @@ function vendorListing(id: string, over: any = {}) {
       shopAddress: 'Shop 4, Mama T Plaza',
       status: 'active',
     },
-    type: 'goods',
     title: `Vendor item ${id}`,
-    basePrice: 3000,
+    price: 3000,
     stock: 10,
     manualConfirm: false,
+    pickupOnly: false,
     status: 'active',
     optionGroups: [],
-    fulfillment: [
-      { universityId: 'u1', deliveryEnabled: true, deliveryFee: 500 },
-    ],
     ...over,
   };
 }
@@ -375,7 +390,7 @@ describe('CheckoutService.checkoutFromCart', () => {
 describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
   const optioned = () =>
     vendorListing('v1', {
-      basePrice: 3000,
+      price: 3000,
       optionGroups: [
         {
           id: 'g1',
@@ -390,17 +405,14 @@ describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
       ],
     });
 
-  it('prices options + quantity, charges only the HIGHEST delivery fee, manual line ⇒ pending confirmation', async () => {
-    const { svc, escrowService, walletService } = makeService({
+  it("prices options + quantity, charges the vendor's DOOR fee once for the sub-order, manual line ⇒ pending confirmation", async () => {
+    const { svc, escrowService, walletService, vendorDelivery } = makeService({
       vendorListings: {
         v1: optioned(),
-        v2: vendorListing('v2', {
-          basePrice: 2000,
-          manualConfirm: true,
-          fulfillment: [
-            { universityId: 'u1', deliveryEnabled: true, deliveryFee: 900 },
-          ],
-        }),
+        v2: vendorListing('v2', { price: 2000, manualConfirm: true }),
+      },
+      delivery: {
+        vp1: { ...defaultPreset('vp1', 'u1'), doorDeliveryFee: 900 },
       },
       rawItems: [
         { vendorListingId: 'v1', quantity: 2, selectedOptionIds: ['op2'] },
@@ -415,7 +427,8 @@ describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
       ],
     } as any);
 
-    // (3000+500)*2 + 2000 = 9000 items; fee = max(500, 900) = 900
+    // (3000+500)*2 + 2000 = 9000 items; one trip = the vendor's door fee (900),
+    // however many lines share it.
     expect(result.total).toBe(9900);
     const params = escrowService.createVendorSubOrder.mock.calls[0][1];
     expect(params.itemsSubtotal).toBe(9000);
@@ -425,6 +438,99 @@ describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
     expect(params.deliveryMethod).toBe('delivery');
     expect(params.deliveryAddress).toBe('Room 12, Hostel A');
     expect(walletService.lockFunds.mock.calls[0][1]).toBe(9900);
+    // The preset is resolved ONCE per vendor, not once per line.
+    expect(vendorDelivery.resolveForCampus).toHaveBeenCalledTimes(1);
+  });
+
+  it('a chosen drop point is priced at ITS fee; a point the vendor does not offer is refused', async () => {
+    const preset = {
+      ...defaultPreset('vp1', 'u1'),
+      dropPoints: [
+        { id: 'dp1', name: 'Main Gate', directions: null, fee: 300 },
+        { id: 'dp2', name: 'Hostel Block A', directions: null, fee: 400 },
+      ],
+    };
+
+    const accepted = makeService({
+      vendorListings: { v1: vendorListing('v1') },
+      delivery: { vp1: preset },
+      rawItems: [{ vendorListingId: 'v1' }],
+    });
+    const result = await accepted.svc.checkoutFromCart(buyer, {
+      pin: '135790',
+      vendorFulfillment: [{ vendorProfileId: 'vp1', method: 'delivery', dropPointId: 'dp2' }],
+    } as any);
+    expect(result.total).toBe(3400);
+    const params = accepted.escrowService.createVendorSubOrder.mock.calls[0][1];
+    expect(params.dropPointId).toBe('dp2');
+    expect(params.deliveryFee).toBe(400);
+    expect(params.deliveryLocation).toBe('Drop point: Hostel Block A');
+
+    const foreign = makeService({
+      vendorListings: { v1: vendorListing('v1') },
+      delivery: { vp1: preset },
+      rawItems: [{ vendorListingId: 'v1' }],
+    });
+    await expect(
+      foreign.svc.checkoutFromCart(buyer, {
+        pin: '135790',
+        vendorFulfillment: [{ vendorProfileId: 'vp1', method: 'delivery', dropPointId: 'dp-other' }],
+      } as any),
+    ).rejects.toThrow(/Choose one of Jollof Palace's drop points/);
+  });
+
+  it('an address is refused when the vendor has no door delivery; nothing deliverable ⇒ "only offers pickup"', async () => {
+    const pointsOnly = makeService({
+      vendorListings: { v1: vendorListing('v1') },
+      delivery: {
+        vp1: {
+          ...defaultPreset('vp1', 'u1'),
+          doorDeliveryFee: null,
+          dropPoints: [{ id: 'dp1', name: 'Main Gate', directions: null, fee: 300 }],
+        },
+      },
+      rawItems: [{ vendorListingId: 'v1' }],
+    });
+    await expect(
+      pointsOnly.svc.checkoutFromCart(buyer, {
+        pin: '135790',
+        vendorFulfillment: [
+          { vendorProfileId: 'vp1', method: 'delivery', deliveryAddress: 'Room 12' },
+        ],
+      } as any),
+    ).rejects.toThrow(/doesn't deliver to addresses/);
+
+    const nothing = makeService({
+      vendorListings: { v1: vendorListing('v1') },
+      delivery: { vp1: { ...defaultPreset('vp1', 'u1'), doorDeliveryFee: null } },
+      rawItems: [{ vendorListingId: 'v1' }],
+    });
+    await expect(
+      nothing.svc.checkoutFromCart(buyer, {
+        pin: '135790',
+        vendorFulfillment: [
+          { vendorProfileId: 'vp1', method: 'delivery', deliveryAddress: 'Room 12' },
+        ],
+      } as any),
+    ).rejects.toThrow(/only offers pickup at your campus/);
+  });
+
+  it('a vendor that does not serve the buyer\'s campus is a per-line issue, not a crash', async () => {
+    const { svc } = makeService({
+      vendorListings: { v1: vendorListing('v1') },
+      delivery: { vp1: null },
+      rawItems: [{ vendorListingId: 'v1' }],
+    });
+    try {
+      await svc.checkoutFromCart(buyer, {
+        pin: '135790',
+        vendorFulfillment: [{ vendorProfileId: 'vp1', method: 'pickup' }],
+      } as any);
+      fail('expected BadRequestException');
+    } catch (error) {
+      const body: any = (error as BadRequestException).getResponse();
+      expect(body.issues[0].reason).toBe('vendor_not_serving');
+    }
   });
 
   it('a required single group demands a selection', async () => {
@@ -444,14 +550,17 @@ describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
     }
   });
 
-  it('neighboring-university delivery requires a drop point (never an address)', async () => {
+  it("neighboring-university delivery requires one of the vendor's drop points there (never an address)", async () => {
     const neighbor = { ...buyer, universityId: 'u2' };
-    const listing = vendorListing('v1', {
-      fulfillment: [{ universityId: 'u2', deliveryEnabled: true, deliveryFee: 700 }],
-    });
+    // Neighbour-campus preset: no door delivery (never off-home), one point.
+    const neighbourPreset = {
+      ...defaultPreset('vp1', 'u2'),
+      dropPoints: [{ id: 'dp1', name: 'Main Gate', directions: null, fee: 700 }],
+    };
 
     const rejected = makeService({
-      vendorListings: { v1: listing },
+      vendorListings: { v1: vendorListing('v1') },
+      delivery: { vp1: neighbourPreset },
       rawItems: [{ vendorListingId: 'v1' }],
     });
     await expect(
@@ -464,8 +573,8 @@ describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     const accepted = makeService({
-      vendorListings: { v1: listing },
-      dropPoints: { dp1: { id: 'dp1', name: 'Main Gate', universityId: 'u2', isActive: true } },
+      vendorListings: { v1: vendorListing('v1') },
+      delivery: { vp1: neighbourPreset },
       rawItems: [{ vendorListingId: 'v1' }],
     });
     const result = await accepted.svc.checkoutFromCart(neighbor as any, {
@@ -480,11 +589,11 @@ describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
     expect(result.total).toBe(3700);
   });
 
-  it('a pickup-only line forces the whole sub-order to pickup', async () => {
+  it('a pickupOnly line opts out of the preset and forces the whole sub-order to pickup', async () => {
     const { svc } = makeService({
       vendorListings: {
         v1: vendorListing('v1'),
-        v2: vendorListing('v2', { fulfillment: [] }), // pickup-only
+        v2: vendorListing('v2', { pickupOnly: true }),
       },
       rawItems: [{ vendorListingId: 'v1' }, { vendorListingId: 'v2' }],
     });
@@ -495,7 +604,7 @@ describe('CheckoutService vendor planning (rev-2 03.2/03.5)', () => {
           { vendorProfileId: 'vp1', method: 'delivery', deliveryAddress: 'Room 12' },
         ],
       } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).rejects.toThrow(/"Vendor item v2" is pickup-only/);
   });
 
   it('rolls everything back when stock is snatched mid-checkout', async () => {
@@ -605,10 +714,10 @@ describe('CheckoutService.checkoutDirect (buy-now + offer pricing)', () => {
 
 function serviceListing(id: string, over: any = {}) {
   return vendorListing(id, {
-    type: 'service',
+    kind: ListingKind.VENDOR_SERVICE,
     stock: null,
     manualConfirm: true,
-    basePrice: 5000,
+    price: 5000,
     title: `Service ${id}`,
     ...over,
   });
@@ -675,15 +784,10 @@ describe('CheckoutService — service bookings (Phase 6)', () => {
     ).rejects.toThrow(/at most 14 days/);
   });
 
-  it('travel needs the per-university opt-in and a service location; the fee lands on the total', async () => {
+  it("travel needs the vendor's travel fee for the buyer's campus and a service location; the fee lands on the total", async () => {
     const { svc, escrowService, walletService } = makeService({
-      vendorListings: {
-        vs1: serviceListing('vs1', {
-          fulfillment: [
-            { universityId: 'u1', deliveryEnabled: true, deliveryFee: 1500 },
-          ],
-        }),
-      },
+      vendorListings: { vs1: serviceListing('vs1') },
+      delivery: { vp1: { ...defaultPreset('vp1', 'u1'), serviceTravelFee: 1500 } },
       rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
     });
 
@@ -716,37 +820,43 @@ describe('CheckoutService — service bookings (Phase 6)', () => {
     expect(walletService.lockFunds.mock.calls[0][1]).toBe(6500);
   });
 
-  it('travel to a university the service does not opt into is refused', async () => {
-    const { svc } = makeService({
-      vendorListings: {
-        vs1: serviceListing('vs1', {
-          fulfillment: [
-            { universityId: 'u1', deliveryEnabled: false, deliveryFee: null },
-          ],
-        }),
-      },
+  it('travel is refused when the vendor has no travel fee for that campus, or the service is at-shop only', async () => {
+    const travelRequest = {
+      pin: '135790',
+      serviceSchedules: [
+        {
+          cartItemId: 'line-1',
+          proposedTime: inTwoDays,
+          method: 'delivery',
+          serviceAddress: 'Room 12',
+        },
+      ],
+    };
+
+    // Default preset: serviceTravelFee null → the vendor doesn't travel here.
+    const noTravel = makeService({
+      vendorListings: { vs1: serviceListing('vs1') },
       rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
     });
-
     await expect(
-      svc.checkoutFromCart(buyer, {
-        pin: '135790',
-        serviceSchedules: [
-          {
-            cartItemId: 'line-1',
-            proposedTime: inTwoDays,
-            method: 'delivery',
-            serviceAddress: 'Room 12',
-          },
-        ],
-      } as any),
+      noTravel.svc.checkoutFromCart(buyer, travelRequest as any),
+    ).rejects.toThrow(/doesn't offer travel/);
+
+    // The vendor travels, but THIS service opted out (pickupOnly).
+    const atShopOnly = makeService({
+      vendorListings: { vs1: serviceListing('vs1', { pickupOnly: true }) },
+      delivery: { vp1: { ...defaultPreset('vp1', 'u1'), serviceTravelFee: 1500 } },
+      rawItems: [{ cartItemId: 'line-1', vendorListingId: 'vs1' }],
+    });
+    await expect(
+      atShopOnly.svc.checkoutFromCart(buyer, travelRequest as any),
     ).rejects.toThrow(/doesn't offer travel/);
   });
 
-  it('a service never bundles with goods from the same vendor — two sub-orders, one lock', async () => {
-    const { svc, escrowService, walletService } = makeService({
+  it('a service never bundles with goods from the same vendor — two sub-orders, one lock, one preset lookup', async () => {
+    const { svc, escrowService, walletService, vendorDelivery } = makeService({
       vendorListings: {
-        vg1: vendorListing('vg1', { basePrice: 2000 }),
+        vg1: vendorListing('vg1', { price: 2000 }),
         vs1: serviceListing('vs1'),
       },
       rawItems: [
@@ -769,6 +879,8 @@ describe('CheckoutService — service bookings (Phase 6)', () => {
     expect(result.total).toBe(7000);
     expect(walletService.lockFunds).toHaveBeenCalledTimes(1);
     expect(walletService.lockFunds.mock.calls[0][1]).toBe(7000);
+    // Goods + service from the same shop resolve the preset once.
+    expect(vendorDelivery.resolveForCampus).toHaveBeenCalledTimes(1);
   });
 
   it('runs every proposed time through the availability seam', async () => {

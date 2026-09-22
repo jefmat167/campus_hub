@@ -1,7 +1,4 @@
-import {
-  VendorListing,
-  VendorListingType,
-} from '../../database/entities/vendor-listing.entity';
+import { Listing, ListingKind } from '../../database/entities/listing.entity';
 import { OptionSelectionType } from '../../database/entities/vendor-option.entity';
 import { toKobo } from '../../common/utils/money';
 
@@ -32,13 +29,13 @@ export interface RejectedVendorSelection {
 /**
  * Resolve a buyer's option selection against a listing's groups (rev-2 spec
  * 03.3): required single groups need exactly one pick, required multi at
- * least one, single groups never allow two. The unit price is basePrice +
- * the sum of selected deltas (kobo-exact). Tracked options with less stock
+ * least one, single groups never allow two. The unit price is the base price
+ * + the sum of selected deltas (kobo-exact). Tracked options with less stock
  * than the requested quantity reject early with `option_unavailable` — the
  * authoritative check is checkout's conditional decrement.
  */
 export function resolveVendorSelection(
-  listing: Pick<VendorListing, 'basePrice'> & {
+  listing: Pick<Listing, 'price'> & {
     optionGroups?: Array<{
       id: string;
       name: string;
@@ -60,7 +57,7 @@ export function resolveVendorSelection(
     return { ok: false, reason: 'selection_invalid' };
   }
 
-  let unitPriceKobo = toKobo(Number(listing.basePrice));
+  let unitPriceKobo = toKobo(Number(listing.price));
   const selectedOptions: ResolvedVendorSelection['selectedOptions'] = [];
   const knownSelected = new Set<string>();
 
@@ -101,7 +98,7 @@ export function resolveVendorSelection(
 }
 
 export function isListingSoldOut(
-  listing: Pick<VendorListing, 'type' | 'stock'> & {
+  listing: Pick<Listing, 'kind' | 'stock'> & {
     optionGroups?: Array<{
       required: boolean;
       options?: Array<{ stock: number | null }>;
@@ -109,7 +106,7 @@ export function isListingSoldOut(
   },
 ): boolean {
   if (
-    listing.type === VendorListingType.GOODS &&
+    listing.kind === ListingKind.VENDOR_GOODS &&
     listing.stock !== null &&
     listing.stock !== undefined &&
     listing.stock <= 0

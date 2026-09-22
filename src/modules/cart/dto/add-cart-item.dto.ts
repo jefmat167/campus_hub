@@ -10,15 +10,16 @@ import {
 } from 'class-validator';
 
 /**
- * Exactly one of listingId / offerId / vendorListingId (service-enforced):
- * - listingId       → P2P listing at its listed price
- * - offerId         → P2P listing at an ACCEPTED offer's agreed price (24h lock)
- * - vendorListingId → vendor goods (quantity + options) or a service
- *   (always quantity 1; the appointment time is proposed at checkout)
+ * Exactly one of listingId / offerId (service-enforced):
+ * - listingId → any listing on the unified marketplace at its listed price:
+ *   a student's P2P item (always quantity 1), vendor goods (quantity +
+ *   options), or a service booking (always quantity 1; the appointment time
+ *   is proposed at checkout)
+ * - offerId   → a P2P listing at an ACCEPTED offer's agreed price (24h lock)
  */
 export class AddCartItemDto {
   @ApiPropertyOptional({
-    description: 'P2P listing to add at its listed price',
+    description: 'Listing to add (any kind) at its listed / base price',
     format: 'uuid',
   })
   @IsOptional()
@@ -35,15 +36,7 @@ export class AddCartItemDto {
   offerId?: string;
 
   @ApiPropertyOptional({
-    description: 'Vendor listing to add (goods, or a service booking)',
-    format: 'uuid',
-  })
-  @IsOptional()
-  @IsUUID()
-  vendorListingId?: string;
-
-  @ApiPropertyOptional({
-    description: 'Quantity (vendor lines only; P2P is always 1)',
+    description: 'Quantity (vendor goods only; P2P and services are always 1)',
     example: 2,
     default: 1,
   })
@@ -55,7 +48,7 @@ export class AddCartItemDto {
 
   @ApiPropertyOptional({
     description:
-      "Selected option ids across the listing's option groups (vendor lines)",
+      "Selected option ids across the listing's option groups (vendor listings)",
     type: [String],
   })
   @IsOptional()

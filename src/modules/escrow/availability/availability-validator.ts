@@ -4,7 +4,7 @@ import { Injectable } from '@nestjs/common';
 export const AVAILABILITY_VALIDATOR = 'AVAILABILITY_VALIDATOR';
 
 export interface AvailabilityContext {
-  vendorListingId: string | null;
+  listingId: string | null;
   proposedTime: Date;
 }
 

@@ -4,7 +4,7 @@
   NotFoundException,
 } from '@nestjs/common';
 import { CartService } from './cart.service';
-import { ListingStatus } from '../../database/entities/listing.entity';
+import { ListingKind, ListingStatus } from '../../database/entities/listing.entity';
 import { OfferStatus } from '../../database/entities/offer.entity';
 
 /**
@@ -38,9 +38,6 @@ function makeService(opts: {
   const offerRepo: any = {
     findOne: jest.fn(async ({ where }: any) => opts.offers?.[where.id] ?? null),
   };
-  const vendorListingRepo: any = {
-    findOne: jest.fn(async ({ where }: any) => (opts as any).vendorListings?.[where.id] ?? null),
-  };
   const vendorUniversityRepo: any = {
     findOne: jest.fn(async () => ((opts as any).vendorServes === false ? null : { id: 'vu1' })),
   };
@@ -51,7 +48,6 @@ function makeService(opts: {
     cartItemRepo,
     listingRepo,
     offerRepo,
-    vendorListingRepo,
     vendorUniversityRepo,
     timingPolicy,
   );
@@ -62,6 +58,7 @@ const buyer: any = { id: 'buyer', universityId: 'u1' };
 
 const activeListing = (over: any = {}) => ({
   id: 'l1',
+  kind: ListingKind.P2P,
   sellerId: 's1',
   title: 'Mini fridge',
   price: 10000,
@@ -168,6 +165,63 @@ describe('CartService.addItem', () => {
   });
 });
 
+const vendorGoods = (over: any = {}) => ({
+  id: 'v1',
+  kind: ListingKind.VENDOR_GOODS,
+  sellerId: 'vendor-user',
+  vendorProfileId: 'vp1',
+  vendorProfile: { id: 'vp1', userId: 'vendor-user', businessName: 'Jollof Palace', status: 'active' },
+  title: 'Jollof rice',
+  price: 3000,
+  stock: 10,
+  pickupOnly: false,
+  status: ListingStatus.ACTIVE,
+  optionGroups: [
+    {
+      id: 'g1',
+      name: 'Size',
+      selectionType: 'single',
+      required: true,
+      options: [
+        { id: 'op1', name: 'Regular', priceDelta: 0, stock: null },
+        { id: 'op2', name: 'Large', priceDelta: 500, stock: 5 },
+      ],
+    },
+  ],
+  ...over,
+});
+
+describe('CartService.addItem — vendor kinds on the one listings table', () => {
+  it('adds vendor goods with quantity + options at base + deltas', async () => {
+    const { svc, cartItemRepo } = makeService({ listings: { v1: vendorGoods() } });
+
+    await svc.addItem(buyer, { listingId: 'v1', quantity: 2, selectedOptionIds: ['op2'] });
+
+    expect(cartItemRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingId: 'v1',
+        quantity: 2,
+        priceAtAdd: 3500,
+        selectedOptions: { optionIds: ['op2'] },
+      }),
+    );
+  });
+
+  it('a service booking is always quantity 1', async () => {
+    const { svc } = makeService({
+      listings: { s1: vendorGoods({ id: 's1', kind: ListingKind.VENDOR_SERVICE, stock: null, optionGroups: [] }) },
+    });
+    await expect(
+      svc.addItem(buyer, { listingId: 's1', quantity: 2 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses a vendor that does not serve the buyer\'s campus', async () => {
+    const { svc } = makeService({ listings: { v1: vendorGoods({ optionGroups: [] }) }, vendorServes: false } as any);
+    await expect(svc.addItem(buyer, { listingId: 'v1' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
 describe('CartService.getCart freshness flags', () => {
   it('flags stale lines and excludes them from totals/readiness', async () => {
     const staleOffer = {
@@ -204,6 +258,24 @@ describe('CartService.getCart freshness flags', () => {
     // only the clean line counts
     expect(view.itemsSubtotal).toBe(10000);
     expect(view.readyToCheckout).toBe(false);
+  });
+
+  it("vendor lines carry the listing's pickupOnly opt-out; P2P lines don't have one", async () => {
+    const { svc } = makeService({
+      listings: {
+        l1: activeListing(),
+        v1: vendorGoods({ optionGroups: [], pickupOnly: true }),
+      },
+      cartItems: [
+        { id: 'i1', listingId: 'l1', offerId: null, priceAtAdd: 10000, quantity: 1 },
+        { id: 'i2', listingId: 'v1', offerId: null, priceAtAdd: 3000, quantity: 1 },
+      ],
+    });
+
+    const view = await svc.getCart(buyer);
+    const byId = Object.fromEntries(view.lines.map((l) => [l.id, l]));
+    expect(byId['i1'].pickupOnly).toBeUndefined();
+    expect(byId['i2'].pickupOnly).toBe(true);
   });
 });
 

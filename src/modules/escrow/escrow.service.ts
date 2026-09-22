@@ -80,6 +80,31 @@ export class EscrowService {
   private readonly DELIVERY_CODE_MAX_ATTEMPTS = 5;
   private readonly DELIVERY_CODE_LOCK_MS = 15 * 60 * 1000; // 15 minutes
 
+  /**
+   * Strip credentials/PII from a User relation before it leaves the API.
+   * @Exclude() on the entity is inert (no ClassSerializerInterceptor), so a
+   * raw relation would serialize passwordHash, pinHash and refreshTokenHash.
+   */
+  private sanitizeParty(user: any): any {
+    if (!user) return user;
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      profilePhotoUrl: user.profilePhotoUrl,
+      verificationTier: user.verificationTier,
+      sellerRating: user.sellerRating,
+      sellerRatingCount: user.sellerRatingCount,
+    };
+  }
+
+  private sanitizeEscrowParties(escrow: EscrowTransaction): EscrowTransaction {
+    if (escrow.buyer) (escrow as any).buyer = this.sanitizeParty(escrow.buyer);
+    if (escrow.seller) (escrow as any).seller = this.sanitizeParty(escrow.seller);
+    return escrow;
+  }
+
   constructor(
     @InjectRepository(EscrowTransaction)
     private escrowRepo: Repository<EscrowTransaction>,
@@ -474,7 +499,7 @@ export class EscrowService {
       confirmationRequired: boolean;
       notes?: string | null;
       lines: Array<{
-        vendorListingId: string;
+        listingId: string;
         title: string;
         unitPrice: number;
         quantity: number;
@@ -516,7 +541,7 @@ export class EscrowService {
         queryRunner.manager.create(OrderItem, {
           orderId: savedEscrow.id,
           itemType: OrderItemType.VENDOR_GOODS,
-          vendorListingId: line.vendorListingId,
+          listingId: line.listingId,
           titleSnapshot: line.title,
           unitPrice: line.unitPrice,
           quantity: line.quantity,
@@ -668,7 +693,7 @@ export class EscrowService {
       proposedTime: Date;
       scheduleNote?: string | null;
       line: {
-        vendorListingId: string;
+        listingId: string;
         title: string;
         unitPrice: number;
         lineTotal: number;
@@ -708,7 +733,7 @@ export class EscrowService {
       queryRunner.manager.create(OrderItem, {
         orderId: savedEscrow.id,
         itemType: OrderItemType.VENDOR_SERVICE,
-        vendorListingId: params.line.vendorListingId,
+        listingId: params.line.listingId,
         titleSnapshot: params.line.title,
         unitPrice: params.line.unitPrice,
         quantity: 1,
@@ -1355,10 +1380,11 @@ export class EscrowService {
   ): Promise<void> {
     const items = await manager.find(OrderItem, { where: { orderId } });
     for (const item of items) {
-      if (!item.vendorListingId) continue;
+      // Only vendor goods carry base stock; P2P lines flip status instead.
+      if (item.itemType === OrderItemType.P2P_LISTING || !item.listingId) continue;
       await manager.query(
-        `UPDATE "vendor_listings" SET "stock" = "stock" + $1 WHERE "id" = $2 AND "stock" IS NOT NULL`,
-        [item.quantity, item.vendorListingId],
+        `UPDATE "listings" SET "stock" = "stock" + $1 WHERE "id" = $2 AND "kind" = 'vendor_goods' AND "stock" IS NOT NULL`,
+        [item.quantity, item.listingId],
       );
       const optionIds = Array.isArray(
         (item.optionsSnapshot as Record<string, unknown>)?.optionIds,
@@ -1413,8 +1439,10 @@ export class EscrowService {
   }
 
   /**
-   * Initiate escrow from an accepted buy request offer.
-   * Called within the offer acceptance transaction via a shared QueryRunner.
+   * Initiate escrow from an accepted buy request offer — DB work only (tier +
+   * balance checks, escrow row, funds lock) on the caller's QueryRunner. The
+   * caller commits, then calls finalizeOfferEscrowPlacement() for jobs,
+   * notifications and emails.
    */
   async initiateEscrowFromOffer(buyerId: string, offer: BuyRequestOffer, queryRunner: import('typeorm').QueryRunner,): Promise<EscrowTransaction> {
     // Safety check
@@ -1464,9 +1492,15 @@ export class EscrowService {
       buyRequestOfferId: offer.id,
       market: OrderMarket.P2P,
       amount,
+      itemsSubtotal: amount, // one item, no delivery fee — the fee base is explicit
+      deliveryFee: 0,
       orderNumber,
       status: EscrowStatus.AWAITING_SELLER,
       fulfillmentExpiresAt,
+      // P2P is meet-up only (rev-2 spec 02). A buy request has no listing to
+      // snapshot a meet-up point from, so the seller names it when they mark
+      // ready — sellerReady() requires deliveryLocation while it is null.
+      deliveryMethod: DeliveryMethod.MEETUP,
     });
 
     const savedEscrow = await queryRunner.manager.save(escrow);
@@ -1474,91 +1508,109 @@ export class EscrowService {
     // Lock buyer's funds
     await this.walletService.lockFunds(buyerId, amount, `ESCROW_${savedEscrow.id}`, queryRunner);
 
-    // No listing to update — buy request status is handled by the caller
-
-    // Schedule 72h fulfillment expiry job (outside transaction is fine)
-    await this.escrowQueue.add(
-      EscrowJobName.CHECK_FULFILLMENT_EXPIRY,
-      { escrowId: savedEscrow.id },
-      {
-        delay: this.FULFILLMENT_HOURS * 60 * 60 * 1000,
-        jobId: `fulfillment-expiry-${savedEscrow.id}`,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 1000 },
-      },
-    );
-
-    await this.scheduleFulfillmentReminders(savedEscrow.id);
-
+    // No listing to update — buy request status is handled by the caller.
+    // Jobs, notifications and emails live in finalizeOfferEscrowPlacement(),
+    // which the caller runs AFTER commit — nothing may announce an order that
+    // can still roll back.
     this.logger.log(
       `Escrow ${savedEscrow.id} (${orderNumber}) initiated from buy request offer ${offer.id} for ₦${amount}`,
     );
 
-    // Fetch seller for notifications/emails
-    const seller = await this.userRepo.findOne({ where: { id: sellerId } });
-    const itemTitle = offer.buyRequest?.title ?? 'Buy request item';
-    const formattedAmount = amount.toLocaleString();
-
-    // Notify buyer
-    await this.notificationsService.createNotification({
-      userId: buyerId,
-      type: NotificationType.ESCROW_INITIATED,
-      title: 'Order confirmed',
-      body: `Your order ${orderNumber} for "${itemTitle}" (₦${formattedAmount}) has been placed. The seller has 72 hours to set delivery details.`,
-      data: {
-        escrowId: savedEscrow.id,
-        orderNumber,
-        buyRequestOfferId: offer.id,
-        amount,
-      },
-    });
-
-    // Notify seller — tailored copy for buy request offers
-    await this.notificationsService.createNotification({
-      userId: sellerId,
-      type: NotificationType.ESCROW_INITIATED,
-      title: 'Your offer was accepted!',
-      body: `Your offer on "${itemTitle}" (₦${formattedAmount}) was accepted (${orderNumber}). You have 72 hours to set delivery details.`,
-      data: {
-        escrowId: savedEscrow.id,
-        orderNumber,
-        buyRequestOfferId: offer.id,
-        amount,
-      },
-    });
-
-    // Send order confirmation email to buyer
-    if (buyer.email) {
-      await this.resendService.sendEmail({
-        to: buyer.email,
-        subject: `Order Confirmed — ${orderNumber}`,
-        template: 'orderConfirmationBuyer',
-        context: {
-          buyerName: buyer.fullName,
-          orderNumber,
-          listingTitle: itemTitle,
-          amount: formattedAmount,
-          sellerName: seller?.fullName ?? 'Seller',
-        },
-      });
-    }
-
-    // Send new order email to seller
-    if (seller?.email) {
-      await this.resendService.sendEmail({
-        to: seller.email,
-        subject: `Offer Accepted — ${orderNumber}`,
-        template: 'newOrderSeller',
-        context: {
-          sellerName: seller.fullName,
-          orderNumber,
-          listingTitle: itemTitle,
-          amount: formattedAmount,
-        },
-      });
-    }
-
     return savedEscrow;
+  }
+
+  /**
+   * Post-commit side effects for a buy-request escrow: the 72h delivery
+   * deadline + seller reminders, both parties' notifications, and the two
+   * emails. Never throws — the money has already moved; a lost notification
+   * must not turn a successful accept into a 500.
+   */
+  async finalizeOfferEscrowPlacement(
+    escrow: EscrowTransaction,
+    offer: BuyRequestOffer,
+  ): Promise<void> {
+    try {
+      await this.escrowQueue.add(
+        EscrowJobName.CHECK_FULFILLMENT_EXPIRY,
+        { escrowId: escrow.id },
+        {
+          delay: this.FULFILLMENT_HOURS * 60 * 60 * 1000,
+          jobId: `fulfillment-expiry-${escrow.id}`,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1000 },
+        },
+      );
+      await this.scheduleFulfillmentReminders(escrow.id);
+
+      const amount = Number(escrow.amount);
+      const formattedAmount = amount.toLocaleString();
+      const itemTitle = offer.buyRequest?.title ?? 'Buy request item';
+      const [buyer, seller] = await Promise.all([
+        this.userRepo.findOne({ where: { id: escrow.buyerId } }),
+        this.userRepo.findOne({ where: { id: escrow.sellerId } }),
+      ]);
+
+      // Notify buyer
+      await this.notificationsService.createNotification({
+        userId: escrow.buyerId,
+        type: NotificationType.ESCROW_INITIATED,
+        title: 'Order confirmed',
+        body: `Your order ${escrow.orderNumber} for "${itemTitle}" (₦${formattedAmount}) has been placed. The seller has 72 hours to set delivery details.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          buyRequestOfferId: offer.id,
+          amount,
+        },
+      });
+
+      // Notify seller — tailored copy for buy request offers
+      await this.notificationsService.createNotification({
+        userId: escrow.sellerId,
+        type: NotificationType.ESCROW_INITIATED,
+        title: 'Your offer was accepted!',
+        body: `Your offer on "${itemTitle}" (₦${formattedAmount}) was accepted (${escrow.orderNumber}). You have 72 hours to set delivery details.`,
+        data: {
+          escrowId: escrow.id,
+          orderNumber: escrow.orderNumber,
+          buyRequestOfferId: offer.id,
+          amount,
+        },
+      });
+
+      if (buyer?.email) {
+        await this.resendService.sendEmail({
+          to: buyer.email,
+          subject: `Order Confirmed — ${escrow.orderNumber}`,
+          template: 'orderConfirmationBuyer',
+          context: {
+            buyerName: buyer.fullName,
+            orderNumber: escrow.orderNumber,
+            listingTitle: itemTitle,
+            amount: formattedAmount,
+            sellerName: seller?.fullName ?? 'Seller',
+          },
+        });
+      }
+
+      if (seller?.email) {
+        await this.resendService.sendEmail({
+          to: seller.email,
+          subject: `Offer Accepted — ${escrow.orderNumber}`,
+          template: 'newOrderSeller',
+          context: {
+            sellerName: seller.fullName,
+            orderNumber: escrow.orderNumber,
+            listingTitle: itemTitle,
+            amount: formattedAmount,
+          },
+        });
+      }
+    } catch (error) {
+      this.logger.error(
+        `Post-commit side effects failed for buy-request escrow ${escrow.id}: ${error}`,
+      );
+    }
   }
 
   /**
@@ -1580,7 +1632,28 @@ export class EscrowService {
       throw new BadRequestException(`Cannot mark ready. Order status is: ${escrow.status}`);
     }
 
-    const isMeetup = escrow.deliveryMethod === DeliveryMethod.MEETUP;
+    // P2P is meet-up only: a null method can only be a buy-request escrow
+    // created before the method was stamped at creation — treat it as meet-up.
+    const isMeetup =
+      escrow.deliveryMethod === DeliveryMethod.MEETUP ||
+      escrow.deliveryMethod === null;
+
+    // Meet-up point: checkout snapshots the buyer's chosen point at order time
+    // and it is fixed from then on. Buy-request escrows have no point yet, so
+    // the seller must name one here — otherwise the buyer is never told where
+    // the handover happens.
+    const meetupLocation = dto.deliveryLocation?.trim();
+    if (isMeetup && !escrow.deliveryLocation) {
+      if (!meetupLocation) {
+        throw new BadRequestException(
+          'A meet-up location is required for this order — say where you will hand the item over',
+        );
+      }
+    } else if (meetupLocation) {
+      throw new BadRequestException(
+        'The delivery location was fixed at order time and cannot be changed',
+      );
+    }
 
     // Code validity window depends on the method:
     //  - meet-up: ±2h around the seller's scheduled date/time (which must fall
@@ -1629,10 +1702,15 @@ export class EscrowService {
       escrow.status = EscrowStatus.SELLER_READY;
       escrow.sellerReadyAt = new Date();
       if (isMeetup) {
+        escrow.deliveryMethod = DeliveryMethod.MEETUP;
         escrow.deliveryDate = new Date(dto.deliveryDate!);
         escrow.deliveryTime = dto.deliveryTime!;
+        // Checkout orders already carry the buyer's point; buy-request orders
+        // take the seller's now (validated above).
+        if (!escrow.deliveryLocation) {
+          escrow.deliveryLocation = meetupLocation!;
+        }
       }
-      // deliveryLocation was snapshotted at order time — leave it as-is.
 
       await queryRunner.manager.save(escrow);
 
@@ -1976,6 +2054,8 @@ export class EscrowService {
         where: { orderId: escrow.id },
       });
       const expiredListingIds = expiredItems
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
         .map((item) => item.listingId)
         .filter((id): id is string => !!id);
       if (expiredListingIds.length > 0) {
@@ -2129,6 +2209,8 @@ export class EscrowService {
         where: { orderId: escrow.id },
       });
       const soldListingIds = soldItems
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
         .map((item) => item.listingId)
         .filter((id): id is string => !!id);
       if (soldListingIds.length > 0) {
@@ -2324,6 +2406,8 @@ export class EscrowService {
         where: { orderId: escrow.id },
       });
       const cancelledListingIds = cancelledItems
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
         .map((item) => item.listingId)
         .filter((id): id is string => !!id);
       if (cancelledListingIds.length > 0) {
@@ -2405,7 +2489,7 @@ export class EscrowService {
       );
 
       return {
-        escrow,
+        escrow: this.sanitizeEscrowParties(escrow),
         cancellationFee,
         refundAmount: buyerRefund,
         sellerCompensation,
@@ -2685,6 +2769,8 @@ export class EscrowService {
         where: { orderId: escrow.id },
       });
       const disputedListingIds = disputedItems
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
+        .filter((item) => item.itemType === OrderItemType.P2P_LISTING)
         .map((item) => item.listingId)
         .filter((id): id is string => !!id);
       if (disputedListingIds.length > 0) {
@@ -2785,7 +2871,7 @@ export class EscrowService {
       throw new ForbiddenException('You are not part of this transaction');
     }
 
-    return escrow;
+    return this.sanitizeEscrowParties(escrow);
   }
 
   /**
@@ -2870,17 +2956,8 @@ export class EscrowService {
 
     const [escrows, total] = await qb.getManyAndCount();
 
-    // Sanitize user data
-    escrows.forEach(e => {
-      if (e.buyer) {
-        delete (e.buyer as any).passwordHash;
-        delete (e.buyer as any).refreshTokenHash;
-      }
-      if (e.seller) {
-        delete (e.seller as any).passwordHash;
-        delete (e.seller as any).refreshTokenHash;
-      }
-    });
+    // Sanitize user data (full allowlist — a partial delete left PIN columns).
+    escrows.forEach((e) => this.sanitizeEscrowParties(e));
 
     return { escrows, total };
   }
@@ -2901,6 +2978,10 @@ export class EscrowService {
       order: { createdAt: 'ASC' },
       skip: (page - 1) * limit,
       take: limit,
+    });
+
+    disputes.forEach((d) => {
+      if (d.openedBy) (d as any).openedBy = this.sanitizeParty(d.openedBy);
     });
 
     return { disputes, total };
@@ -2924,6 +3005,10 @@ export class EscrowService {
     if (!dispute) {
       throw new NotFoundException('Dispute not found');
     }
+
+    if (dispute.escrow) this.sanitizeEscrowParties(dispute.escrow);
+    if (dispute.openedBy) (dispute as any).openedBy = this.sanitizeParty(dispute.openedBy);
+    if (dispute.resolvedBy) (dispute as any).resolvedBy = this.sanitizeParty(dispute.resolvedBy);
 
     return dispute;
   }

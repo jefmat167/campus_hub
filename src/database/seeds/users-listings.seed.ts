@@ -11,7 +11,7 @@ import {
   ListingCondition,
   VisibilityScope,
   ListingStatus,
-  ListingType,
+  ListingKind,
 } from '../entities/listing.entity';
 import * as bcrypt from 'bcrypt';
 import * as dotenv from 'dotenv';
@@ -413,7 +413,7 @@ async function seed() {
     const listing = listingRepo.create({
       sellerId: seller.id,
       universityId: university.id,
-      type: ListingType.SELL,
+      kind: ListingKind.P2P,
       title: listingData.title,
       description: listingData.description,
       category,
@@ -441,7 +441,7 @@ async function seed() {
     const listing = listingRepo.create({
       sellerId: seller.id,
       universityId: university.id,
-      type: ListingType.SELL,
+      kind: ListingKind.P2P,
       title: listingData.title,
       description: listingData.description,
       category,
@@ -469,7 +469,7 @@ async function seed() {
     const listing = listingRepo.create({
       sellerId: seller.id,
       universityId: university.id,
-      type: ListingType.SELL,
+      kind: ListingKind.P2P,
       title: listingData.title,
       description: listingData.description,
       category,

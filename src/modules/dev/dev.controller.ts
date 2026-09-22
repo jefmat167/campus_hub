@@ -25,6 +25,8 @@ import {
   VendorStatus,
 } from '../../database/entities/vendor-profile.entity';
 import { VendorUniversity } from '../../database/entities/vendor-university.entity';
+import { VendorDeliveryPoint } from '../../database/entities/vendor-delivery-point.entity';
+import { DropPoint } from '../../database/entities/drop-point.entity';
 
 /**
  * Development-only controller for testing verification flows.
@@ -44,6 +46,10 @@ export class DevController {
     private vendorProfileRepo: Repository<VendorProfile>,
     @InjectRepository(VendorUniversity)
     private vendorUniversityRepo: Repository<VendorUniversity>,
+    @InjectRepository(VendorDeliveryPoint)
+    private vendorDeliveryPointRepo: Repository<VendorDeliveryPoint>,
+    @InjectRepository(DropPoint)
+    private dropPointRepo: Repository<DropPoint>,
     private configService: ConfigService,
   ) {
     this.isDevelopment =
@@ -674,6 +680,8 @@ export class DevController {
         homeUniversityId: '550e8400-e29b-41d4-a716-446655440000',
         servedUniversityIds: ['550e8400-e29b-41d4-a716-446655440000'],
         shopAddress: 'Shop 3, Campus Plaza',
+        doorDeliveryFee: 'optional naira (default 500; null = no door delivery)',
+        serviceTravelFee: 'optional naira (default 1000; null = at-shop only)',
         email: 'optional',
         phone: 'optional',
         password: 'optional (default DevPass123!)',
@@ -682,14 +690,25 @@ export class DevController {
   })
   @ApiResponse({
     status: 201,
-    description: 'Test vendor created (profile already ACTIVE)',
+    description:
+      'Test vendor created (profile already ACTIVE) with a default delivery preset per served campus: ' +
+      'door delivery on the home campus, service travel everywhere, and the first active admin drop point at ₦300',
     schema: {
       example: {
         message: 'Test vendor created and approved',
         user: { id: 'uuid', email: 'vendor123@test.com', accountType: 'vendor' },
         vendorProfileId: 'uuid',
+        delivery: [
+          {
+            universityId: 'uuid',
+            isHome: true,
+            doorDeliveryFee: 500,
+            serviceTravelFee: 1000,
+            dropPoints: [{ dropPointId: 'uuid', name: 'Main Gate', fee: 300 }],
+          },
+        ],
         password: 'DevPass123!',
-        note: 'Log in via POST /auth/login; catalog writes via /vendors/me/listings',
+        note: 'Log in via POST /auth/login; catalog writes via /vendors/me/listings; delivery preset via GET/PUT /vendors/me/delivery',
       },
     },
   })
@@ -705,6 +724,10 @@ export class DevController {
       homeUniversityId: string;
       servedUniversityIds?: string[];
       shopAddress?: string;
+      /** Naira; null = no door delivery. Default ₦500 on the home campus. */
+      doorDeliveryFee?: number | null;
+      /** Naira; null = at-shop only. Default ₦1,000 on every served campus. */
+      serviceTravelFee?: number | null;
     },
   ) {
     this.checkDevMode();
@@ -757,16 +780,51 @@ export class DevController {
     });
     await this.vendorProfileRepo.save(profile);
 
+    // Served campuses double as the vendor's DELIVERY PRESET (2026-09-21
+    // amendment to spec 03.2). Stamp usable defaults so the flow is testable
+    // without visiting the settings screen: door delivery on the home campus,
+    // service travel everywhere, and the first active admin drop point at
+    // each campus (if admins have added any) at ₦300.
+    const doorDeliveryFee =
+      body.doorDeliveryFee === undefined ? 500 : body.doorDeliveryFee;
+    const serviceTravelFee =
+      body.serviceTravelFee === undefined ? 1000 : body.serviceTravelFee;
     const served = Array.from(
       new Set([body.homeUniversityId, ...(body.servedUniversityIds ?? [])]),
     );
+    const delivery: Array<Record<string, unknown>> = [];
     for (const universityId of served) {
-      await this.vendorUniversityRepo.save(
+      const isHome = universityId === body.homeUniversityId;
+      const row = await this.vendorUniversityRepo.save(
         this.vendorUniversityRepo.create({
           vendorProfileId: profile.id,
           universityId,
+          doorDeliveryFee: isHome ? doorDeliveryFee : null,
+          serviceTravelFee,
         }),
       );
+      const dropPoint = await this.dropPointRepo.findOne({
+        where: { universityId, isActive: true },
+        order: { name: 'ASC' },
+      });
+      if (dropPoint) {
+        await this.vendorDeliveryPointRepo.save(
+          this.vendorDeliveryPointRepo.create({
+            vendorUniversityId: row.id,
+            dropPointId: dropPoint.id,
+            fee: 300,
+          }),
+        );
+      }
+      delivery.push({
+        universityId,
+        isHome,
+        doorDeliveryFee: isHome ? doorDeliveryFee : null,
+        serviceTravelFee,
+        dropPoints: dropPoint
+          ? [{ dropPointId: dropPoint.id, name: dropPoint.name, fee: 300 }]
+          : [],
+      });
     }
 
     return {
@@ -774,8 +832,11 @@ export class DevController {
       user: { id: user.id, email: user.email, accountType: user.accountType },
       vendorProfileId: profile.id,
       servedUniversityIds: served,
+      delivery,
       password,
-      note: 'Log in via POST /auth/login; catalog writes via /vendors/me/listings',
+      note:
+        'Log in via POST /auth/login; catalog writes via /vendors/me/listings; ' +
+        'delivery preset via GET/PUT /vendors/me/delivery',
     };
   }
 
@@ -905,9 +966,13 @@ export class DevController {
             homeUniversityId: 'required',
             servedUniversityIds: 'optional (home always included)',
             shopAddress: 'optional',
+            doorDeliveryFee: 'optional naira (default 500; null = none)',
+            serviceTravelFee: 'optional naira (default 1000; null = none)',
           },
           description:
-            'Create a login-ready, already-ACTIVE vendor-only account (rev-2)',
+            'Create a login-ready, already-ACTIVE vendor-only account (rev-2) with a default ' +
+            'delivery preset per served campus (door fee at home, travel fee everywhere, first ' +
+            'active admin drop point at ₦300) — edit via GET/PUT /vendors/me/delivery',
         },
         {
           method: 'POST',

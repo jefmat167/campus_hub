@@ -1,10 +1,10 @@
 import { isListingSoldOut } from './vendor-listing.util';
-import { VendorListingType } from '../../database/entities/vendor-listing.entity';
+import { ListingKind } from '../../database/entities/listing.entity';
 
 /** Sold-out derivation matrix (rev-2 spec 03.3). */
 describe('isListingSoldOut', () => {
   const goods = (stock: number | null, groups: any[] = []) =>
-    ({ type: VendorListingType.GOODS, stock, optionGroups: groups }) as any;
+    ({ kind: ListingKind.VENDOR_GOODS, stock, optionGroups: groups }) as any;
 
   it('tracked base stock at 0 → sold out; untracked never does', () => {
     expect(isListingSoldOut(goods(0))).toBe(true);
@@ -37,7 +37,7 @@ describe('isListingSoldOut', () => {
 
   it('services derive only from their required groups (no base stock)', () => {
     const service = {
-      type: VendorListingType.SERVICE,
+      kind: ListingKind.VENDOR_SERVICE,
       stock: null,
       optionGroups: [{ required: true, options: [{ stock: 0 }] }],
     } as any;

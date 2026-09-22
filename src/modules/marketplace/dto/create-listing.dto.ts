@@ -21,20 +21,9 @@ import {
   ListingCategory,
   ListingCondition,
   VisibilityScope,
-  ListingType,
 } from '../../../database/entities/listing.entity';
 
 export class CreateListingDto {
-  @ApiPropertyOptional({
-    description: 'Type of listing',
-    enum: ListingType,
-    default: ListingType.SELL,
-    example: ListingType.SELL,
-  })
-  @IsEnum(ListingType)
-  @IsOptional()
-  type?: ListingType = ListingType.SELL;
-
   @ApiProperty({
     description: 'Title of the listing',
     example: 'iPhone 13 Pro Max - 256GB - Like New',

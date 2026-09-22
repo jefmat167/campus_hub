@@ -66,6 +66,25 @@ export class VendorMarketController {
     return this.marketService.getStorefront(user, profileId);
   }
 
+  @Get('vendors/:profileId/delivery')
+  @ApiOperation({
+    summary: "A vendor's delivery preset as it applies to MY university",
+    description:
+      'Vendor-level (2026-09-21 amendment to spec 03.2), so checkout needs it once per vendor, not per ' +
+      'listing: `{ vendorProfileId, businessName, isHome, doorDeliveryFee, serviceTravelFee, ' +
+      'dropPoints: [{ id, name, directions, fee }] }`. `doorDeliveryFee` is non-null only on the ' +
+      "vendor's home campus; `dropPoints` are the ACTIVE admin points the vendor delivers to here. " +
+      'Fees are naira. A listing may still be `pickupOnly` — check the line/detail flag.',
+  })
+  @ApiParam({ name: 'profileId', description: 'Vendor profile UUID' })
+  @ApiResponse({ status: 404, description: "Vendor doesn't serve your university / not active" })
+  async vendorDelivery(
+    @CurrentUser() user: User,
+    @Param('profileId', ParseUUIDPipe) profileId: string,
+  ) {
+    return this.marketService.getVendorDelivery(user, profileId);
+  }
+
   @Get('search')
   @ApiOperation({
     summary: 'Item-level search across vendors serving my university',
@@ -87,8 +106,10 @@ export class VendorMarketController {
   @ApiOperation({
     summary: 'Listing detail with fulfillment resolved for MY university',
     description:
-      'Pickup at the shop is always available; delivery/fee reflect this listing\'s opt-in for ' +
-      'the caller\'s campus. Options expose soldOut flags, never raw stock figures.',
+      'Pickup at the shop is always available. `fulfillment` = `{ pickupAvailable, pickupOnly, ' +
+      'delivery: { doorDelivery: { fee } | null, dropPoints: [{ id, name, directions, fee }] } | null, ' +
+      "travel: { fee } | null }` — the vendor's per-campus preset, or nothing when the listing is " +
+      '`pickupOnly`. Options expose soldOut flags, never raw stock figures.',
   })
   @ApiParam({ name: 'id', description: 'Vendor listing UUID' })
   async listingDetail(

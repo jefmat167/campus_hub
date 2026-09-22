@@ -8,7 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { VendorListing } from './vendor-listing.entity';
+import { Listing } from './listing.entity';
 import { KoboColumnTransformer } from '../../common/utils/money';
 
 export enum OptionSelectionType {
@@ -22,19 +22,19 @@ export enum OptionSelectionType {
  * "Size" = single-select + required; "Extras" = multi-select + optional.
  */
 @Entity('option_groups')
-@Index(['vendorListingId', 'position'])
+@Index(['listingId', 'position'])
 export class VendorOptionGroup {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'vendor_listing_id' })
-  vendorListingId: string;
+  @Column({ name: 'listing_id' })
+  listingId: string;
 
-  @ManyToOne(() => VendorListing, (listing) => listing.optionGroups, {
+  @ManyToOne(() => Listing, (listing) => listing.optionGroups, {
     onDelete: 'CASCADE',
   })
-  @JoinColumn({ name: 'vendor_listing_id' })
-  vendorListing: VendorListing;
+  @JoinColumn({ name: 'listing_id' })
+  listing: Listing;
 
   @Column({ length: 100 })
   name: string;

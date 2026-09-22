@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -24,13 +25,17 @@ import {
   EscrowStatus,
   OrderMarket,
 } from '../../database/entities/escrow.entity';
+import { VendorProfile } from '../../database/entities/vendor-profile.entity';
 import { VendorsService } from './vendors.service';
+import { VendorDeliveryService } from './vendor-delivery.service';
 import { EscrowService } from '../escrow/escrow.service';
 import { VendorGuard } from './vendor.guard';
+import { CurrentVendor } from './current-vendor.decorator';
 import { ApplyVendorDto } from './dto/apply-vendor.dto';
 import { SubmitVendorApplicationDto } from './dto/submit-vendor-application.dto';
 import { UpdateVendorProfileDto } from './dto/update-vendor-profile.dto';
 import { SubmitCacDto } from './dto/submit-cac.dto';
+import { ReplaceVendorDeliveryDto } from './dto/vendor-delivery.dto';
 
 @ApiTags('Vendors')
 @Controller('vendors')
@@ -38,6 +43,7 @@ import { SubmitCacDto } from './dto/submit-cac.dto';
 export class VendorsController {
   constructor(
     private readonly vendorsService: VendorsService,
+    private readonly vendorDeliveryService: VendorDeliveryService,
     private readonly escrowService: EscrowService,
   ) { }
 
@@ -115,6 +121,42 @@ export class VendorsController {
   @ApiResponse({ status: 200, description: 'Profile updated' })
   async updateMe(@CurrentUser() user: User, @Body() dto: UpdateVendorProfileDto) {
     return this.vendorsService.updateMyProfile(user.id, dto);
+  }
+
+  @Get('me/delivery')
+  @UseGuards(JwtAuthGuard, VendorGuard)
+  @ApiOperation({
+    summary: 'My delivery preset — one entry per served campus',
+    description:
+      'Vendor-level delivery settings inherited by every listing (2026-09-21 amendment to spec 03.2): ' +
+      'per served campus the door-delivery fee (home campus only), the service travel fee, and the ' +
+      'admin drop points you deliver goods to with a fee each. Each entry also lists the ACTIVE admin ' +
+      'drop points available at that campus (`availableDropPoints`) so a settings screen needs one request. ' +
+      'A chosen point with `isActive: false` was retired by admins — drop it and save again.',
+  })
+  @ApiResponse({ status: 200, description: 'Delivery preset per served campus' })
+  async getMyDelivery(@CurrentVendor() profile: VendorProfile) {
+    return this.vendorDeliveryService.getOwn(profile);
+  }
+
+  @Put('me/delivery')
+  @UseGuards(JwtAuthGuard, VendorGuard)
+  @ApiOperation({
+    summary: 'Replace my delivery preset wholesale',
+    description:
+      'Body `{ universities: [{ universityId, doorDeliveryFee?, serviceTravelFee?, dropPoints: [{ dropPointId, fee }] }] }` ' +
+      '(⊆ served universities, no duplicates). A served campus left out becomes pickup-only. Door delivery is ' +
+      'HOME campus only; every drop point must be an ACTIVE admin point at that campus, ≤ 3 per campus. ' +
+      'Fees are naira (0 = free); null/omitted = not offered. Listings inherit this — a listing only opts ' +
+      'out via its own `pickupOnly`. Suspended profiles are frozen.',
+  })
+  @ApiResponse({ status: 200, description: 'Updated delivery preset' })
+  @ApiResponse({ status: 400, description: 'Unserved campus, door fee off-home, foreign/inactive drop point, or > 3 points' })
+  async replaceMyDelivery(
+    @CurrentVendor() profile: VendorProfile,
+    @Body() dto: ReplaceVendorDeliveryDto,
+  ) {
+    return this.vendorDeliveryService.replace(profile, dto);
   }
 
   @Post('me/submit')

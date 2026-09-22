@@ -12,7 +12,6 @@ import {
 import { User } from './user.entity';
 import { Listing } from './listing.entity';
 import { Offer } from './offer.entity';
-import { VendorListing } from './vendor-listing.entity';
 import { KoboColumnTransformer } from '../../common/utils/money';
 
 /**
@@ -47,7 +46,8 @@ export class Cart {
  * A cart line. `priceAtAdd` is display-only — checkout always recomputes the
  * authoritative price server-side (listed price, or the accepted offer's
  * agreed price while its 24h lock holds). One line per P2P listing per cart
- * (partial unique index).
+ * (service-enforced — vendor goods may have several lines for one listing,
+ * one per option set).
  */
 @Entity('cart_items')
 @Index(['cartId'])
@@ -62,20 +62,13 @@ export class CartItem {
   @JoinColumn({ name: 'cart_id' })
   cart: Cart;
 
-  @Column({ name: 'listing_id', type: 'uuid', nullable: true })
-  listingId: string | null;
+  // Every kind lives on the one listings table now.
+  @Column({ name: 'listing_id', type: 'uuid' })
+  listingId: string;
 
   @ManyToOne(() => Listing, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'listing_id' })
-  listing: Listing | null;
-
-  // Vendor lines become purchasable in Phase 5.
-  @Column({ name: 'vendor_listing_id', type: 'uuid', nullable: true })
-  vendorListingId: string | null;
-
-  @ManyToOne(() => VendorListing, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'vendor_listing_id' })
-  vendorListing: VendorListing | null;
+  listing: Listing;
 
   // Accepted-offer price lock (24h from acceptance; never an availability hold).
   @Column({ name: 'offer_id', type: 'uuid', nullable: true })

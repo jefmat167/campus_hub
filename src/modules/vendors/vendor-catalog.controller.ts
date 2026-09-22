@@ -23,12 +23,11 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VendorGuard } from './vendor.guard';
 import { CurrentVendor } from './current-vendor.decorator';
 import { VendorProfile } from '../../database/entities/vendor-profile.entity';
-import { VendorListingStatus } from '../../database/entities/vendor-listing.entity';
+import { ListingStatus } from '../../database/entities/listing.entity';
 import { VendorCatalogService } from './vendor-catalog.service';
 import {
   AdjustStockDto,
   CreateVendorListingDto,
-  ReplaceFulfillmentDto,
   ReplaceOptionGroupsDto,
   UpdateVendorListingDto,
 } from './dto/vendor-listing-input.dto';
@@ -49,12 +48,14 @@ export class VendorCatalogController {
     summary: 'Create a catalog listing (goods or service)',
     description:
       'One payload: base fields + option groups (variants & add-ons, each option with its own ' +
-      'price delta/stock) + per-university delivery config (⊆ served universities). Services ' +
-      'carry no stock and are always manual-confirm; goods with untracked stock are forced to ' +
-      'manual-confirm (auto-confirmation requires tracked stock — rev-2 03.5).',
+      'price delta/stock). Delivery is NOT per listing: every listing inherits the vendor\'s ' +
+      'per-campus preset (`PUT /vendors/me/delivery`); set `pickupOnly: true` to keep this one ' +
+      'item pickup / at-the-shop only. Services carry no stock and are always manual-confirm; ' +
+      'goods with untracked stock are forced to manual-confirm (auto-confirmation requires ' +
+      'tracked stock — rev-2 03.5).',
   })
   @ApiResponse({ status: 201, description: 'Listing created (active)' })
-  @ApiResponse({ status: 400, description: 'Confirmation/stock rule or fulfillment violation' })
+  @ApiResponse({ status: 400, description: 'Confirmation/stock rule violation' })
   @ApiResponse({ status: 403, description: 'Storefront not active' })
   async create(
     @CurrentVendor() profile: VendorProfile,
@@ -68,13 +69,13 @@ export class VendorCatalogController {
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'paused'] })
   async list(
     @CurrentVendor() profile: VendorProfile,
-    @Query('status') status?: VendorListingStatus,
+    @Query('status') status?: ListingStatus,
   ) {
     return this.catalogService.listOwn(profile, status);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'One of my listings, full detail incl. fulfillment' })
+  @ApiOperation({ summary: 'One of my listings, full detail (options + stock + pickupOnly)' })
   @ApiParam({ name: 'id', description: 'Vendor listing UUID' })
   async getOne(
     @CurrentVendor() profile: VendorProfile,
@@ -122,19 +123,6 @@ export class VendorCatalogController {
     @Body() dto: ReplaceOptionGroupsDto,
   ) {
     return this.catalogService.replaceOptionGroups(profile, id, dto);
-  }
-
-  @Put(':id/fulfillment')
-  @ApiOperation({
-    summary: 'Replace the per-university delivery config (⊆ served universities)',
-  })
-  @ApiParam({ name: 'id', description: 'Vendor listing UUID' })
-  async replaceFulfillment(
-    @CurrentVendor() profile: VendorProfile,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: ReplaceFulfillmentDto,
-  ) {
-    return this.catalogService.replaceFulfillment(profile, id, dto);
   }
 
   @Patch(':id/stock')

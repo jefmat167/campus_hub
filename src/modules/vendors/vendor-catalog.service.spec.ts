@@ -4,21 +4,27 @@ import {
 } from '@nestjs/common';
 import { VendorCatalogService } from './vendor-catalog.service';
 import {
-  VendorListingStatus,
-  VendorListingType,
-} from '../../database/entities/vendor-listing.entity';
+  ListingKind,
+  ListingStatus,
+} from '../../database/entities/listing.entity';
 import { VendorStatus } from '../../database/entities/vendor-profile.entity';
 import { OptionSelectionType } from '../../database/entities/vendor-option.entity';
 
 /**
  * Catalog write-plane rules (rev-2 03.3 / 03.5 + decision log #8):
- * confirmation/stock matrix, service-stock rejection, fulfillment ⊆ served
- * universities, and the ACTIVE-storefront gate on writes.
+ * confirmation/stock matrix, service-stock rejection, the per-listing
+ * `pickupOnly` opt-out of the vendor's delivery preset (2026-09-21 amendment
+ * — delivery itself is no longer configured here), and the ACTIVE-storefront
+ * gate on writes.
  */
-const activeProfile: any = { id: 'vp1', status: VendorStatus.ACTIVE };
+const activeProfile: any = {
+  id: 'vp1',
+  userId: 'vendor-user',
+  homeUniversityId: 'u1',
+  status: VendorStatus.ACTIVE,
+};
 
 function makeService(opts: {
-  served?: string[];
   listing?: any;
 } = {}) {
   const savedEntities: any[] = [];
@@ -35,11 +41,6 @@ function makeService(opts: {
   };
   const groupRepo: any = {
     createQueryBuilder: jest.fn(),
-  };
-  const vendorUniversityRepo: any = {
-    find: jest.fn(async () =>
-      (opts.served ?? ['u1']).map((universityId) => ({ universityId })),
-    ),
   };
   const manager: any = {
     create: (_entity: any, o: any) => ({ ...o }),
@@ -61,7 +62,6 @@ function makeService(opts: {
     listingRepo,
     imageRepo,
     groupRepo,
-    vendorUniversityRepo,
     dataSource,
     uploadService,
   );
@@ -70,18 +70,18 @@ function makeService(opts: {
     opts.listing ?? {
       id: 'vl1',
       vendorProfileId: 'vp1',
-      type: VendorListingType.GOODS,
+      kind: ListingKind.VENDOR_GOODS,
       title: 'x',
       description: 'x',
       category: 'food',
-      basePrice: 1000,
+      price: 1000,
       stock: 5,
       manualConfirm: false,
-      status: VendorListingStatus.ACTIVE,
+      pickupOnly: false,
+      status: ListingStatus.ACTIVE,
       viewCount: 0,
       images: [],
       optionGroups: [],
-      fulfillment: [],
       createdAt: new Date(),
     },
   );
@@ -89,11 +89,11 @@ function makeService(opts: {
 }
 
 const baseDto = {
-  type: VendorListingType.GOODS,
+  kind: ListingKind.VENDOR_GOODS,
   title: 'Jollof rice (party pack)',
   description: 'Freshly made every morning, feeds four.',
   category: 'food' as any,
-  basePrice: 3500,
+  price: 3500,
 };
 
 describe('VendorCatalogService.createListing — confirmation/stock matrix', () => {
@@ -127,7 +127,7 @@ describe('VendorCatalogService.createListing — confirmation/stock matrix', () 
     const service = makeService();
     await service.svc.createListing(activeProfile, {
       ...baseDto,
-      type: VendorListingType.SERVICE,
+      kind: ListingKind.VENDOR_SERVICE,
     } as any);
     const listing = service.savedEntities.find((e) => e.title);
     expect(listing.manualConfirm).toBe(true);
@@ -137,7 +137,7 @@ describe('VendorCatalogService.createListing — confirmation/stock matrix', () 
     await expect(
       withStock.svc.createListing(activeProfile, {
         ...baseDto,
-        type: VendorListingType.SERVICE,
+        kind: ListingKind.VENDOR_SERVICE,
         stock: 5,
       } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -146,7 +146,7 @@ describe('VendorCatalogService.createListing — confirmation/stock matrix', () 
     await expect(
       autoService.svc.createListing(activeProfile, {
         ...baseDto,
-        type: VendorListingType.SERVICE,
+        kind: ListingKind.VENDOR_SERVICE,
         manualConfirm: false,
       } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -157,16 +157,73 @@ describe('VendorCatalogService.createListing — confirmation/stock matrix', () 
   }
 });
 
-describe('VendorCatalogService fulfillment + option groups', () => {
-  it('rejects fulfillment rows for universities the vendor does not serve', async () => {
-    const { svc } = makeService({ served: ['u1'] });
-    await expect(
-      svc.createListing(activeProfile, {
-        ...baseDto,
-        stock: 5,
-        fulfillment: [{ universityId: 'u2', deliveryEnabled: true, deliveryFee: 500 }],
-      } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
+describe('VendorCatalogService pickupOnly + option groups', () => {
+  it('pickupOnly defaults to false (inherits the vendor preset) and persists when set', async () => {
+    const inherits = makeService();
+    await inherits.svc.createListing(activeProfile, {
+      ...baseDto,
+      stock: 5,
+    } as any);
+    expect(inherits.savedEntities.find((e) => e.title).pickupOnly).toBe(false);
+
+    const optedOut = makeService();
+    await optedOut.svc.createListing(activeProfile, {
+      ...baseDto,
+      stock: 5,
+      pickupOnly: true,
+    } as any);
+    expect(optedOut.savedEntities.find((e) => e.title).pickupOnly).toBe(true);
+  });
+
+  it('pickupOnly rides the base-fields PATCH in both directions', async () => {
+    const listing: any = {
+      id: 'vl1',
+      vendorProfileId: 'vp1',
+      kind: ListingKind.VENDOR_GOODS,
+      stock: 5,
+      manualConfirm: false,
+      pickupOnly: false,
+      status: ListingStatus.ACTIVE,
+      images: [],
+      optionGroups: [],
+    };
+    const { svc, listingRepo } = makeService({ listing });
+
+    await svc.updateListing(activeProfile, 'vl1', { pickupOnly: true } as any);
+    expect(listingRepo.save.mock.calls[0][0].pickupOnly).toBe(true);
+
+    await svc.updateListing(activeProfile, 'vl1', { pickupOnly: false } as any);
+    expect(listingRepo.save.mock.calls[1][0].pickupOnly).toBe(false);
+  });
+
+  it('own views expose pickupOnly on the list AND the detail (the catalog list renders a chip)', async () => {
+    const listing: any = {
+      id: 'vl1',
+      vendorProfileId: 'vp1',
+      kind: ListingKind.VENDOR_GOODS,
+      title: 'x',
+      description: 'x',
+      category: 'food',
+      price: 1000,
+      stock: 5,
+      manualConfirm: false,
+      pickupOnly: true,
+      status: ListingStatus.ACTIVE,
+      viewCount: 0,
+      images: [],
+      optionGroups: [],
+      createdAt: new Date(),
+    };
+    const { svc, listingRepo } = makeService({ listing });
+    listingRepo.find.mockResolvedValue([listing]);
+
+    const [row] = await svc.listOwn(activeProfile);
+    expect(row.pickupOnly).toBe(true);
+    expect(row).not.toHaveProperty('fulfillment');
+
+    const detail = await svc.getOwnListing(activeProfile, 'vl1');
+    expect(detail.pickupOnly).toBe(true);
+    expect(detail).not.toHaveProperty('fulfillment');
   });
 
   it('persists nested option groups with positions and defaults', async () => {
@@ -191,28 +248,6 @@ describe('VendorCatalogService fulfillment + option groups', () => {
     expect(options[0]).toMatchObject({ name: 'Small', priceDelta: 0, stock: null });
     expect(options[1]).toMatchObject({ name: 'Large', priceDelta: 500, stock: 3 });
   });
-
-  it('delivery-disabled rows store a null fee; enabled rows default to 0', async () => {
-    const { svc, savedEntities } = makeService({ served: ['u1', 'u2'] });
-    await svc.createListing(activeProfile, {
-      ...baseDto,
-      stock: 5,
-      fulfillment: [
-        { universityId: 'u1', deliveryEnabled: true },
-        { universityId: 'u2', deliveryEnabled: false, deliveryFee: 900 },
-      ],
-    } as any);
-
-    const rows = savedEntities.filter((e) => e.universityId);
-    expect(rows.find((r) => r.universityId === 'u1')).toMatchObject({
-      deliveryEnabled: true,
-      deliveryFee: 0,
-    });
-    expect(rows.find((r) => r.universityId === 'u2')).toMatchObject({
-      deliveryEnabled: false,
-      deliveryFee: null,
-    });
-  });
 });
 
 describe('VendorCatalogService write gate + stock adjust', () => {
@@ -230,13 +265,13 @@ describe('VendorCatalogService write gate + stock adjust', () => {
     const listing: any = {
       id: 'vl1',
       vendorProfileId: 'vp1',
-      type: VendorListingType.GOODS,
+      kind: ListingKind.VENDOR_GOODS,
       stock: 5,
       manualConfirm: false,
-      status: VendorListingStatus.ACTIVE,
+      pickupOnly: false,
+      status: ListingStatus.ACTIVE,
       images: [],
       optionGroups: [],
-      fulfillment: [],
     };
     const { svc, listingRepo } = makeService({ listing });
 

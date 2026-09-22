@@ -215,6 +215,8 @@ export class VendorsService {
       await this.validateUniversitySelection(newHome, newServed);
     }
 
+    const previousHome = profile.homeUniversityId;
+
     await this.dataSource.transaction(async (manager) => {
       if (dto.businessName !== undefined) profile.businessName = dto.businessName;
       if (dto.description !== undefined) profile.description = dto.description;
@@ -223,15 +225,37 @@ export class VendorsService {
       await manager.save(profile);
 
       if (dto.servedUniversityIds !== undefined) {
-        await manager.delete(VendorUniversity, { vendorProfileId: profile.id });
-        for (const universityId of new Set(newServed)) {
-          await manager.save(
-            manager.create(VendorUniversity, {
-              vendorProfileId: profile.id,
-              universityId,
-            }),
-          );
+        // Diff, never rewrite: a kept campus keeps its delivery preset (fees +
+        // chosen drop points); a dropped campus cascades its points away.
+        const wanted = new Set(newServed);
+        const existing = new Map(
+          profile.servedUniversities.map((vu) => [vu.universityId, vu]),
+        );
+        for (const [universityId, vu] of existing) {
+          if (!wanted.has(universityId)) {
+            await manager.delete(VendorUniversity, { id: vu.id });
+          }
         }
+        for (const universityId of wanted) {
+          if (!existing.has(universityId)) {
+            await manager.save(
+              manager.create(VendorUniversity, {
+                vendorProfileId: profile.id,
+                universityId,
+              }),
+            );
+          }
+        }
+      }
+
+      // Door delivery is home-campus-only: when home moves, the old home row
+      // loses it (independent of whether the served list was also sent).
+      if (newHome !== previousHome) {
+        await manager.update(
+          VendorUniversity,
+          { vendorProfileId: profile.id, universityId: previousHome },
+          { doorDeliveryFee: null },
+        );
       }
     });
 

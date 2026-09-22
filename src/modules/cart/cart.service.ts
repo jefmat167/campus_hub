@@ -9,14 +9,10 @@ import { Repository } from 'typeorm';
 import { Cart, CartItem } from '../../database/entities/cart.entity';
 import {
   Listing,
+  ListingKind,
   ListingStatus,
 } from '../../database/entities/listing.entity';
 import { Offer, OfferStatus } from '../../database/entities/offer.entity';
-import {
-  VendorListing,
-  VendorListingStatus,
-  VendorListingType,
-} from '../../database/entities/vendor-listing.entity';
 import { VendorUniversity } from '../../database/entities/vendor-university.entity';
 import { VendorStatus } from '../../database/entities/vendor-profile.entity';
 import { User } from '../../database/entities/user.entity';
@@ -27,17 +23,20 @@ import { AddCartItemDto } from './dto/add-cart-item.dto';
 
 export interface CartLineView {
   id: string;
-  kind: 'p2p' | 'vendor';
-  /** Vendor lines: goods vs service — a service line needs a schedule at checkout. */
-  listingType: 'goods' | 'service' | null;
-  listingId: string | null;
-  vendorListingId: string | null;
+  /** p2p | vendor_goods | vendor_service — a service line needs a schedule at checkout. */
+  kind: ListingKind;
+  listingId: string;
   title: string | null;
   sellerId: string | null;
   sellerName: string | null;
   vendorProfileId: string | null;
   businessName: string | null;
   meetupPoints: string[];
+  /**
+   * Vendor kinds only: this listing opts out of the vendor's delivery preset
+   * (goods pickup-only / service at-the-shop only). Undefined on P2P lines.
+   */
+  pickupOnly?: boolean;
   quantity: number;
   priceAtAdd: number;
   currentPrice: number | null;
@@ -67,14 +66,21 @@ export interface CartView {
   readyToCheckout: boolean;
 }
 
+const LISTING_RELATIONS = [
+  'seller',
+  'vendorProfile',
+  'optionGroups',
+  'optionGroups.options',
+];
+
 /**
  * The shared cart (rev-2 spec 01.6): NO HOLDS — carting reserves nothing
  * (neither a P2P listing nor a unit of vendor stock); checkout validates and
- * reserves. Stale lines get flags, never silent drops. Vendor GOODS lines
- * since Phase 5; SERVICE lines since Phase 6 — always quantity 1, never
- * merged (each booking is its own sub-order with its own appointment), and
- * the proposed time is collected at CHECKOUT, not here (a carted time would
- * go stale).
+ * reserves. Stale lines get flags, never silent drops. Every kind lives on the
+ * one listings table (unified marketplace): P2P lines are always quantity 1
+ * and dedupe per listing; vendor GOODS lines merge per option set; SERVICE
+ * lines are always quantity 1 and never merge (each booking is its own
+ * sub-order with its own appointment — the time is collected at CHECKOUT).
  */
 @Injectable()
 export class CartService {
@@ -87,8 +93,6 @@ export class CartService {
     private listingRepo: Repository<Listing>,
     @InjectRepository(Offer)
     private offerRepo: Repository<Offer>,
-    @InjectRepository(VendorListing)
-    private vendorListingRepo: Repository<VendorListing>,
     @InjectRepository(VendorUniversity)
     private vendorUniversityRepo: Repository<VendorUniversity>,
     private timingPolicy: TimingPolicyService,
@@ -110,56 +114,56 @@ export class CartService {
   }
 
   async addItem(user: User, dto: AddCartItemDto): Promise<CartView> {
-    const provided =
-      (dto.listingId ? 1 : 0) +
-      (dto.offerId ? 1 : 0) +
-      (dto.vendorListingId ? 1 : 0);
+    const provided = (dto.listingId ? 1 : 0) + (dto.offerId ? 1 : 0);
     if (provided !== 1) {
-      throw new BadRequestException(
-        'Provide exactly one of listingId, offerId, or vendorListingId',
-      );
+      throw new BadRequestException('Provide exactly one of listingId or offerId');
     }
-
-    if (dto.vendorListingId) {
-      return this.addVendorItem(user, dto);
-    }
-    return this.addP2pItem(user, dto);
-  }
-
-  private async addP2pItem(user: User, dto: AddCartItemDto): Promise<CartView> {
-    let listing: Listing | null;
-    let offerId: string | null = null;
-    let price: number;
 
     if (dto.offerId) {
-      const offer = await this.offerRepo.findOne({
-        where: { id: dto.offerId },
-        relations: ['listing'],
-      });
-      if (!offer) {
-        throw new NotFoundException('Offer not found');
-      }
-      if (offer.buyerId !== user.id) {
-        throw new ForbiddenException('This offer is not yours');
-      }
-      if (!this.isOfferLockValid(offer)) {
-        throw new BadRequestException(
-          'This offer is not accepted or its 24h price lock has expired — negotiate again or add at the listed price',
-        );
-      }
-      listing = offer.listing;
-      offerId = offer.id;
-      price = this.agreedOfferPrice(offer);
-    } else {
-      listing = await this.listingRepo.findOne({
-        where: { id: dto.listingId },
-      });
-      price = listing ? Number(listing.price) : 0;
+      return this.addP2pItemFromOffer(user, dto.offerId);
     }
 
+    const listing = await this.listingRepo.findOne({
+      where: { id: dto.listingId as string },
+      relations: LISTING_RELATIONS,
+    });
     if (!listing) {
       throw new NotFoundException('Listing not found');
     }
+
+    return listing.kind === ListingKind.P2P
+      ? this.addP2pItem(user, listing, null, Number(listing.price))
+      : this.addVendorItem(user, listing, dto);
+  }
+
+  private async addP2pItemFromOffer(user: User, offerId: string): Promise<CartView> {
+    const offer = await this.offerRepo.findOne({
+      where: { id: offerId },
+      relations: ['listing'],
+    });
+    if (!offer) {
+      throw new NotFoundException('Offer not found');
+    }
+    if (offer.buyerId !== user.id) {
+      throw new ForbiddenException('This offer is not yours');
+    }
+    if (!this.isOfferLockValid(offer)) {
+      throw new BadRequestException(
+        'This offer is not accepted or its 24h price lock has expired — negotiate again or add at the listed price',
+      );
+    }
+    if (!offer.listing) {
+      throw new NotFoundException('Listing not found');
+    }
+    return this.addP2pItem(user, offer.listing, offer.id, this.agreedOfferPrice(offer));
+  }
+
+  private async addP2pItem(
+    user: User,
+    listing: Listing,
+    offerId: string | null,
+    price: number,
+  ): Promise<CartView> {
     if (listing.status !== ListingStatus.ACTIVE) {
       throw new BadRequestException('Listing is not available');
     }
@@ -192,6 +196,7 @@ export class CartService {
 
   private async addVendorItem(
     user: User,
+    listing: Listing,
     dto: AddCartItemDto,
   ): Promise<CartView> {
     if (!user.universityId) {
@@ -202,29 +207,25 @@ export class CartService {
     const quantity = dto.quantity ?? 1;
     const selectedOptionIds = dto.selectedOptionIds ?? [];
 
-    const listing = await this.vendorListingRepo.findOne({
-      where: { id: dto.vendorListingId as string },
-      relations: ['vendorProfile', 'optionGroups', 'optionGroups.options'],
-    });
     if (
-      !listing ||
-      listing.status !== VendorListingStatus.ACTIVE ||
+      listing.status !== ListingStatus.ACTIVE ||
+      !listing.vendorProfile ||
       listing.vendorProfile.status !== VendorStatus.ACTIVE
     ) {
       throw new NotFoundException('Listing not found');
     }
-    const isService = listing.type === VendorListingType.SERVICE;
+    const isService = listing.kind === ListingKind.VENDOR_SERVICE;
     if (isService && quantity !== 1) {
       throw new BadRequestException(
         'A service booking is one appointment — add it again for another session',
       );
     }
-    if (listing.vendorProfile.userId === user.id) {
+    if (listing.sellerId === user.id) {
       throw new BadRequestException('You cannot buy from your own storefront');
     }
     const serves = await this.vendorUniversityRepo.findOne({
       where: {
-        vendorProfileId: listing.vendorProfileId,
+        vendorProfileId: listing.vendorProfileId as string,
         universityId: user.universityId,
       },
     });
@@ -254,7 +255,7 @@ export class CartService {
     const existing = isService
       ? []
       : await this.cartItemRepo.find({
-        where: { cartId: cart.id, vendorListingId: listing.id },
+        where: { cartId: cart.id, listingId: listing.id },
       });
     const wanted = [...selectedOptionIds].sort().join(',');
     let line = existing.find(
@@ -268,7 +269,7 @@ export class CartService {
     } else {
       line = this.cartItemRepo.create({
         cartId: cart.id,
-        vendorListingId: listing.id,
+        listingId: listing.id,
         quantity,
         selectedOptions: { optionIds: selectedOptionIds },
         priceAtAdd: unitPrice,
@@ -327,10 +328,14 @@ export class CartService {
 
     const lines: CartLineView[] = [];
     for (const item of items) {
-      if (item.vendorListingId) {
-        lines.push(await this.buildVendorLineView(user, item));
+      const listing = await this.listingRepo.findOne({
+        where: { id: item.listingId },
+        relations: LISTING_RELATIONS,
+      });
+      if (!listing || listing.kind === ListingKind.P2P) {
+        lines.push(await this.buildP2pLineView(item, listing));
       } else {
-        lines.push(await this.buildP2pLineView(user, item));
+        lines.push(await this.buildVendorLineView(user, item, listing));
       }
     }
 
@@ -350,7 +355,7 @@ export class CartService {
       const lineKobo = toKobo(unit) * line.quantity;
       itemsSubtotalKobo += lineKobo;
 
-      if (line.kind === 'p2p' && line.sellerId) {
+      if (line.kind === ListingKind.P2P && line.sellerId) {
         const group = sellerMap.get(line.sellerId) ?? {
           sellerId: line.sellerId,
           sellerName: line.sellerName,
@@ -361,7 +366,7 @@ export class CartService {
         group.subtotalKobo += lineKobo;
         sellerMap.set(line.sellerId, group);
       }
-      if (line.kind === 'vendor' && line.vendorProfileId) {
+      if (line.kind !== ListingKind.P2P && line.vendorProfileId) {
         const group = vendorMap.get(line.vendorProfileId) ?? {
           vendorProfileId: line.vendorProfileId,
           businessName: line.businessName,
@@ -397,15 +402,9 @@ export class CartService {
   }
 
   private async buildP2pLineView(
-    user: User,
     item: CartItem,
+    listing: Listing | null,
   ): Promise<CartLineView> {
-    const listing = item.listingId
-      ? await this.listingRepo.findOne({
-        where: { id: item.listingId },
-        relations: ['seller'],
-      })
-      : null;
     const offer = item.offerId
       ? await this.offerRepo.findOne({ where: { id: item.offerId } })
       : null;
@@ -431,10 +430,8 @@ export class CartService {
 
     return {
       id: item.id,
-      kind: 'p2p',
-      listingType: null,
+      kind: ListingKind.P2P,
       listingId: item.listingId,
-      vendorListingId: null,
       title: listing?.title ?? null,
       sellerId: listing?.sellerId ?? null,
       sellerName: listing?.seller?.fullName ?? null,
@@ -454,19 +451,16 @@ export class CartService {
   private async buildVendorLineView(
     user: User,
     item: CartItem,
+    listing: Listing,
   ): Promise<CartLineView> {
-    const listing = await this.vendorListingRepo.findOne({
-      where: { id: item.vendorListingId as string },
-      relations: ['vendorProfile', 'optionGroups', 'optionGroups.options'],
-    });
     const selectedOptionIds = this.lineOptionIds(item);
 
     const issues: string[] = [];
     let currentPrice: number | null = null;
 
     if (
-      !listing ||
-      listing.status !== VendorListingStatus.ACTIVE ||
+      listing.status !== ListingStatus.ACTIVE ||
+      !listing.vendorProfile ||
       listing.vendorProfile.status !== VendorStatus.ACTIVE
     ) {
       issues.push('listing_unavailable');
@@ -474,7 +468,7 @@ export class CartService {
       if (user.universityId) {
         const serves = await this.vendorUniversityRepo.findOne({
           where: {
-            vendorProfileId: listing.vendorProfileId,
+            vendorProfileId: listing.vendorProfileId as string,
             universityId: user.universityId,
           },
         });
@@ -500,16 +494,15 @@ export class CartService {
 
     return {
       id: item.id,
-      kind: 'vendor',
-      listingType: listing?.type ?? null,
-      listingId: null,
-      vendorListingId: item.vendorListingId,
-      title: listing?.title ?? null,
-      sellerId: listing?.vendorProfile?.userId ?? null,
+      kind: listing.kind,
+      listingId: item.listingId,
+      title: listing.title,
+      sellerId: listing.sellerId,
       sellerName: null,
-      vendorProfileId: listing?.vendorProfileId ?? null,
-      businessName: listing?.vendorProfile?.businessName ?? null,
+      vendorProfileId: listing.vendorProfileId,
+      businessName: listing.vendorProfile?.businessName ?? null,
       meetupPoints: [],
+      pickupOnly: !!listing.pickupOnly,
       quantity: item.quantity,
       priceAtAdd: Number(item.priceAtAdd),
       currentPrice,

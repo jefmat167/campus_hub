@@ -31,7 +31,7 @@ function order(over: any = {}) {
     orderItems: [
       {
         itemType: OrderItemType.VENDOR_SERVICE,
-        vendorListingId: 'vs1',
+        listingId: 'vs1',
       },
     ],
     ...over,
@@ -136,7 +136,7 @@ describe('ServiceSchedulingService.respond — guards', () => {
   it('rejects non-service orders and closed negotiations', async () => {
     const goods = makeService({
       order: order({
-        orderItems: [{ itemType: OrderItemType.VENDOR_GOODS, vendorListingId: 'vg1' }],
+        orderItems: [{ itemType: OrderItemType.VENDOR_GOODS, listingId: 'vg1' }],
       }),
     });
     await expect(

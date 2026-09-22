@@ -13,19 +13,21 @@ import {
   VendorStatus,
 } from '../entities/vendor-profile.entity';
 import { VendorUniversity } from '../entities/vendor-university.entity';
-import {
-  VendorListing,
-  VendorListingImage,
-  VendorListingType,
-  VendorListingStatus,
-} from '../entities/vendor-listing.entity';
+import { VendorDeliveryPoint } from '../entities/vendor-delivery-point.entity';
+import { DropPoint } from '../entities/drop-point.entity';
 import {
   VendorOptionGroup,
   VendorOption,
   OptionSelectionType,
 } from '../entities/vendor-option.entity';
-import { VendorListingFulfillment } from '../entities/vendor-listing-fulfillment.entity';
-import { ListingCategory } from '../entities/listing.entity';
+import {
+  Listing,
+  ListingImage,
+  ListingCategory,
+  ListingKind,
+  ListingStatus,
+  VisibilityScope,
+} from '../entities/listing.entity';
 import * as bcrypt from 'bcrypt';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
@@ -56,11 +58,12 @@ const dataSource = new DataSource({
     WalletTransaction,
     VendorProfile,
     VendorUniversity,
-    VendorListing,
-    VendorListingImage,
+    VendorDeliveryPoint,
+    DropPoint,
+    Listing,
+    ListingImage,
     VendorOptionGroup,
     VendorOption,
-    VendorListingFulfillment,
   ],
   synchronize: false,
   ssl:
@@ -85,16 +88,22 @@ interface SeedGroup {
 }
 
 interface SeedListing {
-  type: VendorListingType;
+  kind: ListingKind.VENDOR_GOODS | ListingKind.VENDOR_SERVICE;
   title: string;
   description: string;
   category: ListingCategory;
-  basePrice: number;
+  price: number;
   stock?: number | null; // goods only; omit/null = untracked (forces manual confirm)
   manualConfirm?: boolean;
-  deliveryEnabled?: boolean; // for goods: door delivery; for services: travel
-  deliveryFee?: number;
+  pickupOnly?: boolean; // opt this one item OUT of the vendor's delivery preset
   groups?: SeedGroup[];
+}
+
+/** An admin drop point the vendor delivers to, created at each served campus if missing. */
+interface SeedDropPoint {
+  name: string;
+  directions?: string;
+  fee: number; // naira, per campus
 }
 
 interface SeedVendor {
@@ -104,6 +113,11 @@ interface SeedVendor {
   description: string;
   shopAddress: string;
   servesNeighbor: boolean; // also serve the second seeded university
+  // Delivery PRESET (2026-09-21 amendment to spec 03.2) — vendor-level, one
+  // per served campus, inherited by every listing:
+  doorDeliveryFee?: number | null; // goods to the student's address, HOME campus only
+  serviceTravelFee?: number | null; // vendor travels to the student for services, any campus
+  dropPoints?: SeedDropPoint[]; // goods to these admin points, at every served campus
   listings: SeedListing[];
 }
 
@@ -118,18 +132,21 @@ const VENDORS: SeedVendor[] = [
       'Home-style Nigerian meals cooked fresh daily — jollof, fried rice, swallow and soups.',
     shopAddress: 'Shop 4, Mama T Plaza, beside the ICT gate',
     servesNeighbor: true,
+    doorDeliveryFee: 500,
+    dropPoints: [
+      { name: 'Main Gate', directions: 'Security post, right of the main entrance', fee: 300 },
+      { name: 'Hostel Block A', directions: 'Porter’s lodge, ground floor', fee: 400 },
+    ],
     listings: [
       {
-        type: VendorListingType.GOODS,
+        kind: ListingKind.VENDOR_GOODS,
         title: 'Jollof Rice & Chicken',
         description:
           'Smoky party-style jollof with a grilled chicken lap. Cooked fresh every morning.',
         category: ListingCategory.FOOD,
-        basePrice: 2500,
+        price: 2500,
         stock: 40,
         manualConfirm: false,
-        deliveryEnabled: true,
-        deliveryFee: 500,
         groups: [
           {
             name: 'Size',
@@ -153,16 +170,14 @@ const VENDORS: SeedVendor[] = [
         ],
       },
       {
-        type: VendorListingType.GOODS,
+        kind: ListingKind.VENDOR_GOODS,
         title: 'Fried Rice Combo',
         description:
           'Fried rice with peppered beef and a chilled soft drink. Lunch sorted.',
         category: ListingCategory.FOOD,
-        basePrice: 2200,
+        price: 2200,
         stock: 30,
         manualConfirm: false,
-        deliveryEnabled: true,
-        deliveryFee: 500,
       },
     ],
   },
@@ -174,18 +189,18 @@ const VENDORS: SeedVendor[] = [
       'Custom shirts, mugs, project binding and large-format printing for students and departments.',
     shopAddress: 'Suite 12, Works Road Arcade',
     servesNeighbor: false,
+    doorDeliveryFee: 800,
+    dropPoints: [{ name: 'Main Gate', fee: 500 }],
     listings: [
       {
-        type: VendorListingType.GOODS,
+        kind: ListingKind.VENDOR_GOODS,
         title: 'Custom Printed T-Shirt',
         description:
           'Your design printed on a quality cotton tee. Made to order — confirm your design before we print.',
         category: ListingCategory.CLOTHING,
-        basePrice: 4500,
+        price: 4500,
         stock: null, // untracked → manual confirmation forced
         manualConfirm: true,
-        deliveryEnabled: true,
-        deliveryFee: 800,
         groups: [
           {
             name: 'Shirt size',
@@ -201,15 +216,15 @@ const VENDORS: SeedVendor[] = [
         ],
       },
       {
-        type: VendorListingType.GOODS,
+        kind: ListingKind.VENDOR_GOODS,
         title: 'Project Binding (Hard Cover)',
         description:
-          'Gold-embossed hard-cover binding for final-year projects. Ready in 24 hours.',
+          'Gold-embossed hard-cover binding for final-year projects. Ready in 24 hours — collect at the shop.',
         category: ListingCategory.OTHER,
-        basePrice: 3500,
+        price: 3500,
         stock: null,
         manualConfirm: true,
-        deliveryEnabled: false,
+        pickupOnly: true, // opts out of the vendor's delivery preset
       },
     ],
   },
@@ -221,16 +236,15 @@ const VENDORS: SeedVendor[] = [
       'Braids, wig installs, nails and makeup — in the studio or we come to your hostel.',
     shopAddress: 'Suite 2, Beauty Arcade, North Gate',
     servesNeighbor: true,
+    serviceTravelFee: 1500, // we come to you (any served campus)
     listings: [
       {
-        type: VendorListingType.SERVICE,
+        kind: ListingKind.VENDOR_SERVICE,
         title: 'Knotless Braids (Mid-Back)',
         description:
           'Professional knotless braids, extensions included. Book a time — about 4 hours.',
         category: ListingCategory.BEAUTY,
-        basePrice: 8000,
-        deliveryEnabled: true, // travel: we come to you
-        deliveryFee: 1500,
+        price: 8000,
         groups: [
           {
             name: 'Length',
@@ -244,14 +258,12 @@ const VENDORS: SeedVendor[] = [
         ],
       },
       {
-        type: VendorListingType.SERVICE,
+        kind: ListingKind.VENDOR_SERVICE,
         title: 'Event Makeup',
         description:
           'Full-glam or natural event makeup. Book your slot ahead of dinners and convocations.',
         category: ListingCategory.BEAUTY,
-        basePrice: 6000,
-        deliveryEnabled: true,
-        deliveryFee: 1000,
+        price: 6000,
       },
     ],
   },
@@ -267,10 +279,11 @@ async function seed() {
   const walletRepo = dataSource.getRepository(Wallet);
   const profileRepo = dataSource.getRepository(VendorProfile);
   const vendorUniversityRepo = dataSource.getRepository(VendorUniversity);
-  const listingRepo = dataSource.getRepository(VendorListing);
+  const deliveryPointRepo = dataSource.getRepository(VendorDeliveryPoint);
+  const dropPointRepo = dataSource.getRepository(DropPoint);
+  const listingRepo = dataSource.getRepository(Listing);
   const groupRepo = dataSource.getRepository(VendorOptionGroup);
   const optionRepo = dataSource.getRepository(VendorOption);
-  const fulfillmentRepo = dataSource.getRepository(VendorListingFulfillment);
 
   const universities = await universityRepo.find({
     where: { isActive: true },
@@ -286,6 +299,34 @@ async function seed() {
   const neighborUni = universities[1] ?? null;
   console.log(`Home university: ${homeUni.name}`);
   if (neighborUni) console.log(`Neighbor university: ${neighborUni.name}`);
+
+  let dropPointCount = 0;
+
+  /** Admin drop points are curated per campus; the seed creates the named ones if missing. */
+  async function ensureDropPoint(
+    universityId: string,
+    seedPoint: SeedDropPoint,
+  ): Promise<DropPoint> {
+    const existing = await dropPointRepo.findOne({
+      where: { universityId, name: seedPoint.name },
+    });
+    if (existing) {
+      if (!existing.isActive) {
+        existing.isActive = true;
+        await dropPointRepo.save(existing);
+      }
+      return existing;
+    }
+    dropPointCount++;
+    return dropPointRepo.save(
+      dropPointRepo.create({
+        universityId,
+        name: seedPoint.name,
+        directions: seedPoint.directions ?? null,
+        isActive: true,
+      }),
+    );
+  }
 
   const passwordHash = await bcrypt.hash(VENDOR_PASSWORD, 12);
   let vendorCount = 0;
@@ -337,31 +378,56 @@ async function seed() {
       }),
     );
 
+    // Served campuses = the delivery preset rows (door fee on the home row
+    // only; travel fee + drop points at every served campus).
     const servedIds = [homeUni.id];
     if (seedVendor.servesNeighbor && neighborUni) servedIds.push(neighborUni.id);
     for (const universityId of servedIds) {
-      await vendorUniversityRepo.save(
-        vendorUniversityRepo.create({ vendorProfileId: profile.id, universityId }),
+      const isHome = universityId === homeUni.id;
+      const served = await vendorUniversityRepo.save(
+        vendorUniversityRepo.create({
+          vendorProfileId: profile.id,
+          universityId,
+          doorDeliveryFee: isHome ? seedVendor.doorDeliveryFee ?? null : null,
+          serviceTravelFee: seedVendor.serviceTravelFee ?? null,
+        }),
       );
+      for (const seedPoint of seedVendor.dropPoints ?? []) {
+        const dropPoint = await ensureDropPoint(universityId, seedPoint);
+        await deliveryPointRepo.save(
+          deliveryPointRepo.create({
+            vendorUniversityId: served.id,
+            dropPointId: dropPoint.id,
+            fee: seedPoint.fee,
+          }),
+        );
+      }
     }
 
     for (const seedListing of seedVendor.listings) {
-      const isService = seedListing.type === VendorListingType.SERVICE;
+      const isService = seedListing.kind === ListingKind.VENDOR_SERVICE;
       const listing = await listingRepo.save(
         listingRepo.create({
+          kind: seedListing.kind,
+          sellerId: user.id,
           vendorProfileId: profile.id,
-          type: seedListing.type,
+          universityId: homeUni.id,
+          visibilityScope: VisibilityScope.UNIVERSITY,
+          isNegotiable: false,
+          condition: null,
+          meetupPoints: null,
           title: seedListing.title,
           description: seedListing.description,
           category: seedListing.category,
-          basePrice: seedListing.basePrice,
+          price: seedListing.price,
           stock: isService ? null : seedListing.stock ?? null,
           // Services + untracked goods are always manual (rev-2 03.5).
           manualConfirm:
             isService || seedListing.stock == null
               ? true
               : seedListing.manualConfirm ?? false,
-          status: VendorListingStatus.ACTIVE,
+          pickupOnly: seedListing.pickupOnly ?? false,
+          status: ListingStatus.ACTIVE,
         }),
       );
       listingCount++;
@@ -370,7 +436,7 @@ async function seed() {
       for (const seedGroup of seedListing.groups ?? []) {
         const group = await groupRepo.save(
           groupRepo.create({
-            vendorListingId: listing.id,
+            listingId: listing.id,
             name: seedGroup.name,
             selectionType: seedGroup.selectionType,
             required: seedGroup.required,
@@ -390,31 +456,23 @@ async function seed() {
           );
         }
       }
-
-      // One fulfillment row per served university (delivery/travel opt-in).
-      for (const universityId of servedIds) {
-        await fulfillmentRepo.save(
-          fulfillmentRepo.create({
-            vendorListingId: listing.id,
-            universityId,
-            deliveryEnabled: seedListing.deliveryEnabled ?? false,
-            deliveryFee: seedListing.deliveryEnabled
-              ? seedListing.deliveryFee ?? 0
-              : null,
-          }),
-        );
-      }
     }
 
     vendorCount++;
+    const presetBits = [
+      seedVendor.doorDeliveryFee != null ? `door ₦${seedVendor.doorDeliveryFee}` : null,
+      seedVendor.serviceTravelFee != null ? `travel ₦${seedVendor.serviceTravelFee}` : null,
+      seedVendor.dropPoints?.length ? `${seedVendor.dropPoints.length} drop point(s)` : null,
+    ].filter(Boolean);
     console.log(
-      `Seeded: ${seedVendor.businessName} (${seedVendor.listings.length} listings, serves ${servedIds.length} campus(es))`,
+      `Seeded: ${seedVendor.businessName} (${seedVendor.listings.length} listings, serves ${servedIds.length} campus(es); delivery: ${presetBits.join(', ') || 'pickup only'})`,
     );
   }
 
   console.log('\n========== Vendor Seed Complete ==========');
   console.log(`Vendors: ${vendorCount} (all ACTIVE, login password: ${VENDOR_PASSWORD})`);
   console.log(`Listings: ${listingCount}`);
+  console.log(`Admin drop points created: ${dropPointCount}`);
   console.log('===========================================\n');
 
   await dataSource.destroy();

@@ -65,10 +65,10 @@ export class ServiceSchedulingService {
 
   /** The calendar seam (rev-2 spec 05): checkout + counters + accepts pass through here. */
   async assertAvailable(
-    vendorListingId: string | null,
+    listingId: string | null,
     proposedTime: Date,
   ): Promise<void> {
-    await this.availability.assertAvailable({ vendorListingId, proposedTime });
+    await this.availability.assertAvailable({ listingId, proposedTime });
   }
 
   /** Both parties' view of the negotiation trail. */
@@ -320,7 +320,7 @@ export class ServiceSchedulingService {
     return (
       (order.orderItems ?? []).find(
         (item) => item.itemType === OrderItemType.VENDOR_SERVICE,
-      )?.vendorListingId ?? null
+      )?.listingId ?? null
     );
   }
 }

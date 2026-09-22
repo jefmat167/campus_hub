@@ -32,6 +32,7 @@ function makeService(opts: { profile?: Partial<VendorProfile> | null } = {}) {
     create: (_entity: any, o: any) => ({ ...o }),
     save: jest.fn(async (o: any) => ({ id: o.id ?? 'vp1', ...o })),
     delete: jest.fn(async () => ({})),
+    update: jest.fn(async () => ({ affected: 1 })),
   };
   const dataSource: any = {
     transaction: jest.fn(async (fn: any) => fn(managerStub)),
@@ -269,5 +270,52 @@ describe('VendorsService.updateMyProfile', () => {
       // new served list drops the home university → invariant violated
       svc.updateMyProfile('user1', { servedUniversityIds: ['u2'] }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('DIFFS the served list instead of rewriting it — a kept campus keeps its delivery preset row', async () => {
+    const profile: any = {
+      id: 'vp1',
+      status: VendorStatus.ACTIVE,
+      homeUniversityId: 'u1',
+      servedUniversities: [
+        { id: 'vu1', universityId: 'u1' },
+        { id: 'vu2', universityId: 'u2' },
+      ],
+    };
+    const { svc, managerStub } = makeService({ profile });
+
+    await svc.updateMyProfile('user1', { servedUniversityIds: ['u1', 'u3'] });
+
+    // u2 dropped BY ROW ID (cascades its delivery points), u3 inserted, u1
+    // never touched — its fees and drop points survive.
+    expect(managerStub.delete).toHaveBeenCalledTimes(1);
+    expect(managerStub.delete.mock.calls[0][1]).toEqual({ id: 'vu2' });
+    const inserted = managerStub.save.mock.calls
+      .map((c: any[]) => c[0])
+      .filter((o: any) => o.universityId);
+    expect(inserted.map((o: any) => o.universityId)).toEqual(['u3']);
+    expect(managerStub.update).not.toHaveBeenCalled(); // home unchanged
+  });
+
+  it("a home-only PATCH nulls the OLD home row's door-delivery fee (door delivery is home-only)", async () => {
+    const profile: any = {
+      id: 'vp1',
+      status: VendorStatus.ACTIVE,
+      homeUniversityId: 'u1',
+      servedUniversities: [
+        { id: 'vu1', universityId: 'u1' },
+        { id: 'vu2', universityId: 'u2' },
+      ],
+    };
+    const { svc, managerStub } = makeService({ profile });
+
+    await svc.updateMyProfile('user1', { homeUniversityId: 'u2' });
+
+    expect(managerStub.delete).not.toHaveBeenCalled();
+    expect(managerStub.update).toHaveBeenCalledWith(
+      expect.anything(),
+      { vendorProfileId: 'vp1', universityId: 'u1' },
+      { doorDeliveryFee: null },
+    );
   });
 });
