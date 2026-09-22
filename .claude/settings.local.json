@@ -13,7 +13,9 @@
       "Bash(mkdir:*)",
       "Bash(node:*)",
       "Bash(curl:*)",
-      "Bash(./node_modules/.bin/tsc:*)"
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Read(//c/Users/Isaac/Documents/my_projects/campus-hub-web/src/**)",
+      "Read(//c/Users/Isaac/Documents/my_projects/campus-hub-web/**)"
     ]
   }
 }
