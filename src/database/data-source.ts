@@ -23,7 +23,7 @@ export const dataSourceOptions: DataSourceOptions = {
   entities: [path.join(__dirname, 'entities', '*.entity{.ts,.js}')],
   migrations: [path.join(__dirname, 'migrations', '*{.ts,.js}')],
   synchronize: false, // Always false - use migrations instead
-  logging: process.env.NODE_ENV === 'development',
+  logging: false, // process.env.NODE_ENV === 'development',
   ssl:
     process.env.NODE_ENV === 'production'
       ? { rejectUnauthorized: false }
