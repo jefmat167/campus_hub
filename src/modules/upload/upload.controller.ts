@@ -33,6 +33,7 @@ import { Public } from '../../common/decorators/public.decorator';
 import { AdminPermissions } from '../../common/constants/permissions';
 import { UploadService, UploadFolder } from './upload.service';
 import { GeneratePresignedUrlsDto } from './dto/presigned-url.dto';
+import { DeleteFileDto } from './dto/delete-file.dto';
 
 @ApiTags('Upload')
 @Controller('upload')
@@ -130,6 +131,7 @@ export class UploadController {
   ) {
     const result = await this.uploadService.uploadFile(file, {
       folder: UploadFolder.LISTINGS,
+      ownerId: user.id,
       maxSizeBytes: 5 * 1024 * 1024,
       allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
     });
@@ -204,6 +206,7 @@ export class UploadController {
 
     const results = await this.uploadService.uploadMultipleFiles(files, {
       folder: UploadFolder.LISTINGS,
+      ownerId: user.id,
       maxSizeBytes: 5 * 1024 * 1024,
       allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
     });
@@ -260,6 +263,7 @@ export class UploadController {
   ) {
     const result = await this.uploadService.uploadFile(file, {
       folder: UploadFolder.PROFILES,
+      ownerId: user.id,
       maxSizeBytes: 2 * 1024 * 1024,
       allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
     });
@@ -318,6 +322,7 @@ export class UploadController {
   ) {
     const result = await this.uploadService.uploadFile(file, {
       folder: UploadFolder.VERIFICATION,
+      ownerId: user.id,
       maxSizeBytes: 10 * 1024 * 1024,
       allowedMimeTypes: ['image/jpeg', 'image/png', 'application/pdf'],
     });
@@ -376,6 +381,7 @@ export class UploadController {
   ) {
     const result = await this.uploadService.uploadFile(file, {
       folder: UploadFolder.CHAT,
+      ownerId: user.id,
       maxSizeBytes: 5 * 1024 * 1024,
       allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
     });
@@ -480,7 +486,10 @@ export class UploadController {
   @Delete()
   @UseGuards(JwtAuthGuard, TierGuard)
   @MinTier(VerificationTier.TIER_0)
-  @ApiOperation({ summary: 'Delete an uploaded file' })
+  @ApiOperation({
+    summary: 'Delete an uploaded file',
+    description: 'Only the uploader may delete a file (403 otherwise).',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -488,7 +497,7 @@ export class UploadController {
       properties: {
         publicId: {
           type: 'string',
-          example: 'listings/abc123',
+          example: 'listings/<your-user-id>/abc123.jpg',
           description: 'Public ID of the file to delete',
         },
         provider: {
@@ -511,9 +520,10 @@ export class UploadController {
     },
   })
   async deleteFile(
-    @Body() body: { publicId: string; provider: 'S3' | 'CLOUDINARY' },
+    @CurrentUser('id') userId: string,
+    @Body() body: DeleteFileDto,
   ) {
-    await this.uploadService.deleteFile(body.publicId, body.provider);
+    await this.uploadService.deleteOwnFile(userId, body.publicId, body.provider);
     return {
       success: true,
       message: 'File deleted successfully',

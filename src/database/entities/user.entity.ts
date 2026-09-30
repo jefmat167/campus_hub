@@ -285,7 +285,7 @@ export class User {
   // Refresh token hash for logout functionality
   @Column({ type: 'varchar', length: 255, nullable: true })
   @Exclude()
-  refreshTokenHash: string;
+  refreshTokenHash: string | null; // SHA-256 of the live refresh token's jti
 
   // Last activity tracking
   @Column({ nullable: true })

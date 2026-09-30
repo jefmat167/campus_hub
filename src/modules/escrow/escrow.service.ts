@@ -70,6 +70,7 @@ import { NotificationType } from '../../database/entities/notification.entity';
 import { ResendService } from '../email/resend.service';
 import { TimingPolicyService } from '../../common/services/timing-policy.service';
 import { UniversitySettingsService } from '../universities/university-settings.service';
+import { lagosWallClock } from '../../common/utils/lagos-time';
 
 @Injectable()
 export class EscrowService {
@@ -293,9 +294,7 @@ export class EscrowService {
       escrow.deliveryDate &&
       escrow.deliveryTime
     ) {
-      const scheduledAt = new Date(escrow.deliveryDate);
-      const [hours, minutes] = escrow.deliveryTime.split(':').map(Number);
-      scheduledAt.setHours(hours, minutes, 0, 0);
+      const scheduledAt = lagosWallClock(escrow.deliveryDate, escrow.deliveryTime);
       return {
         validFrom: new Date(scheduledAt.getTime() - 2 * 60 * 60 * 1000),
         validUntil: new Date(scheduledAt.getTime() + 2 * 60 * 60 * 1000),
@@ -1669,9 +1668,8 @@ export class EscrowService {
           'Delivery date and time are required for meet-up delivery',
         );
       }
-      scheduledAt = new Date(dto.deliveryDate);
-      const [hours, minutes] = dto.deliveryTime.split(':').map(Number);
-      scheduledAt.setHours(hours, minutes, 0, 0);
+      // Lagos wall-clock time, whatever zone the server runs in
+      scheduledAt = lagosWallClock(dto.deliveryDate, dto.deliveryTime);
 
       if (scheduledAt <= new Date()) {
         throw new BadRequestException('Delivery time must be in the future');

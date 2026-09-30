@@ -282,3 +282,65 @@ describe('VendorCatalogService write gate + stock adjust', () => {
     expect(saved.manualConfirm).toBe(true);
   });
 });
+
+describe('VendorCatalogService — services carry no per-option stock either', () => {
+  const serviceListing: any = {
+    id: 'vl1',
+    vendorProfileId: 'vp1',
+    kind: ListingKind.VENDOR_SERVICE,
+    stock: null,
+    manualConfirm: true,
+    pickupOnly: false,
+    status: ListingStatus.ACTIVE,
+    images: [],
+    optionGroups: [],
+  };
+  const groupsWithStock = [
+    {
+      name: 'Length',
+      selectionType: OptionSelectionType.SINGLE,
+      required: true,
+      options: [{ name: 'Short', priceDelta: 0, stock: 3 }],
+    },
+  ];
+
+  it('create: option stock on a service is a 400, and nothing is written', async () => {
+    const { svc, dataSource } = makeService();
+    await expect(
+      svc.createListing(activeProfile, {
+        ...baseDto,
+        kind: ListingKind.VENDOR_SERVICE,
+        optionGroups: groupsWithStock,
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('create: service options WITHOUT stock are still fine', async () => {
+    const { svc } = makeService();
+    await expect(
+      svc.createListing(activeProfile, {
+        ...baseDto,
+        kind: ListingKind.VENDOR_SERVICE,
+        optionGroups: [
+          { ...groupsWithStock[0], options: [{ name: 'Short', priceDelta: 0 }] },
+        ],
+      } as any),
+    ).resolves.toBeDefined();
+  });
+
+  it('PUT option-groups: option stock on a service is a 400 before the old groups are deleted', async () => {
+    const { svc, manager } = makeService({ listing: serviceListing });
+    await expect(
+      svc.replaceOptionGroups(activeProfile, 'vl1', { groups: groupsWithStock } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(manager.delete).not.toHaveBeenCalled();
+  });
+
+  it('PATCH option stock on a service is a 400', async () => {
+    const { svc } = makeService({ listing: serviceListing });
+    await expect(
+      svc.adjustOptionStock(activeProfile, 'vl1', 'opt1', { stock: 2 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});

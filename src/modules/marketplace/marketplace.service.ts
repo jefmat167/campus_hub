@@ -65,8 +65,6 @@ export class MarketplaceService {
     return {
       id: seller.id,
       fullName: seller.fullName,
-      email: seller.email,
-      phone: seller.phone,
       profilePhotoUrl: seller.profilePhotoUrl,
       verificationTier: seller.verificationTier,
       sellerRating: seller.sellerRating,

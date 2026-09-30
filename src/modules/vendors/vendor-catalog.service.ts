@@ -71,6 +71,7 @@ export class VendorCatalogService {
         'Services carry no stock — there is nothing to count (rev-2 03.3)',
       );
     }
+    this.assertNoServiceOptionStock(dto.kind, dto.optionGroups ?? []);
     const stock = isService ? null : dto.stock ?? null;
     const manualConfirm = this.resolveManualConfirm(
       dto.kind,
@@ -225,7 +226,8 @@ export class VendorCatalogService {
     dto: ReplaceOptionGroupsDto,
   ): Promise<Record<string, unknown>> {
     this.assertActive(profile);
-    await this.findOwn(profile, listingId, false);
+    const listing = await this.findOwn(profile, listingId, false);
+    this.assertNoServiceOptionStock(listing.kind, dto.groups);
 
     await this.dataSource.transaction(async (manager) => {
       await manager.delete(VendorOptionGroup, { listingId });
@@ -260,7 +262,10 @@ export class VendorCatalogService {
     dto: AdjustStockDto,
   ): Promise<Record<string, unknown>> {
     this.assertActive(profile);
-    await this.findOwn(profile, listingId, false);
+    const listing = await this.findOwn(profile, listingId, false);
+    if (listing.kind === ListingKind.VENDOR_SERVICE) {
+      throw new BadRequestException('Services carry no stock');
+    }
 
     const group = await this.groupRepo
       .createQueryBuilder('g')
@@ -285,6 +290,25 @@ export class VendorCatalogService {
         message: 'Your storefront is not active',
         vendorStatus: profile.status,
       });
+    }
+  }
+
+  /**
+   * Services carry no stock at ANY level — base or per option (rev-2 03.3).
+   * Mirrors the base-stock rule, so an explicit `stock: null` is rejected too.
+   */
+  private assertNoServiceOptionStock(
+    kind: ListingKind,
+    groups: VendorOptionGroupInputDto[],
+  ): void {
+    if (kind !== ListingKind.VENDOR_SERVICE) return;
+    const hasOptionStock = groups.some((g) =>
+      g.options.some((o) => o.stock !== undefined),
+    );
+    if (hasOptionStock) {
+      throw new BadRequestException(
+        'Services carry no stock — remove stock from the service options',
+      );
     }
   }
 

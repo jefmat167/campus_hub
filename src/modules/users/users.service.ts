@@ -219,7 +219,11 @@ export class UsersService {
     reason?: string;
     activeEscrowCount?: number;
   }> {
+    // Any order with money still locked blocks deletion — deletion zeroes the
+    // wallet, locked balance included. PENDING_CONFIRMATION (vendor confirm /
+    // service time negotiation) holds the buyer's funds too.
     const activeStatuses = [
+      EscrowStatus.PENDING_CONFIRMATION,
       EscrowStatus.AWAITING_SELLER,
       EscrowStatus.SELLER_READY,
       EscrowStatus.DELIVERED,
@@ -348,7 +352,7 @@ export class UsersService {
         {
           isDeactivated: true,
           scheduledDeletionAt,
-          refreshTokenHash: undefined,
+          refreshTokenHash: null,
         },
       );
 
@@ -628,7 +632,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    await this.userRepo.update(userId, { refreshTokenHash: undefined });
+    await this.userRepo.update(userId, { refreshTokenHash: null });
 
     await this.adminAuditService.log(
       adminId,

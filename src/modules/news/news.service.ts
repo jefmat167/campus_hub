@@ -159,8 +159,10 @@ export class NewsService {
   }
 
   async getArticleById(articleId: string, userId?: string): Promise<Article & { isBookmarked?: boolean }> {
+    // Public route — drafts/archived (archive = soft delete) must not leak by UUID.
+    // Admins read those through GET /news/admin/articles.
     const article = await this.articleRepository.findOne({
-      where: { id: articleId },
+      where: { id: articleId, status: ArticleStatus.PUBLISHED },
       relations: ['author'],
     });
 

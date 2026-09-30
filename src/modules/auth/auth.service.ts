@@ -16,6 +16,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
+import { hashRefreshJti, refreshJtiMatches } from '../../common/utils/refresh-token';
 
 import {
   AccountType,
@@ -128,12 +129,11 @@ export class AuthService {
       }
     }
 
-    // OPTIMIZATION: Parallelize password hash and refresh token hash
+    // The refresh token's jti is chosen up front so its hash can be stored on
+    // the single user insert; the token itself is signed after commit.
     const refreshTokenJti = uuidv4();
-    const [passwordHash, refreshTokenHash] = await Promise.all([
-      bcrypt.hash(dto.password, 12),
-      bcrypt.hash(refreshTokenJti, 10),
-    ]);
+    const refreshTokenHash = hashRefreshJti(refreshTokenJti);
+    const passwordHash = await bcrypt.hash(dto.password, 12);
 
     // Use transaction for user and wallet creation
     const queryRunner = this.dataSource.createQueryRunner();
@@ -184,8 +184,8 @@ export class AuthService {
       await queryRunner.release();
     }
 
-    // Generate tokens using the pre-hashed refresh token JTI
-    const tokens = await this.generateTokensWithJti(user, refreshTokenJti);
+    // Sign with the jti whose hash was stored on the insert
+    const tokens = await this.generateTokens(user, refreshTokenJti);
 
     // Queue verification email job (non-blocking)
     let emailQueued = false;
@@ -253,10 +253,8 @@ export class AuthService {
     }
 
     const refreshTokenJti = uuidv4();
-    const [passwordHash, refreshTokenHash] = await Promise.all([
-      bcrypt.hash(dto.password, 12),
-      bcrypt.hash(refreshTokenJti, 10),
-    ]);
+    const refreshTokenHash = hashRefreshJti(refreshTokenJti);
+    const passwordHash = await bcrypt.hash(dto.password, 12);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -315,7 +313,7 @@ export class AuthService {
       await queryRunner.release();
     }
 
-    const tokens = await this.generateTokensWithJti(user, refreshTokenJti);
+    const tokens = await this.generateTokens(user, refreshTokenJti);
 
     let emailQueued = false;
     try {
@@ -426,10 +424,11 @@ export class AuthService {
     }
 
     // Generate tokens
-    const tokens = await this.generateTokens(user);
+    const refreshJti = uuidv4();
+    const tokens = await this.generateTokens(user, refreshJti);
 
     // Update user
-    user.refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 10);
+    user.refreshTokenHash = hashRefreshJti(refreshJti);
     user.lastLoginAt = new Date();
     await this.userRepo.save(user);
 
@@ -445,36 +444,39 @@ export class AuthService {
     return response;
   }
 
-  async refreshTokens(userId: string, refreshToken: string): Promise<TokenPair> {
-    // Verify refresh token JWT (checks signature + expiration)
+  async refreshTokens(refreshToken: string): Promise<TokenPair> {
+    // Verify first (signature + expiry) and only then trust the claims —
+    // a malformed string is a 401 here, never a parse crash.
+    let payload: { sub?: string; jti?: string; type?: string };
     try {
-      this.jwtService.verify(refreshToken, {
+      payload = this.jwtService.verify(refreshToken, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
     } catch {
       throw new UnauthorizedException('Refresh token expired or invalid');
     }
 
-    const user = await this.userRepo.findOne({
-      where: { id: userId },
-    });
-
-    if (!user || !user.refreshTokenHash) {
+    // Admin refresh tokens share the secret; they belong to /admin/auth/refresh.
+    if (!payload.sub || payload.type === 'admin') {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    // Verify refresh token matches stored hash
-    const isRefreshTokenValid = await bcrypt.compare(refreshToken, user.refreshTokenHash);
+    const user = await this.userRepo.findOne({
+      where: { id: payload.sub },
+    });
 
-    if (!isRefreshTokenValid) {
+    // Only the most recently issued refresh token is live: rotation replaces
+    // the stored jti hash, logout clears it.
+    if (!user || !refreshJtiMatches(payload.jti, user.refreshTokenHash)) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
     // Generate new tokens
-    const tokens = await this.generateTokens(user);
+    const refreshJti = uuidv4();
+    const tokens = await this.generateTokens(user, refreshJti);
 
-    // Update refresh token hash
-    user.refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 10);
+    // Rotate: the presented token stops working from here on
+    user.refreshTokenHash = hashRefreshJti(refreshJti);
     await this.userRepo.save(user);
 
     return tokens;
@@ -482,8 +484,9 @@ export class AuthService {
 
   async logout(userId: string, accessToken?: string): Promise<{ message: string }> {
     // Invalidate refresh token
+    // null, not undefined — TypeORM drops undefined keys from an UPDATE
     await this.userRepo.update(userId, {
-      refreshTokenHash: undefined,
+      refreshTokenHash: null,
     });
 
     // Blacklist access token if provided
@@ -613,7 +616,7 @@ export class AuthService {
     // Update user's password and invalidate all sessions
     await this.userRepo.update(passwordReset.userId, {
       passwordHash,
-      refreshTokenHash: undefined,
+      refreshTokenHash: null,
     });
 
     // Mark token as used
@@ -625,44 +628,10 @@ export class AuthService {
     return { success: true };
   }
 
-  private async generateTokens(user: User): Promise<TokenPair> {
-    const basePayload = {
-      sub: user.id,
-      email: user.email,
-      universityId: user.universityId,
-      accountType: user.accountType ?? AccountType.STUDENT,
-    };
-
-    const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(
-        { ...basePayload, jti: uuidv4() },
-        {
-          secret: this.configService.get<string>('JWT_SECRET'),
-          expiresIn: this.configService.get('JWT_EXPIRES_IN', '15m') as string,
-        } as any,
-      ),
-      this.jwtService.signAsync(
-        { ...basePayload, jti: uuidv4() },
-        {
-          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
-          expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN', '7d') as string,
-        } as any,
-      ),
-    ]);
-
-    return {
-      accessToken,
-      refreshToken,
-      expiresIn: 900, // 15 minutes in seconds
-    };
-  }
-
-  /**
-   * Generate tokens using a pre-determined JTI for the refresh token.
-   * This allows us to hash the refresh token value before user creation
-   * for parallel bcrypt operations.
-   */
-  private async generateTokensWithJti(user: User, refreshTokenJti: string): Promise<TokenPair> {
+  private async generateTokens(
+    user: User,
+    refreshTokenJti: string = uuidv4(),
+  ): Promise<TokenPair> {
     const basePayload = {
       sub: user.id,
       email: user.email,
@@ -690,7 +659,7 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      expiresIn: 900,
+      expiresIn: 900, // 15 minutes in seconds
     };
   }
 

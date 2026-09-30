@@ -15,11 +15,14 @@ export class SellerReadyDto {
     example: '2026-03-10',
   })
   @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'deliveryDate must be in YYYY-MM-DD format',
+  })
   @IsOptional()
   deliveryDate?: string;
 
   @ApiPropertyOptional({
-    description: 'Delivery time in HH:MM (24-hour) — required for meet-up delivery',
+    description: 'Delivery time in HH:MM (24-hour, Lagos time) — required for meet-up delivery',
     example: '14:30',
   })
   @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, {

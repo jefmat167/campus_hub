@@ -12,6 +12,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
+import { hashRefreshJti, refreshJtiMatches } from '../../common/utils/refresh-token';
 import { Admin } from '../../database/entities/admin.entity';
 
 export interface AdminTokenPair {
@@ -55,9 +56,10 @@ export class AdminAuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const tokens = await this.generateTokens(admin);
+    const refreshJti = uuidv4();
+    const tokens = await this.generateTokens(admin, refreshJti);
 
-    admin.refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 10);
+    admin.refreshTokenHash = hashRefreshJti(refreshJti);
     admin.lastLoginAt = new Date();
     await this.adminRepo.save(admin);
 
@@ -95,13 +97,14 @@ export class AdminAuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    const isValid = await bcrypt.compare(refreshToken, admin.refreshTokenHash);
-    if (!isValid) {
+    // Only the latest-issued refresh token is live (see common/utils/refresh-token)
+    if (!refreshJtiMatches(payload.jti, admin.refreshTokenHash)) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    const tokens = await this.generateTokens(admin);
-    admin.refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 10);
+    const refreshJti = uuidv4();
+    const tokens = await this.generateTokens(admin, refreshJti);
+    admin.refreshTokenHash = hashRefreshJti(refreshJti);
     await this.adminRepo.save(admin);
 
     return tokens;
@@ -123,7 +126,10 @@ export class AdminAuthService {
     await this.adminRepo.update(adminId, { refreshTokenHash: null });
   }
 
-  private async generateTokens(admin: Admin): Promise<AdminTokenPair> {
+  private async generateTokens(
+    admin: Admin,
+    refreshTokenJti: string = uuidv4(),
+  ): Promise<AdminTokenPair> {
     const basePayload = {
       sub: admin.id,
       email: admin.email,
@@ -139,7 +145,7 @@ export class AdminAuthService {
         } as any,
       ),
       this.jwtService.signAsync(
-        { ...basePayload, jti: uuidv4() },
+        { ...basePayload, jti: refreshTokenJti },
         {
           secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
           expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN', '7d') as string,
