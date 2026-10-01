@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ForbiddenException,
   Logger,
   InternalServerErrorException,
 } from '@nestjs/common';
@@ -40,6 +41,8 @@ export interface UploadResult {
 
 interface FileUploadOptions {
   folder: UploadFolder;
+  /** Uploader's user id — embedded in the key so DELETE /upload can check ownership. */
+  ownerId?: string;
   maxSizeBytes?: number;
   allowedMimeTypes?: string[];
 }
@@ -135,7 +138,7 @@ export class UploadService {
     // Generate unique filename
     const ext = path.extname(file.originalname);
     const uniqueId = uuidv4();
-    const fileName = `${options.folder}/${uniqueId}${ext}`;
+    const fileName = `${this.keyPrefix(options)}/${uniqueId}${ext}`;
 
     // Try R2 first
     if (this.r2Client) {
@@ -178,18 +181,53 @@ export class UploadService {
     return Promise.all(uploadPromises);
   }
 
+  /** `<folder>/<ownerId>` when the uploader is known, else the bare folder (admin uploads). */
+  private keyPrefix(options: FileUploadOptions): string {
+    return options.ownerId ? `${options.folder}/${options.ownerId}` : options.folder;
+  }
+
+  /**
+   * True when the key/publicId was issued to this user. User uploads carry the
+   * owner id as the segment right after the folder: `<folder>/<userId>/…` (R2/S3,
+   * incl. presigned `listings/<userId>/…`) or `campus_hub/<folder>/<userId>/…`
+   * (Cloudinary). Legacy keys without an owner segment are never user-deletable.
+   */
+  isOwnedBy(publicId: string, provider: 'S3' | 'CLOUDINARY', userId: string): boolean {
+    const segments = publicId.split('/');
+    if (segments.some((s) => s === '' || s === '.' || s === '..')) return false;
+    const ownerIndex = provider === 'CLOUDINARY' ? 2 : 1;
+    if (provider === 'CLOUDINARY' && segments[0] !== 'campus_hub') return false;
+    // owner segment must be followed by at least the file name
+    return segments.length > ownerIndex + 1 && segments[ownerIndex] === userId;
+  }
+
+  /** DELETE /upload: only the uploader may delete a file. */
+  async deleteOwnFile(
+    userId: string,
+    publicId: string,
+    provider: 'S3' | 'CLOUDINARY',
+  ): Promise<void> {
+    if (!this.isOwnedBy(publicId, provider, userId)) {
+      throw new ForbiddenException('You can only delete files you uploaded');
+    }
+    await this.deleteFile(publicId, provider);
+  }
+
   async deleteFile(publicId: string, provider: 'S3' | 'CLOUDINARY'): Promise<void> {
-    if (provider === 'S3' && this.s3Client) {
+    if (provider === 'S3') {
+      // R2 uploads report provider 'S3' (S3-compatible), and a file lands on AWS
+      // only when R2 failed at upload time — so try every configured bucket.
+      // DeleteObject on a missing key is a no-op, not an error.
+      const targets: Array<[S3Client, string]> = [];
+      if (this.r2Client) targets.push([this.r2Client, this.r2BucketName]);
+      if (this.s3Client) targets.push([this.s3Client, this.bucketName]);
       try {
-        await this.s3Client.send(
-          new DeleteObjectCommand({
-            Bucket: this.bucketName,
-            Key: publicId,
-          }),
-        );
-        this.logger.log(`Deleted file from S3: ${publicId}`);
+        for (const [client, bucket] of targets) {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: publicId }));
+        }
+        this.logger.log(`Deleted file from object storage: ${publicId}`);
       } catch (error) {
-        this.logger.error('Failed to delete file from S3', error);
+        this.logger.error('Failed to delete file from object storage', error);
         throw new InternalServerErrorException('Failed to delete file');
       }
     } else if (provider === 'CLOUDINARY' && this.cloudinaryConfigured) {
@@ -309,7 +347,7 @@ export class UploadService {
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
-          folder: `campus_hub/${options.folder}`,
+          folder: `campus_hub/${this.keyPrefix(options)}`,
           resource_type: 'auto',
         },
         (error, result: UploadApiResponse | undefined) => {

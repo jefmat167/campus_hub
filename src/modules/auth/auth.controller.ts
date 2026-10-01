@@ -505,12 +505,8 @@ export class AuthController {
       throw new UnauthorizedException('Refresh token is required');
     }
 
-    // Decode token to get user ID
-    const { sub: userId } = JSON.parse(
-      Buffer.from(refreshToken.split('.')[1], 'base64').toString(),
-    );
-
-    const tokens = await this.authService.refreshTokens(userId, refreshToken);
+    // The service verifies the token before reading any claim from it
+    const tokens = await this.authService.refreshTokens(refreshToken);
     const isProduction = this.configService.get('NODE_ENV') === 'production';
 
     // For web platform, set tokens as HTTP-only cookies
