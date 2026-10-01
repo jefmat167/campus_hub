@@ -9,6 +9,7 @@ import {
 } from '../../database/entities/email-verification.entity';
 import { AccountType, User, VerificationTier } from '../../database/entities/user.entity';
 import { ResendService } from './resend.service';
+import { normalizePublicBaseUrl, publicApiUrl } from '../../common/utils/public-url';
 
 export interface SendVerificationEmailResult {
   sent: boolean;
@@ -20,6 +21,13 @@ export interface SendVerificationEmailResult {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
+  /**
+   * Public origin of THIS server (PUBLIC_BASE_URL). The verify-email and
+   * reset-password links open pages this server renders, so they are built
+   * from here — never from the listen address, never from FRONTEND_URL.
+   */
+  private readonly publicBaseUrl: string;
+  /** The client app's URL — only for links INTO the app (e.g. "log in"). */
   private readonly frontendUrl: string;
 
   constructor(
@@ -30,6 +38,7 @@ export class EmailService {
     private readonly resendService: ResendService,
     private configService: ConfigService,
   ) {
+    this.publicBaseUrl = normalizePublicBaseUrl(this.configService.getOrThrow('PUBLIC_BASE_URL'));
     this.frontendUrl = this.configService.getOrThrow('FRONTEND_URL');
   }
 
@@ -277,7 +286,7 @@ export class EmailService {
     token: string,
     userName: string,
   ): Promise<void> {
-    const resetUrl = `${this.frontendUrl}/auth/reset-password?token=${encodeURIComponent(token)}`;
+    const resetUrl = publicApiUrl(this.publicBaseUrl, 'auth/reset-password', { token });
 
     const result = await this.resendService.sendEmail({
       to: email,
@@ -376,7 +385,7 @@ export class EmailService {
     token: string,
     userName: string,
   ) {
-    const verificationUrl = `${this.frontendUrl}/auth/verify-email?token=${encodeURIComponent(token)}`;
+    const verificationUrl = publicApiUrl(this.publicBaseUrl, 'auth/verify-email', { token });
     const subject =
       type === EmailVerificationType.PERSONAL
         ? 'Verify your CampusHub email'

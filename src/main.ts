@@ -10,6 +10,7 @@ import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
 import { Queue } from 'bullmq';
+import { API_GLOBAL_PREFIX } from './common/constants/api';
 import * as cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { QUEUE_NAMES } from './modules/bull-board/bull-board.module';
@@ -30,7 +31,7 @@ async function bootstrap() {
   app.setViewEngine('ejs');
 
   // Global prefix
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix(API_GLOBAL_PREFIX);
 
   // Global validation pipe
   app.useGlobalPipes(
