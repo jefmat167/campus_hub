@@ -88,14 +88,21 @@ function makeService(escrow: any) {
   return { svc, escrowRepo, deliveryCodeRepo, queryRunner, walletService, notificationsService };
 }
 
+/**
+ * A meet-up tomorrow at 12:00 — the time the seller typed on their phone, i.e.
+ * Lagos wall-clock (WAT, UTC+1, no DST). The expected instant is built with
+ * that fixed offset, never with `setHours()`: that applies the test runner's
+ * zone, which is UTC on GitHub Actions and WAT on a Nigerian laptop, so the
+ * assertion would pass locally and fail in CI (or the reverse).
+ */
 function tomorrow(): { deliveryDate: string; deliveryTime: string; scheduledAt: Date } {
   const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
   const deliveryDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
     d.getDate(),
   ).padStart(2, '0')}`;
-  const scheduledAt = new Date(deliveryDate);
-  scheduledAt.setHours(12, 0, 0, 0);
-  return { deliveryDate, deliveryTime: '12:00', scheduledAt };
+  const deliveryTime = '12:00';
+  const scheduledAt = new Date(`${deliveryDate}T${deliveryTime}:00+01:00`);
+  return { deliveryDate, deliveryTime, scheduledAt };
 }
 
 function makeEscrow(overrides: Partial<any> = {}): any {
