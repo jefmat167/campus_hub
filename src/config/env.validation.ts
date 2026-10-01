@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { normalizePublicBaseUrl } from '../common/utils/public-url';
 
 export const envValidationSchema = Joi.object({
   // Application
@@ -7,6 +8,27 @@ export const envValidationSchema = Joi.object({
     .default('development'),
   PORT: Joi.number().default(3000),
   CORS_ORIGIN: Joi.string().default('*'),
+
+  // Public URLs
+  // PUBLIC_BASE_URL: the origin users reach THIS API at (scheme + host, no
+  // path). Email links to the server-rendered pages (verify-email,
+  // reset-password) are built as <PUBLIC_BASE_URL>/api/v1/auth/..., so a
+  // deployed server must set it to its public address, never localhost.
+  PUBLIC_BASE_URL: Joi.string()
+    .required()
+    .custom((value, helpers) => {
+      try {
+        return normalizePublicBaseUrl(value);
+      } catch (err) {
+        return helpers.message({ custom: (err as Error).message });
+      }
+    })
+    .messages({
+      'any.required':
+        'PUBLIC_BASE_URL is required: the public origin users reach this API at (e.g. https://api.campushub.ng); verification and password-reset email links are built from it',
+    }),
+  // FRONTEND_URL: the client app's URL — only for links INTO the app.
+  FRONTEND_URL: Joi.string().uri({ scheme: ['http', 'https'] }).optional(),
 
   // Database - Either DATABASE_URL or individual params required
   DATABASE_URL: Joi.string().uri({ scheme: ['postgres', 'postgresql'] }).optional(),
